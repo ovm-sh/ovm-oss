@@ -79,8 +79,22 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Mochi the Cat — the same mascot the installed CLI greets with (see
+# crates/ovm/src/mochi.rs). Message rides the cat's middle line.
+mochi() {
+    mood=$1
+    shift
+    case "$mood" in
+        happy) eyes='^.^' ;;
+        sad) eyes='u.u' ;;
+        working) eyes='-.-' ;;
+        *) eyes='o.o' ;;
+    esac
+    printf '\n  /\\_/\\ \n ( %s )  %s\n  > ^ < \n' "$eyes" "$*" >&2
+}
+
 fail() {
-    echo "Error: $*" >&2
+    mochi sad "Error: $*"
     exit 1
 }
 
@@ -710,7 +724,7 @@ if [ -n "$LOCAL_ARTIFACT_DIR" ]; then
     [ -n "$LOCAL_MANIFEST" ] || fail "OVM_LOCAL_MANIFEST is required for local artifacts"
     [ -d "$LOCAL_ARTIFACT_DIR" ] || fail "local artifact directory not found: $LOCAL_ARTIFACT_DIR"
     [ -f "$LOCAL_MANIFEST" ] || fail "local bundle manifest not found: $LOCAL_MANIFEST"
-    echo "Installing local OVM snapshot $LOCAL_VERSION..."
+    mochi working "Installing local OVM snapshot $LOCAL_VERSION..."
     install_bundle "$LOCAL_VERSION" "$LOCAL_MANIFEST" "$LOCAL_ARTIFACT_DIR"
 else
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -725,7 +739,7 @@ else
             ;;
     esac
 
-    echo "Installing OVM for $TARGET..."
+    mochi working "Installing OVM for $TARGET..."
     VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
     [ -n "$VERSION" ] || fail "could not determine latest stable version"
     VERSION_ID=${VERSION#v}
@@ -754,6 +768,7 @@ else
     install_bundle "$VERSION_ID" "$EXTRACT_DIR/$MANIFEST_NAME" "$EXTRACT_DIR"
 fi
 
+mochi happy "OVM is installed. Happy shipping!"
 echo ""
 echo "Add OVM to PATH if needed:"
 echo "  export PATH=\"\$HOME/.ovm/bin:\$PATH\""
