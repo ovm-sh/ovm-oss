@@ -1,0 +1,26 @@
+[advisories]
+version = 2
+ignore = [
+    # Transitive through indicatif 0.17.11. Track replacement/removal when
+    # indicatif no longer depends on the unmaintained number_prefix crate.
+    "RUSTSEC-2025-0119",
+]
+
+[bans]
+multiple-versions = "allow"
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]

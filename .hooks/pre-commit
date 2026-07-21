@@ -1,0 +1,102 @@
+#!/bin/sh
+set -e
+
+echo "=== OVM pre-commit ==="
+
+# Check for PII / path leaks in staged files
+echo "[1/8] Scanning for path leaks..."
+# Scan added lines only and allow explicit placeholder usernames in examples.
+LEAKED_PATHS=$(git diff --staged --unified=0 --no-color | grep -E '^\+' | grep -vE '^\+\+\+' | grep -nE '(^|[^[:alnum:]_])(/Users/[[:alnum:]_.-]+|/home/[[:alnum:]_.-]+)(/|$)' | grep -vE '/Users/(yourname|username|user|example|someone|name)(/|$)|/home/(yourname|username|user|example|someone|name)(/|$)' || true)
+if [ -n "$LEAKED_PATHS" ]; then
+    echo "ERROR: Staged changes contain absolute user paths."
+    echo "       Replace with relative paths or ~ before committing."
+    echo "$LEAKED_PATHS" | head -5
+    exit 1
+fi
+
+# Check for common secret patterns (exclude GitHub Actions ${{ secrets.* }} and
+# the ephemeral ${{ github.token }} references, id-token workflow permission, and
+# x-access-token URL-auth literal).
+# The keyword patterns require a secret-shaped VALUE (a bare 12+ char token at
+# line end), so code identifiers like `token: Option<&str>` or prose mentioning
+# `Authorization: Bearer` don't trip it; raw high-entropy patterns still match
+# anywhere on the line.
+LEAKED_SECRETS=$(git diff --staged --unified=0 --no-color | grep -E '^\+' | grep -vE '^\+\+\+' | grep -iE '(api[_-]?key|secret[_-]?key|password|token|authorization)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_+/=-]{12,}["'"'"']?[;,]?[[:space:]]*$|BEGIN [A-Z ]*PRIVATE KEY|npm_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9_-]{20,}' | grep -vE '\$\{\{[[:space:]]*secrets\.' | grep -vE '\$\{\{[[:space:]]*github\.token[[:space:]]*\}\}' | grep -vE 'id-token:' | grep -vE 'x-access-token:' || true)
+if [ -n "$LEAKED_SECRETS" ]; then
+    echo "ERROR: Staged changes may contain secrets."
+    echo "$LEAKED_SECRETS" | head -5
+    exit 1
+fi
+
+echo "[2/8] Checking formatting..."
+if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
+    cargo fmt -- --check || {
+        echo "ERROR: cargo fmt failed. Run: cargo fmt"
+        exit 1
+    }
+fi
+
+echo "[3/8] Running clippy..."
+if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
+    cargo clippy --all-targets --all-features -- -D warnings || {
+        echo "ERROR: clippy found warnings."
+        exit 1
+    }
+fi
+
+echo "[4/8] Running tests..."
+if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
+    cargo test --quiet || {
+        echo "ERROR: Tests failed."
+        exit 1
+    }
+fi
+
+echo "[5/8] Running shellcheck..."
+if command -v shellcheck > /dev/null 2>&1; then
+    shellcheck .hooks/install.sh .hooks/pre-commit .hooks/pre-push install.sh scripts/bundle-manifest.sh scripts/dev-install.sh scripts/dev-uninstall.sh scripts/publish-npm.sh scripts/release.sh scripts/update-brew-formula.sh scripts/update-registry.sh tests/scripts/*.sh || {
+        echo "ERROR: shellcheck found issues."
+        exit 1
+    }
+else
+    echo "SKIP: shellcheck not installed."
+fi
+
+echo "[6/8] Running actionlint..."
+if command -v actionlint > /dev/null 2>&1; then
+    actionlint || {
+        echo "ERROR: actionlint found issues."
+        exit 1
+    }
+else
+    echo "SKIP: actionlint not installed."
+fi
+
+# Check for devlog and changelog updates on feat/fix commits
+echo "[7/8] Checking dev practices..."
+STAGED_FILES=$(git diff --staged --name-only)
+
+# Count staged Rust source changes (excluding tests-only changes)
+SRC_CHANGES=$(echo "$STAGED_FILES" | grep -c '\.rs$' || true)
+
+if [ "$SRC_CHANGES" -gt 3 ]; then
+    HAS_CHANGELOG=$(echo "$STAGED_FILES" | grep -c 'CHANGELOG.md' || true)
+    if [ "$HAS_CHANGELOG" -eq 0 ]; then
+        echo "REMINDER: $SRC_CHANGES source files changed but CHANGELOG.md not updated."
+        echo "          Update CHANGELOG.md if this is a user-facing change."
+    fi
+
+    HAS_DEVLOG=$(echo "$STAGED_FILES" | grep -c 'docs/devlog/' || true)
+    if [ "$HAS_DEVLOG" -eq 0 ]; then
+        echo "REMINDER: Consider adding a devlog entry in docs/devlog/ for significant changes."
+    fi
+fi
+
+# Check BACKLOG.md is being maintained for completed work
+HAS_BACKLOG=$(echo "$STAGED_FILES" | grep -c 'BACKLOG.md' || true)
+if [ "$SRC_CHANGES" -gt 5 ] && [ "$HAS_BACKLOG" -eq 0 ]; then
+    echo "REMINDER: Large change — check if any BACKLOG.md items should be updated."
+fi
+
+echo "[8/8] Pre-commit checks passed."
+echo ""

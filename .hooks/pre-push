@@ -1,0 +1,47 @@
+#!/bin/sh
+set -e
+
+echo "=== OVM pre-push ==="
+
+# Run full test suite
+echo "[1/3] Running full test suite..."
+if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
+    cargo test || {
+        echo "ERROR: Tests failed. Fix before pushing."
+        exit 1
+    }
+fi
+
+# Agent review of unpushed commits. Opt-in only: it sends the unpushed diff
+# to an external LLM service (codex or claude CLI), so contributors must
+# explicitly enable it with OVM_HOOK_AI_REVIEW=1.
+echo "[2/3] Agent review..."
+if [ "${OVM_HOOK_AI_REVIEW:-}" != "1" ]; then
+    echo "  Skipped (set OVM_HOOK_AI_REVIEW=1 to send the unpushed diff to codex/claude for review)."
+elif DIFF=$(git diff '@{upstream}..HEAD' 2>/dev/null || git diff HEAD~1..HEAD) && [ -z "$DIFF" ]; then
+    echo "  No changes to review."
+else
+    echo "  Generating review of unpushed changes..."
+    echo ""
+
+    # Try codex first (when in Claude Code session), fall back to claude
+    if command -v codex > /dev/null 2>&1; then
+        echo "$DIFF" | codex -p "You are reviewing a diff for OVM, a Rust CLI version manager. Flag bugs, security issues, path leaks, and style problems. Be concise. If clean, say so." 2>/dev/null || echo "  (codex review skipped — not available)"
+    elif command -v claude > /dev/null 2>&1; then
+        echo "$DIFF" | claude -p "You are reviewing a diff for OVM, a Rust CLI version manager. Flag bugs, security issues, path leaks, and style problems. Be concise. If clean, say so." 2>/dev/null || echo "  (claude review skipped — not available)"
+    else
+        echo "  (No review agent available. Install claude or codex CLI for automated reviews.)"
+    fi
+
+    echo ""
+    printf "Proceed with push? (Y/n) "
+    if ! read -r response; then
+        response=""
+    fi
+    if [ "$response" = "n" ] || [ "$response" = "N" ]; then
+        echo "Push aborted."
+        exit 1
+    fi
+fi
+
+echo "[3/3] Pre-push checks passed."

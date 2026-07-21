@@ -1,0 +1,57 @@
+[package]
+name = "ovm"
+version = "0.0.3-alpha.3"
+edition = "2021"
+description = "Open Version Manager for AI coding tools"
+license = "MIT"
+readme = "../../README.md"
+repository = "https://github.com/ovm-sh/ovm-oss"
+homepage = "https://ovm.sh"
+keywords = ["version-manager", "claude", "codex", "ai"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "ovm"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+serde = { version = "1", features = ["derive"] }
+# preserve_order keeps map key order when we rewrite user JSON (e.g. ~/.claude.json
+# in `ovm doctor claude --fix`) so edits stay minimal-diff instead of re-sorting.
+serde_json = { version = "1", features = ["preserve_order"] }
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
+semver = { version = "1", features = ["serde"] }
+flate2 = "1"
+tar = "0.4"
+indicatif = "0.18"
+fs4 = "1.1"
+console = "0.16"
+dialoguer = { version = "0.12", features = ["fuzzy-select"] }
+thiserror = "2"
+dirs = "6"
+tempfile = "3"
+sha2 = "0.11"
+# Used solely to decode npm's SHA-512 Subresource-Integrity (`sha512-<base64>`)
+# metadata so downloaded tarballs can be verified.
+base64 = "0.22"
+libc = "0.2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+mockito = "1"
+rexpect = "0.7"
+filetime = "0.2"
+
+# Project-wide lint policy. Errors remain gated by `-D warnings` in CI and
+# pre-commit; this section opts into a small set of additional warnings that
+# are almost always accidents (forgotten dbg!, todo!, unimplemented!, etc.).
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+print_stderr = "allow"  # eprintln! is the project's primary UX channel
+print_stdout = "allow"  # commands deliberately use stdout for data output

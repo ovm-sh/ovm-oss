@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-07-20T18:30:00Z",
+  "base_url": "https://ovm.sh/api",
+  "description": "Foundation-model release + lifecycle registry, cross-referenced against CLI version releases. Sourced from vendor deprecation/lifecycle pages. Dated model IDs carry an exact release date; dateless IDs (Claude 4.6 generation onward) are pinned snapshots whose release date is filled from the vendor models API.",
+  "sources": {
+    "claude": "https://platform.claude.com/docs/en/docs/about-claude/model-deprecations",
+    "codex": "https://platform.openai.com/docs/models"
+  },
+  "vendors": [
+    {
+      "vendor": "anthropic",
+      "used_by": [
+        "claude"
+      ],
+      "models": [
+        {
+          "id": "claude-mythos-5",
+          "family": "mythos",
+          "generation": "5",
+          "released": "2026-06-09",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-06-09"
+        },
+        {
+          "id": "claude-fable-5",
+          "family": "fable",
+          "generation": "5",
+          "released": "2026-06-09",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-06-09"
+        },
+        {
+          "id": "claude-sonnet-5",
+          "family": "sonnet",
+          "generation": "5",
+          "released": "2026-06-30",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-06-30"
+        },
+        {
+          "id": "claude-opus-4-8",
+          "family": "opus",
+          "generation": "4.8",
+          "released": "2026-05-28",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-05-28"
+        },
+        {
+          "id": "claude-opus-4-7",
+          "family": "opus",
+          "generation": "4.7",
+          "released": "2026-04-16",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-04-16"
+        },
+        {
+          "id": "claude-opus-4-6",
+          "family": "opus",
+          "generation": "4.6",
+          "released": "2026-02-05",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-02-05"
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "family": "sonnet",
+          "generation": "4.6",
+          "released": "2026-02-17",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-02-17"
+        },
+        {
+          "id": "claude-opus-4-5-20251101",
+          "family": "opus",
+          "generation": "4.5",
+          "released": "2025-11-01",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2026-11-24"
+        },
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "family": "haiku",
+          "generation": "4.5",
+          "released": "2025-10-01",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2026-10-15"
+        },
+        {
+          "id": "claude-sonnet-4-5-20250929",
+          "family": "sonnet",
+          "generation": "4.5",
+          "released": "2025-09-29",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2026-09-29"
+        },
+        {
+          "id": "claude-opus-4-1-20250805",
+          "family": "opus",
+          "generation": "4.1",
+          "released": "2025-08-05",
+          "state": "deprecated",
+          "deprecated": "2026-06-05",
+          "retirement": "2026-08-05"
+        },
+        {
+          "id": "claude-opus-4-20250514",
+          "family": "opus",
+          "generation": "4",
+          "released": "2025-05-14",
+          "state": "retired",
+          "deprecated": "2026-04-14",
+          "retirement": "2026-06-15"
+        },
+        {
+          "id": "claude-sonnet-4-20250514",
+          "family": "sonnet",
+          "generation": "4",
+          "released": "2025-05-14",
+          "state": "retired",
+          "deprecated": "2026-04-14",
+          "retirement": "2026-06-15"
+        },
+        {
+          "id": "claude-3-7-sonnet-20250219",
+          "family": "sonnet",
+          "generation": "3.7",
+          "released": "2025-02-19",
+          "state": "retired",
+          "deprecated": "2025-10-28",
+          "retirement": "2026-02-19"
+        },
+        {
+          "id": "claude-3-5-sonnet-20241022",
+          "family": "sonnet",
+          "generation": "3.5",
+          "released": "2024-10-22",
+          "state": "retired",
+          "deprecated": "2025-08-13",
+          "retirement": "2025-10-28"
+        },
+        {
+          "id": "claude-3-5-haiku-20241022",
+          "family": "haiku",
+          "generation": "3.5",
+          "released": "2024-10-22",
+          "state": "retired",
+          "deprecated": "2025-12-19",
+          "retirement": "2026-02-19"
+        },
+        {
+          "id": "claude-3-5-sonnet-20240620",
+          "family": "sonnet",
+          "generation": "3.5",
+          "released": "2024-06-20",
+          "state": "retired",
+          "deprecated": "2025-08-13",
+          "retirement": "2025-10-28"
+        },
+        {
+          "id": "claude-3-opus-20240229",
+          "family": "opus",
+          "generation": "3",
+          "released": "2024-02-29",
+          "state": "retired",
+          "deprecated": "2025-06-30",
+          "retirement": "2026-01-05"
+        },
+        {
+          "id": "claude-3-sonnet-20240229",
+          "family": "sonnet",
+          "generation": "3",
+          "released": "2024-02-29",
+          "state": "retired",
+          "deprecated": "2025-01-21",
+          "retirement": "2025-07-21"
+        },
+        {
+          "id": "claude-3-haiku-20240307",
+          "family": "haiku",
+          "generation": "3",
+          "released": "2024-03-07",
+          "state": "retired",
+          "deprecated": "2026-02-19",
+          "retirement": "2026-04-20"
+        }
+      ]
+    },
+    {
+      "vendor": "openai",
+      "used_by": [
+        "codex"
+      ],
+      "models": [
+        {
+          "id": "gpt-5.6",
+          "family": "gpt",
+          "generation": "5.6",
+          "codename": "sol",
+          "released": "2026-07-09",
+          "state": "active",
+          "deprecated": null
+        },
+        {
+          "id": "gpt-5.5",
+          "family": "gpt",
+          "generation": "5.5",
+          "released": "2026-04-23",
+          "state": "active",
+          "deprecated": null,
+          "codename": "spud"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+[package]
+name = "ovm-codex-skew"
+version = "0.0.3-alpha.3"
+edition = "2021"
+license = "MIT"
+description = "Codex state-DB schema-skew guard — an OVM companion plugin"
+repository = "https://github.com/ovm-sh/ovm"
+
+# Binary name = package name = `ovm-codex-skew`, i.e. the OVM subcommand
+# `ovm codex-skew` and the companion OVM runs for Codex at lifecycle events.
+[[bin]]
+name = "ovm-codex-skew"
+path = "src/main.rs"
+
+[lib]
+name = "ovm_codex_skew"
+path = "src/lib.rs"
+
+[dependencies]
+console = "0.15"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,3736 @@
+{
+  "product": "codex",
+  "display_name": "Codex",
+  "source": "github:openai/codex",
+  "updated_at": "2026-07-21T05:25:57Z",
+  "dist_tags": {
+    "latest": "rust-v0.144.6",
+    "latest_prerelease": "rust-v0.145.0-alpha.28"
+  },
+  "versions": [
+    {
+      "version": "rust-v0.2.0",
+      "date": "2025-06-30"
+    },
+    {
+      "version": "rust-v0.3.0",
+      "date": "2025-07-08"
+    },
+    {
+      "version": "rust-v0.4.0",
+      "date": "2025-07-09"
+    },
+    {
+      "version": "rust-v0.5.0",
+      "date": "2025-07-10"
+    },
+    {
+      "version": "rust-v0.6.0",
+      "date": "2025-07-12"
+    },
+    {
+      "version": "rust-v0.7.0",
+      "date": "2025-07-14"
+    },
+    {
+      "version": "rust-v0.8.0",
+      "date": "2025-07-19"
+    },
+    {
+      "version": "rust-v0.9.0-alpha",
+      "date": "2025-07-22"
+    },
+    {
+      "version": "rust-v0.9.0-beta",
+      "date": "2025-07-22"
+    },
+    {
+      "version": "rust-v0.9.0-beta.1",
+      "date": "2025-07-22"
+    },
+    {
+      "version": "rust-v0.9.0",
+      "date": "2025-07-23"
+    },
+    {
+      "version": "rust-v0.10.0",
+      "date": "2025-07-24"
+    },
+    {
+      "version": "rust-v0.11.0-alpha",
+      "date": "2025-07-25"
+    },
+    {
+      "version": "rust-v0.11.0-alpha.1",
+      "date": "2025-07-28"
+    },
+    {
+      "version": "rust-v0.11.0-alpha.2",
+      "date": "2025-07-28"
+    },
+    {
+      "version": "rust-v0.11.0-alpha.3",
+      "date": "2025-07-31"
+    },
+    {
+      "version": "rust-v0.11.0-alpha.4",
+      "date": "2025-08-01"
+    },
+    {
+      "version": "rust-v0.11.0-alpha.5",
+      "date": "2025-08-01"
+    },
+    {
+      "version": "rust-v0.11.0-beta.1",
+      "date": "2025-08-01"
+    },
+    {
+      "version": "rust-v0.11.0",
+      "date": "2025-08-02"
+    },
+    {
+      "version": "rust-v0.12.0",
+      "date": "2025-08-05"
+    },
+    {
+      "version": "rust-v0.13.0",
+      "date": "2025-08-05"
+    },
+    {
+      "version": "rust-v0.14.0-alpha.1",
+      "date": "2025-08-06"
+    },
+    {
+      "version": "rust-v0.14.0-alpha.2",
+      "date": "2025-08-06"
+    },
+    {
+      "version": "rust-v0.14.0-alpha.3",
+      "date": "2025-08-06"
+    },
+    {
+      "version": "rust-v0.14.0",
+      "date": "2025-08-06"
+    },
+    {
+      "version": "rust-v0.15.0-alpha.1",
+      "date": "2025-08-06"
+    },
+    {
+      "version": "rust-v0.15.0",
+      "date": "2025-08-07"
+    },
+    {
+      "version": "rust-v0.16.0",
+      "date": "2025-08-07"
+    },
+    {
+      "version": "rust-v0.19.0",
+      "date": "2025-08-08"
+    },
+    {
+      "version": "rust-v0.20.0-alpha.1",
+      "date": "2025-08-08"
+    },
+    {
+      "version": "rust-v0.20.0-alpha.2",
+      "date": "2025-08-08"
+    },
+    {
+      "version": "rust-v0.20.0-alpha.3",
+      "date": "2025-08-08"
+    },
+    {
+      "version": "rust-v0.20.0-alpha.4",
+      "date": "2025-08-08"
+    },
+    {
+      "version": "rust-v0.20.0",
+      "date": "2025-08-09"
+    },
+    {
+      "version": "rust-v0.21.0-alpha.1",
+      "date": "2025-08-11"
+    },
+    {
+      "version": "rust-v0.21.0",
+      "date": "2025-08-12"
+    },
+    {
+      "version": "rust-v0.22.0-alpha.1",
+      "date": "2025-08-13"
+    },
+    {
+      "version": "rust-v0.22.0-alpha.2",
+      "date": "2025-08-14"
+    },
+    {
+      "version": "rust-v0.22.0-alpha.3",
+      "date": "2025-08-14"
+    },
+    {
+      "version": "rust-v0.22.0-alpha.4",
+      "date": "2025-08-14"
+    },
+    {
+      "version": "rust-v0.22.0-alpha.5",
+      "date": "2025-08-14"
+    },
+    {
+      "version": "rust-v0.22.0",
+      "date": "2025-08-15"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.1",
+      "date": "2025-08-15"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.2",
+      "date": "2025-08-17"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.3",
+      "date": "2025-08-18"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.4",
+      "date": "2025-08-18"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.5",
+      "date": "2025-08-19"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.6",
+      "date": "2025-08-20"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.7",
+      "date": "2025-08-20"
+    },
+    {
+      "version": "rust-v0.23.0-alpha.8",
+      "date": "2025-08-20"
+    },
+    {
+      "version": "rust-v0.23.0",
+      "date": "2025-08-20"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.1",
+      "date": "2025-08-21"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.2",
+      "date": "2025-08-22"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.3",
+      "date": "2025-08-23"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.4",
+      "date": "2025-08-24"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.5",
+      "date": "2025-08-24"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.6",
+      "date": "2025-08-25"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.7",
+      "date": "2025-08-25"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.8",
+      "date": "2025-08-25"
+    },
+    {
+      "version": "rust-v0.24.0-alpha.9",
+      "date": "2025-08-26"
+    },
+    {
+      "version": "rust-v0.24.0",
+      "date": "2025-08-26"
+    },
+    {
+      "version": "rust-v0.25.0-alpha.1",
+      "date": "2025-08-27"
+    },
+    {
+      "version": "rust-v0.25.0-alpha.2",
+      "date": "2025-08-27"
+    },
+    {
+      "version": "rust-v0.25.0",
+      "date": "2025-08-27"
+    },
+    {
+      "version": "rust-v0.26.0-alpha.1",
+      "date": "2025-08-27"
+    },
+    {
+      "version": "rust-v0.26.0",
+      "date": "2025-08-29"
+    },
+    {
+      "version": "rust-v0.27.0",
+      "date": "2025-08-29"
+    },
+    {
+      "version": "rust-v0.28.0-alpha.2",
+      "date": "2025-09-02"
+    },
+    {
+      "version": "rust-v0.28.0",
+      "date": "2025-09-02"
+    },
+    {
+      "version": "rust-v0.29.0",
+      "date": "2025-09-03"
+    },
+    {
+      "version": "rust-v0.29.1-alpha.2",
+      "date": "2025-09-03"
+    },
+    {
+      "version": "rust-v0.29.1-alpha.3",
+      "date": "2025-09-04"
+    },
+    {
+      "version": "rust-v0.29.1-alpha.4",
+      "date": "2025-09-04"
+    },
+    {
+      "version": "rust-v0.29.1-alpha.5",
+      "date": "2025-09-04"
+    },
+    {
+      "version": "rust-v0.29.1-alpha.6",
+      "date": "2025-09-04"
+    },
+    {
+      "version": "rust-v0.29.1-alpha.7",
+      "date": "2025-09-05"
+    },
+    {
+      "version": "rust-v0.30.0",
+      "date": "2025-09-05"
+    },
+    {
+      "version": "rust-v0.31.0-alpha.1",
+      "date": "2025-09-06"
+    },
+    {
+      "version": "rust-v0.31.0-alpha.2",
+      "date": "2025-09-06"
+    },
+    {
+      "version": "rust-v0.31.0-alpha.3",
+      "date": "2025-09-08"
+    },
+    {
+      "version": "rust-v0.31.0-alpha.4",
+      "date": "2025-09-08"
+    },
+    {
+      "version": "rust-v0.31.0",
+      "date": "2025-09-08"
+    },
+    {
+      "version": "rust-v0.32.0-alpha.1",
+      "date": "2025-09-08"
+    },
+    {
+      "version": "rust-v0.32.0-alpha.2",
+      "date": "2025-09-09"
+    },
+    {
+      "version": "rust-v0.32.0-alpha.3",
+      "date": "2025-09-10"
+    },
+    {
+      "version": "rust-v0.32.0",
+      "date": "2025-09-10"
+    },
+    {
+      "version": "rust-v0.33.0-alpha.1",
+      "date": "2025-09-10"
+    },
+    {
+      "version": "rust-v0.33.0",
+      "date": "2025-09-10"
+    },
+    {
+      "version": "rust-v0.34.0-alpha.1",
+      "date": "2025-09-10"
+    },
+    {
+      "version": "rust-v0.34.0-alpha.2",
+      "date": "2025-09-10"
+    },
+    {
+      "version": "rust-v0.34.0",
+      "date": "2025-09-10"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.1",
+      "date": "2025-09-11"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.2",
+      "date": "2025-09-11"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.3",
+      "date": "2025-09-11"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.4",
+      "date": "2025-09-11"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.5",
+      "date": "2025-09-12"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.6",
+      "date": "2025-09-12"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.7",
+      "date": "2025-09-12"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.8",
+      "date": "2025-09-14"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.9",
+      "date": "2025-09-14"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.10",
+      "date": "2025-09-15"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.11",
+      "date": "2025-09-15"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.12",
+      "date": "2025-09-15"
+    },
+    {
+      "version": "rust-v0.35.0-alpha.13",
+      "date": "2025-09-15"
+    },
+    {
+      "version": "rust-v0.35.0",
+      "date": "2025-09-15"
+    },
+    {
+      "version": "rust-v0.36.0",
+      "date": "2025-09-15"
+    },
+    {
+      "version": "rust-v0.37.0-alpha.1",
+      "date": "2025-09-16"
+    },
+    {
+      "version": "rust-v0.37.0-alpha.4",
+      "date": "2025-09-17"
+    },
+    {
+      "version": "rust-v0.37.0",
+      "date": "2025-09-17"
+    },
+    {
+      "version": "rust-v0.38.0",
+      "date": "2025-09-17"
+    },
+    {
+      "version": "rust-v0.39.0-alpha.1",
+      "date": "2025-09-17"
+    },
+    {
+      "version": "rust-v0.39.0-alpha.2",
+      "date": "2025-09-18"
+    },
+    {
+      "version": "rust-v0.39.0",
+      "date": "2025-09-18"
+    },
+    {
+      "version": "rust-v0.40.0-alpha.1",
+      "date": "2025-09-19"
+    },
+    {
+      "version": "rust-v0.40.0-alpha.2",
+      "date": "2025-09-23"
+    },
+    {
+      "version": "rust-v0.40.0-alpha.3",
+      "date": "2025-09-23"
+    },
+    {
+      "version": "rust-v0.40.0",
+      "date": "2025-09-23"
+    },
+    {
+      "version": "rust-v0.41.0-alpha.1",
+      "date": "2025-09-24"
+    },
+    {
+      "version": "rust-v0.41.0",
+      "date": "2025-09-24"
+    },
+    {
+      "version": "rust-v0.42.0-alpha.1",
+      "date": "2025-09-26"
+    },
+    {
+      "version": "rust-v0.42.0-alpha.2",
+      "date": "2025-09-26"
+    },
+    {
+      "version": "rust-v0.42.0-alpha.3",
+      "date": "2025-09-26"
+    },
+    {
+      "version": "rust-v0.42.0",
+      "date": "2025-09-26"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.1",
+      "date": "2025-09-27"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.2",
+      "date": "2025-09-27"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.3",
+      "date": "2025-09-28"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.4",
+      "date": "2025-09-29"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.5",
+      "date": "2025-09-30"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.6",
+      "date": "2025-09-30"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.7",
+      "date": "2025-09-30"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.8",
+      "date": "2025-10-01"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.10",
+      "date": "2025-10-01"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.11",
+      "date": "2025-10-01"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.12",
+      "date": "2025-10-01"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.13",
+      "date": "2025-10-01"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.14",
+      "date": "2025-10-01"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.15",
+      "date": "2025-10-01"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.16",
+      "date": "2025-10-02"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.17",
+      "date": "2025-10-02"
+    },
+    {
+      "version": "rust-v0.43.0-alpha.18",
+      "date": "2025-10-03"
+    },
+    {
+      "version": "rust-v0.44.0",
+      "date": "2025-10-03"
+    },
+    {
+      "version": "rust-v0.45.0-alpha.1",
+      "date": "2025-10-04"
+    },
+    {
+      "version": "rust-v0.45.0-alpha.2",
+      "date": "2025-10-05"
+    },
+    {
+      "version": "rust-v0.45.0-alpha.3",
+      "date": "2025-10-05"
+    },
+    {
+      "version": "rust-v0.45.0-alpha.4",
+      "date": "2025-10-05"
+    },
+    {
+      "version": "rust-v0.45.0-alpha.5",
+      "date": "2025-10-06"
+    },
+    {
+      "version": "rust-v0.45.0-alpha.6",
+      "date": "2025-10-06"
+    },
+    {
+      "version": "rust-v0.45.0",
+      "date": "2025-10-06"
+    },
+    {
+      "version": "rust-v0.46.0-alpha.1",
+      "date": "2025-10-07"
+    },
+    {
+      "version": "rust-v0.46.0-alpha.2",
+      "date": "2025-10-08"
+    },
+    {
+      "version": "rust-v0.46.0-alpha.3",
+      "date": "2025-10-08"
+    },
+    {
+      "version": "rust-v0.46.0-alpha.4",
+      "date": "2025-10-08"
+    },
+    {
+      "version": "rust-v0.46.0-alpha.5",
+      "date": "2025-10-08"
+    },
+    {
+      "version": "rust-v0.46.0-alpha.6",
+      "date": "2025-10-08"
+    },
+    {
+      "version": "rust-v0.46.0-alpha.7",
+      "date": "2025-10-08"
+    },
+    {
+      "version": "rust-v0.46.0",
+      "date": "2025-10-09"
+    },
+    {
+      "version": "rust-v0.47.0-alpha.1",
+      "date": "2025-10-09"
+    },
+    {
+      "version": "rust-v0.47.0-alpha.2",
+      "date": "2025-10-16"
+    },
+    {
+      "version": "rust-v0.47.0-alpha.3",
+      "date": "2025-10-17"
+    },
+    {
+      "version": "rust-v0.47.0",
+      "date": "2025-10-17"
+    },
+    {
+      "version": "rust-v0.48.0-alpha.1",
+      "date": "2025-10-20"
+    },
+    {
+      "version": "rust-v0.48.0-alpha.2",
+      "date": "2025-10-21"
+    },
+    {
+      "version": "rust-v0.48.0-alpha.3",
+      "date": "2025-10-21"
+    },
+    {
+      "version": "rust-v0.48.0-alpha.4",
+      "date": "2025-10-23"
+    },
+    {
+      "version": "rust-v0.48.0",
+      "date": "2025-10-23"
+    },
+    {
+      "version": "rust-v0.49.0",
+      "date": "2025-10-24"
+    },
+    {
+      "version": "rust-v0.50.0-alpha.1",
+      "date": "2025-10-24"
+    },
+    {
+      "version": "rust-v0.50.0-alpha.2",
+      "date": "2025-10-25"
+    },
+    {
+      "version": "rust-v0.50.0-alpha.3",
+      "date": "2025-10-25"
+    },
+    {
+      "version": "rust-v0.50.0",
+      "date": "2025-10-25"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.1",
+      "date": "2025-10-27"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.2",
+      "date": "2025-10-27"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.4",
+      "date": "2025-10-28"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.5",
+      "date": "2025-10-28"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.6",
+      "date": "2025-10-29"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.8",
+      "date": "2025-10-29"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.9",
+      "date": "2025-10-29"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.10",
+      "date": "2025-10-30"
+    },
+    {
+      "version": "rust-v0.51.0-alpha.11",
+      "date": "2025-10-30"
+    },
+    {
+      "version": "rust-v0.52.0",
+      "date": "2025-10-30"
+    },
+    {
+      "version": "rust-v0.53.0-alpha.1",
+      "date": "2025-10-30"
+    },
+    {
+      "version": "rust-v0.53.0",
+      "date": "2025-10-31"
+    },
+    {
+      "version": "rust-v0.54.0-alpha.1",
+      "date": "2025-10-31"
+    },
+    {
+      "version": "rust-v0.54.0-alpha.2",
+      "date": "2025-11-03"
+    },
+    {
+      "version": "rust-v0.54.0-alpha.3",
+      "date": "2025-11-04"
+    },
+    {
+      "version": "rust-v0.54.0",
+      "date": "2025-11-04"
+    },
+    {
+      "version": "rust-v0.55.0",
+      "date": "2025-11-04"
+    },
+    {
+      "version": "rust-v0.56.0-alpha.1",
+      "date": "2025-11-05"
+    },
+    {
+      "version": "rust-v0.56.0-alpha.2",
+      "date": "2025-11-05"
+    },
+    {
+      "version": "rust-v0.56.0-alpha.3",
+      "date": "2025-11-05"
+    },
+    {
+      "version": "rust-v0.56.0-alpha.4",
+      "date": "2025-11-06"
+    },
+    {
+      "version": "rust-v0.56.0-alpha.5",
+      "date": "2025-11-06"
+    },
+    {
+      "version": "rust-v0.56.0",
+      "date": "2025-11-07"
+    },
+    {
+      "version": "rust-v0.57.0-alpha.1",
+      "date": "2025-11-07"
+    },
+    {
+      "version": "rust-v0.57.0-alpha.2",
+      "date": "2025-11-08"
+    },
+    {
+      "version": "rust-v0.57.0-alpha.3",
+      "date": "2025-11-08"
+    },
+    {
+      "version": "rust-v0.57.0",
+      "date": "2025-11-09"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.1",
+      "date": "2025-11-10"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.2",
+      "date": "2025-11-10"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.3",
+      "date": "2025-11-11"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.4",
+      "date": "2025-11-11"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.5",
+      "date": "2025-11-12"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.6",
+      "date": "2025-11-12"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.7",
+      "date": "2025-11-13"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.8",
+      "date": "2025-11-13"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.9",
+      "date": "2025-11-13"
+    },
+    {
+      "version": "rust-v0.58.0-alpha.10",
+      "date": "2025-11-13"
+    },
+    {
+      "version": "rust-v0.58.0",
+      "date": "2025-11-13"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.1",
+      "date": "2025-11-13"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.4",
+      "date": "2025-11-15"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.5",
+      "date": "2025-11-15"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.6",
+      "date": "2025-11-17"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.7",
+      "date": "2025-11-18"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.9",
+      "date": "2025-11-18"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.10",
+      "date": "2025-11-18"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.11",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.12",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.13",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.14",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.15",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.16",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.17",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.18",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0-alpha.20",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.59.0",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.60.1",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.61.0-alpha.2",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.61.0-alpha.3",
+      "date": "2025-11-20"
+    },
+    {
+      "version": "rust-v0.61.0",
+      "date": "2025-11-20"
+    },
+    {
+      "version": "rust-v0.61.1-alpha.1",
+      "date": "2025-11-19"
+    },
+    {
+      "version": "rust-v0.62.0-alpha.1",
+      "date": "2025-11-20"
+    },
+    {
+      "version": "rust-v0.62.0-alpha.2",
+      "date": "2025-11-21"
+    },
+    {
+      "version": "rust-v0.62.0-alpha.3",
+      "date": "2025-11-21"
+    },
+    {
+      "version": "rust-v0.63.0",
+      "date": "2025-11-21",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.64.0-alpha.1",
+      "date": "2025-11-21"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.2",
+      "date": "2025-11-21"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.4",
+      "date": "2025-11-22"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.5",
+      "date": "2025-11-22"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.9",
+      "date": "2025-11-25"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.10",
+      "date": "2025-11-28"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.11",
+      "date": "2025-12-01"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.12",
+      "date": "2025-12-01"
+    },
+    {
+      "version": "rust-v0.64.0-alpha.13",
+      "date": "2025-12-02"
+    },
+    {
+      "version": "rust-v0.64.0",
+      "date": "2025-12-02",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.65.0-alpha.1",
+      "date": "2025-12-03"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.2",
+      "date": "2025-12-03"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.3",
+      "date": "2025-12-03"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.4",
+      "date": "2025-12-03"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.6",
+      "date": "2025-12-03"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.7",
+      "date": "2025-12-03"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.8",
+      "date": "2025-12-03"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.9",
+      "date": "2025-12-04"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.10",
+      "date": "2025-12-04"
+    },
+    {
+      "version": "rust-v0.65.0-alpha.11",
+      "date": "2025-12-04"
+    },
+    {
+      "version": "rust-v0.65.0",
+      "date": "2025-12-04",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.66.0-alpha.1",
+      "date": "2025-12-04"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.2",
+      "date": "2025-12-04"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.3",
+      "date": "2025-12-04"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.4",
+      "date": "2025-12-04"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.5",
+      "date": "2025-12-05"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.6",
+      "date": "2025-12-05"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.7",
+      "date": "2025-12-05"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.8",
+      "date": "2025-12-06"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.9",
+      "date": "2025-12-06"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.10",
+      "date": "2025-12-07"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.11",
+      "date": "2025-12-08"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.12",
+      "date": "2025-12-08"
+    },
+    {
+      "version": "rust-v0.66.0-alpha.14",
+      "date": "2025-12-09"
+    },
+    {
+      "version": "rust-v0.66.0",
+      "date": "2025-12-09",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.67.0-alpha.1",
+      "date": "2025-12-09"
+    },
+    {
+      "version": "rust-v0.67.0-alpha.2",
+      "date": "2025-12-09"
+    },
+    {
+      "version": "rust-v0.67.0-alpha.4",
+      "date": "2025-12-10"
+    },
+    {
+      "version": "rust-v0.67.0-alpha.6",
+      "date": "2025-12-10"
+    },
+    {
+      "version": "rust-v0.67.0-alpha.7",
+      "date": "2025-12-10"
+    },
+    {
+      "version": "rust-v0.67.0-alpha.8",
+      "date": "2025-12-10"
+    },
+    {
+      "version": "rust-v0.67.0-alpha.9",
+      "date": "2025-12-10"
+    },
+    {
+      "version": "rust-v0.69.0",
+      "date": "2025-12-10",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.70.0-alpha.1",
+      "date": "2025-12-11"
+    },
+    {
+      "version": "rust-v0.70.0-alpha.2",
+      "date": "2025-12-11"
+    },
+    {
+      "version": "rust-v0.70.0-alpha.3",
+      "date": "2025-12-11"
+    },
+    {
+      "version": "rust-v0.70.0-alpha.4",
+      "date": "2025-12-11"
+    },
+    {
+      "version": "rust-v0.71.0",
+      "date": "2025-12-11",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.72.0-alpha.1",
+      "date": "2025-12-11"
+    },
+    {
+      "version": "rust-v0.72.0-alpha.2",
+      "date": "2025-12-12"
+    },
+    {
+      "version": "rust-v0.72.0-alpha.3",
+      "date": "2025-12-12"
+    },
+    {
+      "version": "rust-v0.72.0-alpha.4",
+      "date": "2025-12-12"
+    },
+    {
+      "version": "rust-v0.72.0-alpha.5",
+      "date": "2025-12-12"
+    },
+    {
+      "version": "rust-v0.72.0-alpha.6",
+      "date": "2025-12-12"
+    },
+    {
+      "version": "rust-v0.72.0-alpha.8",
+      "date": "2025-12-12"
+    },
+    {
+      "version": "rust-v0.72.0",
+      "date": "2025-12-13",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.73.0-alpha.1",
+      "date": "2025-12-13"
+    },
+    {
+      "version": "rust-v0.73.0-alpha.2",
+      "date": "2025-12-15"
+    },
+    {
+      "version": "rust-v0.73.0-alpha.3",
+      "date": "2025-12-15"
+    },
+    {
+      "version": "rust-v0.73.0",
+      "date": "2025-12-15",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.74.0-alpha.1",
+      "date": "2025-12-16"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.2",
+      "date": "2025-12-17"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.3",
+      "date": "2025-12-17"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.4",
+      "date": "2025-12-17"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.5",
+      "date": "2025-12-17"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.6",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.7",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.8",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.74.0-alpha.9",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.74.0",
+      "date": "2025-12-18",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.75.0",
+      "date": "2025-12-18",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.76.0-alpha.1",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.2",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.3",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.4",
+      "date": "2025-12-18"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.5",
+      "date": "2025-12-19"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.6",
+      "date": "2025-12-19"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.7",
+      "date": "2025-12-19"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.8",
+      "date": "2025-12-19"
+    },
+    {
+      "version": "rust-v0.76.0-alpha.9",
+      "date": "2025-12-19"
+    },
+    {
+      "version": "rust-v0.76.0",
+      "date": "2025-12-19",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.77.0-alpha.1",
+      "date": "2025-12-19"
+    },
+    {
+      "version": "rust-v0.77.0-alpha.2",
+      "date": "2025-12-21"
+    },
+    {
+      "version": "rust-v0.77.0-alpha.3",
+      "date": "2025-12-21"
+    },
+    {
+      "version": "rust-v0.77.0",
+      "date": "2025-12-21",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.78.0-alpha.1",
+      "date": "2025-12-21"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.2",
+      "date": "2025-12-22"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.3",
+      "date": "2025-12-22"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.4",
+      "date": "2025-12-22"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.6",
+      "date": "2025-12-23"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.7",
+      "date": "2025-12-23"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.8",
+      "date": "2025-12-23"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.9",
+      "date": "2025-12-27"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.10",
+      "date": "2026-01-02"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.11",
+      "date": "2026-01-05"
+    },
+    {
+      "version": "rust-v0.78.0-alpha.12",
+      "date": "2026-01-05"
+    },
+    {
+      "version": "rust-v0.78.0",
+      "date": "2026-01-06",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.79.0-alpha.1",
+      "date": "2026-01-06"
+    },
+    {
+      "version": "rust-v0.79.0-alpha.2",
+      "date": "2026-01-06"
+    },
+    {
+      "version": "rust-v0.79.0-alpha.3",
+      "date": "2026-01-06"
+    },
+    {
+      "version": "rust-v0.79.0",
+      "date": "2026-01-07",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.80.0-alpha.1",
+      "date": "2026-01-07"
+    },
+    {
+      "version": "rust-v0.80.0-alpha.2",
+      "date": "2026-01-07"
+    },
+    {
+      "version": "rust-v0.80.0-alpha.3",
+      "date": "2026-01-07"
+    },
+    {
+      "version": "rust-v0.80.0-alpha.4",
+      "date": "2026-01-08"
+    },
+    {
+      "version": "rust-v0.80.0-alpha.5",
+      "date": "2026-01-09"
+    },
+    {
+      "version": "rust-v0.80.0-alpha.6",
+      "date": "2026-01-09"
+    },
+    {
+      "version": "rust-v0.80.0",
+      "date": "2026-01-09",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.81.0-alpha.1",
+      "date": "2026-01-09"
+    },
+    {
+      "version": "rust-v0.81.0-alpha.2",
+      "date": "2026-01-11"
+    },
+    {
+      "version": "rust-v0.81.0-alpha.3",
+      "date": "2026-01-12"
+    },
+    {
+      "version": "rust-v0.81.0-alpha.4",
+      "date": "2026-01-13"
+    },
+    {
+      "version": "rust-v0.81.0-alpha.5",
+      "date": "2026-01-13"
+    },
+    {
+      "version": "rust-v0.81.0-alpha.7",
+      "date": "2026-01-13"
+    },
+    {
+      "version": "rust-v0.81.0-alpha.8",
+      "date": "2026-01-14"
+    },
+    {
+      "version": "rust-v0.81.0-alpha.9",
+      "date": "2026-01-14"
+    },
+    {
+      "version": "rust-v0.81.0",
+      "date": "2026-01-14",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.82.0-alpha.1",
+      "date": "2026-01-14"
+    },
+    {
+      "version": "rust-v0.82.0-alpha.2",
+      "date": "2026-01-14"
+    },
+    {
+      "version": "rust-v0.82.0-alpha.3",
+      "date": "2026-01-14"
+    },
+    {
+      "version": "rust-v0.84.0",
+      "date": "2026-01-15",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.85.0-alpha.1",
+      "date": "2026-01-15"
+    },
+    {
+      "version": "rust-v0.85.0-alpha.2",
+      "date": "2026-01-15"
+    },
+    {
+      "version": "rust-v0.85.0",
+      "date": "2026-01-15",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.86.0-alpha.1",
+      "date": "2026-01-15"
+    },
+    {
+      "version": "rust-v0.86.0",
+      "date": "2026-01-16",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.87.0-alpha.1",
+      "date": "2026-01-16"
+    },
+    {
+      "version": "rust-v0.87.0",
+      "date": "2026-01-16",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.88.0-alpha.1",
+      "date": "2026-01-17"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.2",
+      "date": "2026-01-18"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.3",
+      "date": "2026-01-18"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.4",
+      "date": "2026-01-19"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.5",
+      "date": "2026-01-19"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.6",
+      "date": "2026-01-19"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.7",
+      "date": "2026-01-19"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.8",
+      "date": "2026-01-19"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.9",
+      "date": "2026-01-20"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.14",
+      "date": "2026-01-21"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.15",
+      "date": "2026-01-21"
+    },
+    {
+      "version": "rust-v0.88.0-alpha.17",
+      "date": "2026-01-21"
+    },
+    {
+      "version": "rust-v0.88.0",
+      "date": "2026-01-21",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.89.0-alpha.1",
+      "date": "2026-01-21"
+    },
+    {
+      "version": "rust-v0.89.0-alpha.2",
+      "date": "2026-01-22"
+    },
+    {
+      "version": "rust-v0.89.0-alpha.3",
+      "date": "2026-01-22"
+    },
+    {
+      "version": "rust-v0.89.0-alpha.4",
+      "date": "2026-01-22"
+    },
+    {
+      "version": "rust-v0.89.0-alpha.5",
+      "date": "2026-01-22"
+    },
+    {
+      "version": "rust-v0.89.0",
+      "date": "2026-01-22",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.90.0-alpha.1",
+      "date": "2026-01-23"
+    },
+    {
+      "version": "rust-v0.90.0-alpha.2",
+      "date": "2026-01-23"
+    },
+    {
+      "version": "rust-v0.90.0-alpha.5",
+      "date": "2026-01-24"
+    },
+    {
+      "version": "rust-v0.90.0-alpha.6",
+      "date": "2026-01-25"
+    },
+    {
+      "version": "rust-v0.90.0-alpha.7",
+      "date": "2026-01-25"
+    },
+    {
+      "version": "rust-v0.90.0",
+      "date": "2026-01-25",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.91.0",
+      "date": "2026-01-25",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.92.0-alpha.1",
+      "date": "2026-01-25"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.2",
+      "date": "2026-01-26"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.3",
+      "date": "2026-01-26"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.4",
+      "date": "2026-01-26"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.5",
+      "date": "2026-01-26"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.7",
+      "date": "2026-01-27"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.8",
+      "date": "2026-01-27"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.9",
+      "date": "2026-01-27"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.10",
+      "date": "2026-01-27"
+    },
+    {
+      "version": "rust-v0.92.0-alpha.11",
+      "date": "2026-01-27"
+    },
+    {
+      "version": "rust-v0.92.0",
+      "date": "2026-01-27",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.93.0-alpha.13",
+      "date": "2026-01-29"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.15",
+      "date": "2026-01-29"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.16",
+      "date": "2026-01-29"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.17",
+      "date": "2026-01-30"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.18",
+      "date": "2026-01-30"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.20",
+      "date": "2026-01-30"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.23",
+      "date": "2026-01-30"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.24",
+      "date": "2026-01-30"
+    },
+    {
+      "version": "rust-v0.93.0-alpha.25",
+      "date": "2026-01-31"
+    },
+    {
+      "version": "rust-v0.93.0",
+      "date": "2026-01-31",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.94.0-alpha.2",
+      "date": "2026-01-31"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.3",
+      "date": "2026-02-01"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.4",
+      "date": "2026-02-01"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.6",
+      "date": "2026-02-01"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.7",
+      "date": "2026-02-01"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.8",
+      "date": "2026-02-02"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.9",
+      "date": "2026-02-02"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.10",
+      "date": "2026-02-02"
+    },
+    {
+      "version": "rust-v0.94.0-alpha.11",
+      "date": "2026-02-02"
+    },
+    {
+      "version": "rust-v0.94.0",
+      "date": "2026-02-02",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.95.0-alpha.3",
+      "date": "2026-02-03"
+    },
+    {
+      "version": "rust-v0.95.0-alpha.4",
+      "date": "2026-02-03"
+    },
+    {
+      "version": "rust-v0.95.0-alpha.5",
+      "date": "2026-02-03"
+    },
+    {
+      "version": "rust-v0.95.0-alpha.6",
+      "date": "2026-02-03"
+    },
+    {
+      "version": "rust-v0.95.0-alpha.7",
+      "date": "2026-02-03"
+    },
+    {
+      "version": "rust-v0.95.0-alpha.8",
+      "date": "2026-02-03"
+    },
+    {
+      "version": "rust-v0.95.0-alpha.9",
+      "date": "2026-02-04"
+    },
+    {
+      "version": "rust-v0.95.0",
+      "date": "2026-02-04",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.96.0-alpha.1",
+      "date": "2026-02-04"
+    },
+    {
+      "version": "rust-v0.96.0-alpha.2",
+      "date": "2026-02-04"
+    },
+    {
+      "version": "rust-v0.96.0",
+      "date": "2026-02-04",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.97.0-alpha.1",
+      "date": "2026-02-04"
+    },
+    {
+      "version": "rust-v0.97.0-alpha.2",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.97.0-alpha.3",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.97.0-alpha.4",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.97.0",
+      "date": "2026-02-05",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.98.0-alpha.1",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.98.0-alpha.2",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.98.0",
+      "date": "2026-02-05",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.99.0-alpha.1",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.2",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.3",
+      "date": "2026-02-05"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.4",
+      "date": "2026-02-06"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.5",
+      "date": "2026-02-06"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.6",
+      "date": "2026-02-06"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.9",
+      "date": "2026-02-07"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.10",
+      "date": "2026-02-09"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.11",
+      "date": "2026-02-09"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.12",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.13",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.14",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.16",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.17",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.20",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.21",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.22",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.23",
+      "date": "2026-02-10"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.24",
+      "date": "2026-02-11"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.25",
+      "date": "2026-02-11"
+    },
+    {
+      "version": "rust-v0.99.0-alpha.26",
+      "date": "2026-02-11"
+    },
+    {
+      "version": "rust-v0.99.0",
+      "date": "2026-02-11",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.100.0-alpha.1",
+      "date": "2026-02-11"
+    },
+    {
+      "version": "rust-v0.100.0-alpha.2",
+      "date": "2026-02-11"
+    },
+    {
+      "version": "rust-v0.100.0-alpha.3",
+      "date": "2026-02-12"
+    },
+    {
+      "version": "rust-v0.100.0-alpha.4",
+      "date": "2026-02-12"
+    },
+    {
+      "version": "rust-v0.100.0-alpha.9",
+      "date": "2026-02-12"
+    },
+    {
+      "version": "rust-v0.100.0-alpha.10",
+      "date": "2026-02-12"
+    },
+    {
+      "version": "rust-v0.100.0-alpha.11",
+      "date": "2026-02-12"
+    },
+    {
+      "version": "rust-v0.100.0",
+      "date": "2026-02-12",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.101.0-alpha.1",
+      "date": "2026-02-12"
+    },
+    {
+      "version": "rust-v0.101.0",
+      "date": "2026-02-12",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.102.0-alpha.2",
+      "date": "2026-02-13"
+    },
+    {
+      "version": "rust-v0.102.0-alpha.3",
+      "date": "2026-02-13"
+    },
+    {
+      "version": "rust-v0.102.0-alpha.4",
+      "date": "2026-02-13"
+    },
+    {
+      "version": "rust-v0.102.0-alpha.6",
+      "date": "2026-02-14"
+    },
+    {
+      "version": "rust-v0.102.0-alpha.7",
+      "date": "2026-02-14"
+    },
+    {
+      "version": "rust-v0.102.0-alpha.8",
+      "date": "2026-02-16"
+    },
+    {
+      "version": "rust-v0.102.0-alpha.11",
+      "date": "2026-02-17"
+    },
+    {
+      "version": "rust-v0.102.0",
+      "date": "2026-02-17",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.103.0-alpha.1",
+      "date": "2026-02-17"
+    },
+    {
+      "version": "rust-v0.103.0",
+      "date": "2026-02-17",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.104.0-alpha.1",
+      "date": "2026-02-18"
+    },
+    {
+      "version": "rust-v0.104.0",
+      "date": "2026-02-18",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.105.0-alpha.1",
+      "date": "2026-02-18"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.2",
+      "date": "2026-02-18"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.3",
+      "date": "2026-02-18"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.4",
+      "date": "2026-02-19"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.5",
+      "date": "2026-02-19"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.6",
+      "date": "2026-02-19"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.7",
+      "date": "2026-02-20"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.8",
+      "date": "2026-02-20"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.9",
+      "date": "2026-02-20"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.10",
+      "date": "2026-02-21"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.11",
+      "date": "2026-02-21"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.12",
+      "date": "2026-02-22"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.13",
+      "date": "2026-02-22"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.14",
+      "date": "2026-02-23"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.15",
+      "date": "2026-02-23"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.16",
+      "date": "2026-02-23"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.17",
+      "date": "2026-02-24"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.18",
+      "date": "2026-02-24"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.22",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.23",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.24",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.25",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.105.0-alpha.26",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.105.0",
+      "date": "2026-02-25",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.106.0-alpha.1",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.106.0-alpha.2",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.106.0-alpha.3",
+      "date": "2026-02-25"
+    },
+    {
+      "version": "rust-v0.106.0-alpha.8",
+      "date": "2026-02-26"
+    },
+    {
+      "version": "rust-v0.106.0-alpha.9",
+      "date": "2026-02-26"
+    },
+    {
+      "version": "rust-v0.106.0-alpha.11",
+      "date": "2026-02-26"
+    },
+    {
+      "version": "rust-v0.106.0",
+      "date": "2026-02-26",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.107.0-alpha.1",
+      "date": "2026-02-26"
+    },
+    {
+      "version": "rust-v0.107.0-alpha.2",
+      "date": "2026-02-27"
+    },
+    {
+      "version": "rust-v0.107.0-alpha.3",
+      "date": "2026-02-27"
+    },
+    {
+      "version": "rust-v0.107.0-alpha.4",
+      "date": "2026-02-27"
+    },
+    {
+      "version": "rust-v0.107.0-alpha.5",
+      "date": "2026-02-27"
+    },
+    {
+      "version": "rust-v0.107.0-alpha.7",
+      "date": "2026-02-28"
+    },
+    {
+      "version": "rust-v0.107.0-alpha.8",
+      "date": "2026-02-28"
+    },
+    {
+      "version": "rust-v0.107.0-alpha.9",
+      "date": "2026-03-02"
+    },
+    {
+      "version": "rust-v0.107.0",
+      "date": "2026-03-02",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.108.0-alpha.1",
+      "date": "2026-03-03"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.2",
+      "date": "2026-03-03"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.3",
+      "date": "2026-03-03"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.5",
+      "date": "2026-03-03"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.6",
+      "date": "2026-03-04"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.7",
+      "date": "2026-03-04"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.8",
+      "date": "2026-03-04"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.9",
+      "date": "2026-03-04"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.10",
+      "date": "2026-03-04"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.11",
+      "date": "2026-03-04"
+    },
+    {
+      "version": "rust-v0.108.0-alpha.12",
+      "date": "2026-03-04"
+    },
+    {
+      "version": "rust-v0.110.0-alpha.1",
+      "date": "2026-03-05"
+    },
+    {
+      "version": "rust-v0.110.0",
+      "date": "2026-03-05",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.111.0-alpha.1",
+      "date": "2026-03-05"
+    },
+    {
+      "version": "rust-v0.111.0-alpha.2",
+      "date": "2026-03-05"
+    },
+    {
+      "version": "rust-v0.111.0",
+      "date": "2026-03-05",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.112.0-alpha.1",
+      "date": "2026-03-06"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.2",
+      "date": "2026-03-06"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.3",
+      "date": "2026-03-06"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.4",
+      "date": "2026-03-06"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.5",
+      "date": "2026-03-06"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.6",
+      "date": "2026-03-06"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.7",
+      "date": "2026-03-06"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.8",
+      "date": "2026-03-07"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.9",
+      "date": "2026-03-07"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.10",
+      "date": "2026-03-07"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.11",
+      "date": "2026-03-07"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.12",
+      "date": "2026-03-08"
+    },
+    {
+      "version": "rust-v0.112.0-alpha.13",
+      "date": "2026-03-08"
+    },
+    {
+      "version": "rust-v0.112.0",
+      "date": "2026-03-08",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.113.0-alpha.1",
+      "date": "2026-03-09"
+    },
+    {
+      "version": "rust-v0.113.0-alpha.2",
+      "date": "2026-03-09"
+    },
+    {
+      "version": "rust-v0.113.0",
+      "date": "2026-03-10",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.114.0-alpha.1",
+      "date": "2026-03-10"
+    },
+    {
+      "version": "rust-v0.114.0-alpha.2",
+      "date": "2026-03-10"
+    },
+    {
+      "version": "rust-v0.114.0-alpha.3",
+      "date": "2026-03-10"
+    },
+    {
+      "version": "rust-v0.114.0-alpha.4",
+      "date": "2026-03-10"
+    },
+    {
+      "version": "rust-v0.114.0-alpha.7",
+      "date": "2026-03-11"
+    },
+    {
+      "version": "rust-v0.114.0",
+      "date": "2026-03-11",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.115.0-alpha.1",
+      "date": "2026-03-11"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.2",
+      "date": "2026-03-11"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.3",
+      "date": "2026-03-11"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.4",
+      "date": "2026-03-11"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.5",
+      "date": "2026-03-11"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.6",
+      "date": "2026-03-11"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.7",
+      "date": "2026-03-12"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.9",
+      "date": "2026-03-12"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.11",
+      "date": "2026-03-12"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.12",
+      "date": "2026-03-12"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.13",
+      "date": "2026-03-12"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.14",
+      "date": "2026-03-12"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.15",
+      "date": "2026-03-13"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.16",
+      "date": "2026-03-13"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.17",
+      "date": "2026-03-13"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.18",
+      "date": "2026-03-13"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.19",
+      "date": "2026-03-13"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.20",
+      "date": "2026-03-13"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.21",
+      "date": "2026-03-13"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.22",
+      "date": "2026-03-14"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.23",
+      "date": "2026-03-14"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.24",
+      "date": "2026-03-14"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.25",
+      "date": "2026-03-16"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.26",
+      "date": "2026-03-16"
+    },
+    {
+      "version": "rust-v0.115.0-alpha.27",
+      "date": "2026-03-16"
+    },
+    {
+      "version": "rust-v0.115.0",
+      "date": "2026-03-16",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.116.0-alpha.1",
+      "date": "2026-03-16"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.2",
+      "date": "2026-03-17"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.3",
+      "date": "2026-03-17"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.4",
+      "date": "2026-03-17"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.5",
+      "date": "2026-03-18"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.6",
+      "date": "2026-03-18"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.8",
+      "date": "2026-03-18"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.9",
+      "date": "2026-03-18"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.10",
+      "date": "2026-03-19"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.11",
+      "date": "2026-03-19"
+    },
+    {
+      "version": "rust-v0.116.0-alpha.12",
+      "date": "2026-03-19"
+    },
+    {
+      "version": "rust-v0.116.0",
+      "date": "2026-03-19",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.117.0-alpha.2",
+      "date": "2026-03-19"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.3",
+      "date": "2026-03-20"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.5",
+      "date": "2026-03-20"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.6",
+      "date": "2026-03-20"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.7",
+      "date": "2026-03-21"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.8",
+      "date": "2026-03-21"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.9",
+      "date": "2026-03-23"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.10",
+      "date": "2026-03-23"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.11",
+      "date": "2026-03-24"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.12",
+      "date": "2026-03-24"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.13",
+      "date": "2026-03-24"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.14",
+      "date": "2026-03-24"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.15",
+      "date": "2026-03-25"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.16",
+      "date": "2026-03-25"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.17",
+      "date": "2026-03-25"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.18",
+      "date": "2026-03-25"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.19",
+      "date": "2026-03-25"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.20",
+      "date": "2026-03-26"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.21",
+      "date": "2026-03-26"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.22",
+      "date": "2026-03-26"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.23",
+      "date": "2026-03-26"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.24",
+      "date": "2026-03-26"
+    },
+    {
+      "version": "rust-v0.117.0-alpha.25",
+      "date": "2026-03-26"
+    },
+    {
+      "version": "rust-v0.117.0",
+      "date": "2026-03-26",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.118.0-alpha.2",
+      "date": "2026-03-27"
+    },
+    {
+      "version": "rust-v0.118.0-alpha.3",
+      "date": "2026-03-27"
+    },
+    {
+      "version": "rust-v0.118.0-alpha.4",
+      "date": "2026-03-31"
+    },
+    {
+      "version": "rust-v0.118.0-alpha.5",
+      "date": "2026-03-31"
+    },
+    {
+      "version": "rust-v0.118.0",
+      "date": "2026-03-31",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.119.0-alpha.1",
+      "date": "2026-03-31"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.2",
+      "date": "2026-04-01"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.3",
+      "date": "2026-04-02"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.4",
+      "date": "2026-04-02"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.5",
+      "date": "2026-04-02"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.6",
+      "date": "2026-04-03"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.7",
+      "date": "2026-04-03"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.8",
+      "date": "2026-04-03"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.9",
+      "date": "2026-04-04"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.10",
+      "date": "2026-04-04"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.11",
+      "date": "2026-04-04"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.12",
+      "date": "2026-04-06"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.13",
+      "date": "2026-04-07"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.14",
+      "date": "2026-04-07"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.15",
+      "date": "2026-04-07"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.16",
+      "date": "2026-04-07"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.17",
+      "date": "2026-04-07"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.19",
+      "date": "2026-04-08"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.20",
+      "date": "2026-04-08"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.21",
+      "date": "2026-04-08"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.22",
+      "date": "2026-04-08"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.23",
+      "date": "2026-04-08"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.24",
+      "date": "2026-04-08"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.25",
+      "date": "2026-04-09"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.26",
+      "date": "2026-04-09"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.27",
+      "date": "2026-04-09"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.28",
+      "date": "2026-04-09"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.29",
+      "date": "2026-04-09"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.32",
+      "date": "2026-04-10"
+    },
+    {
+      "version": "rust-v0.119.0-alpha.33",
+      "date": "2026-04-10"
+    },
+    {
+      "version": "rust-v0.119.0",
+      "date": "2026-04-10",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.120.0-alpha.3",
+      "date": "2026-04-11"
+    },
+    {
+      "version": "rust-v0.120.0",
+      "date": "2026-04-11",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.121.0-alpha.1",
+      "date": "2026-04-11"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.2",
+      "date": "2026-04-11"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.4",
+      "date": "2026-04-13"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.6",
+      "date": "2026-04-13"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.8",
+      "date": "2026-04-14"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.9",
+      "date": "2026-04-14"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.10",
+      "date": "2026-04-14"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.11",
+      "date": "2026-04-15"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.12",
+      "date": "2026-04-15"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.13",
+      "date": "2026-04-15"
+    },
+    {
+      "version": "rust-v0.121.0-alpha.14",
+      "date": "2026-04-15"
+    },
+    {
+      "version": "rust-v0.121.0",
+      "date": "2026-04-15",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.122.0-alpha.1",
+      "date": "2026-04-15"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.3",
+      "date": "2026-04-16"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.5",
+      "date": "2026-04-16"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.6",
+      "date": "2026-04-17"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.7",
+      "date": "2026-04-17"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.8",
+      "date": "2026-04-17"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.9",
+      "date": "2026-04-17"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.10",
+      "date": "2026-04-18"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.11",
+      "date": "2026-04-19"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.12",
+      "date": "2026-04-19"
+    },
+    {
+      "version": "rust-v0.122.0-alpha.13",
+      "date": "2026-04-20"
+    },
+    {
+      "version": "rust-v0.122.0",
+      "date": "2026-04-20",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.123.0-alpha.2",
+      "date": "2026-04-21"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.3",
+      "date": "2026-04-21"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.4",
+      "date": "2026-04-21"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.5",
+      "date": "2026-04-21"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.6",
+      "date": "2026-04-21"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.7",
+      "date": "2026-04-21"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.8",
+      "date": "2026-04-22"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.9",
+      "date": "2026-04-22"
+    },
+    {
+      "version": "rust-v0.123.0-alpha.10",
+      "date": "2026-04-22"
+    },
+    {
+      "version": "rust-v0.123.0",
+      "date": "2026-04-23",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.124.0-alpha.1",
+      "date": "2026-04-23"
+    },
+    {
+      "version": "rust-v0.124.0-alpha.2",
+      "date": "2026-04-23"
+    },
+    {
+      "version": "rust-v0.124.0-alpha.3",
+      "date": "2026-04-23"
+    },
+    {
+      "version": "rust-v0.124.0",
+      "date": "2026-04-23",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.125.0-alpha.2",
+      "date": "2026-04-24"
+    },
+    {
+      "version": "rust-v0.125.0-alpha.3",
+      "date": "2026-04-24"
+    },
+    {
+      "version": "rust-v0.125.0",
+      "date": "2026-04-24",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.126.0-alpha.1",
+      "date": "2026-04-24"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.2",
+      "date": "2026-04-25"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.3",
+      "date": "2026-04-26"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.4",
+      "date": "2026-04-27"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.6",
+      "date": "2026-04-27"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.7",
+      "date": "2026-04-27"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.8",
+      "date": "2026-04-27"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.9",
+      "date": "2026-04-28"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.10",
+      "date": "2026-04-28"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.11",
+      "date": "2026-04-28"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.12",
+      "date": "2026-04-29"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.13",
+      "date": "2026-04-29"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.14",
+      "date": "2026-04-29"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.15",
+      "date": "2026-04-29"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.16",
+      "date": "2026-04-29"
+    },
+    {
+      "version": "rust-v0.126.0-alpha.17",
+      "date": "2026-04-30"
+    },
+    {
+      "version": "rust-v0.128.0-alpha.1",
+      "date": "2026-04-30"
+    },
+    {
+      "version": "rust-v0.128.0",
+      "date": "2026-04-30",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.129.0-alpha.1",
+      "date": "2026-04-30"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.2",
+      "date": "2026-05-01"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.4",
+      "date": "2026-05-04"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.5",
+      "date": "2026-05-04"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.6",
+      "date": "2026-05-05"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.7",
+      "date": "2026-05-05"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.8",
+      "date": "2026-05-05"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.9",
+      "date": "2026-05-06"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.10",
+      "date": "2026-05-06"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.12",
+      "date": "2026-05-06"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.13",
+      "date": "2026-05-07"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.14",
+      "date": "2026-05-07"
+    },
+    {
+      "version": "rust-v0.129.0-alpha.15",
+      "date": "2026-05-07"
+    },
+    {
+      "version": "rust-v0.129.0",
+      "date": "2026-05-07",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.130.0-alpha.1",
+      "date": "2026-05-07"
+    },
+    {
+      "version": "rust-v0.130.0-alpha.3",
+      "date": "2026-05-08"
+    },
+    {
+      "version": "rust-v0.130.0-alpha.4",
+      "date": "2026-05-08"
+    },
+    {
+      "version": "rust-v0.130.0-alpha.5",
+      "date": "2026-05-08"
+    },
+    {
+      "version": "rust-v0.130.0-alpha.7",
+      "date": "2026-05-08"
+    },
+    {
+      "version": "rust-v0.130.0-alpha.10",
+      "date": "2026-05-08"
+    },
+    {
+      "version": "rust-v0.130.0",
+      "date": "2026-05-08",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.131.0-alpha.1",
+      "date": "2026-05-09"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.2",
+      "date": "2026-05-09"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.4",
+      "date": "2026-05-09"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.6",
+      "date": "2026-05-11"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.7",
+      "date": "2026-05-12"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.8",
+      "date": "2026-05-12"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.9",
+      "date": "2026-05-12"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.16",
+      "date": "2026-05-14"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.18",
+      "date": "2026-05-14"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.19",
+      "date": "2026-05-15"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.21",
+      "date": "2026-05-15"
+    },
+    {
+      "version": "rust-v0.131.0-alpha.22",
+      "date": "2026-05-15"
+    },
+    {
+      "version": "rust-v0.131.0",
+      "date": "2026-05-18",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.132.0-alpha.1",
+      "date": "2026-05-18"
+    },
+    {
+      "version": "rust-v0.132.0",
+      "date": "2026-05-20",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.133.0-alpha.1",
+      "date": "2026-05-20"
+    },
+    {
+      "version": "rust-v0.133.0-alpha.3",
+      "date": "2026-05-20"
+    },
+    {
+      "version": "rust-v0.133.0-alpha.4",
+      "date": "2026-05-21"
+    },
+    {
+      "version": "rust-v0.133.0",
+      "date": "2026-05-21",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.134.0-alpha.1",
+      "date": "2026-05-22"
+    },
+    {
+      "version": "rust-v0.134.0-alpha.2",
+      "date": "2026-05-22"
+    },
+    {
+      "version": "rust-v0.134.0-alpha.3",
+      "date": "2026-05-23"
+    },
+    {
+      "version": "rust-v0.134.0",
+      "date": "2026-05-26",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.135.0-alpha.1",
+      "date": "2026-05-27"
+    },
+    {
+      "version": "rust-v0.135.0-alpha.2",
+      "date": "2026-05-27"
+    },
+    {
+      "version": "rust-v0.135.0",
+      "date": "2026-05-28",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.136.0-alpha.1",
+      "date": "2026-05-29"
+    },
+    {
+      "version": "rust-v0.136.0-alpha.2",
+      "date": "2026-05-31"
+    },
+    {
+      "version": "rust-v0.136.0",
+      "date": "2026-06-01",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.137.0-alpha.4",
+      "date": "2026-06-03"
+    },
+    {
+      "version": "rust-v0.137.0-alpha.5",
+      "date": "2026-06-03"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.1",
+      "date": "2026-06-04"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.2",
+      "date": "2026-06-04"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.3",
+      "date": "2026-06-04"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.4",
+      "date": "2026-06-04"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.5",
+      "date": "2026-06-05"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.6",
+      "date": "2026-06-06"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.7",
+      "date": "2026-06-08"
+    },
+    {
+      "version": "rust-v0.138.0-alpha.8",
+      "date": "2026-06-08"
+    },
+    {
+      "version": "rust-v0.138.0",
+      "date": "2026-06-08",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.139.0-alpha.1",
+      "date": "2026-06-09"
+    },
+    {
+      "version": "rust-v0.139.0-alpha.2",
+      "date": "2026-06-09"
+    },
+    {
+      "version": "rust-v0.139.0-alpha.3",
+      "date": "2026-06-09"
+    },
+    {
+      "version": "rust-v0.139.0",
+      "date": "2026-06-09",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.140.0-alpha.2",
+      "date": "2026-06-10"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.4",
+      "date": "2026-06-10"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.7",
+      "date": "2026-06-10"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.8",
+      "date": "2026-06-11"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.9",
+      "date": "2026-06-11"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.10",
+      "date": "2026-06-11"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.11",
+      "date": "2026-06-11"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.13",
+      "date": "2026-06-12"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.14",
+      "date": "2026-06-12"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.15",
+      "date": "2026-06-12"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.16",
+      "date": "2026-06-12"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.17",
+      "date": "2026-06-13"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.18",
+      "date": "2026-06-13"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.19",
+      "date": "2026-06-14"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.20",
+      "date": "2026-06-15"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.21",
+      "date": "2026-06-15"
+    },
+    {
+      "version": "rust-v0.140.0-alpha.22",
+      "date": "2026-06-15"
+    },
+    {
+      "version": "rust-v0.141.0-alpha.1",
+      "date": "2026-06-16"
+    },
+    {
+      "version": "rust-v0.141.0-alpha.2",
+      "date": "2026-06-16"
+    },
+    {
+      "version": "rust-v0.141.0-alpha.3",
+      "date": "2026-06-16"
+    },
+    {
+      "version": "rust-v0.141.0-alpha.4",
+      "date": "2026-06-17"
+    },
+    {
+      "version": "rust-v0.141.0-alpha.5",
+      "date": "2026-06-17"
+    },
+    {
+      "version": "rust-v0.141.0-alpha.6",
+      "date": "2026-06-17"
+    },
+    {
+      "version": "rust-v0.141.0-alpha.7",
+      "date": "2026-06-18"
+    },
+    {
+      "version": "rust-v0.141.0",
+      "date": "2026-06-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.142.0-alpha.1",
+      "date": "2026-06-18"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.2",
+      "date": "2026-06-18"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.3",
+      "date": "2026-06-19"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.4",
+      "date": "2026-06-19"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.5",
+      "date": "2026-06-19"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.6",
+      "date": "2026-06-19"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.7",
+      "date": "2026-06-20"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.8",
+      "date": "2026-06-21"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.9",
+      "date": "2026-06-21"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.10",
+      "date": "2026-06-21"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.11",
+      "date": "2026-06-22"
+    },
+    {
+      "version": "rust-v0.142.0-alpha.12",
+      "date": "2026-06-22"
+    },
+    {
+      "version": "rust-v0.142.0",
+      "date": "2026-06-22",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.142.1",
+      "date": "2026-06-25",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.142.2",
+      "date": "2026-06-25",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.142.3",
+      "date": "2026-06-26",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.142.4",
+      "date": "2026-06-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.142.5",
+      "date": "2026-07-01",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.143.0-alpha.1",
+      "date": "2026-06-22"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.2",
+      "date": "2026-06-23"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.3",
+      "date": "2026-06-23"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.4",
+      "date": "2026-06-23"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.5",
+      "date": "2026-06-23"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.6",
+      "date": "2026-06-23"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.7",
+      "date": "2026-06-23"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.9",
+      "date": "2026-06-23"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.11",
+      "date": "2026-06-24"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.12",
+      "date": "2026-06-24"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.13",
+      "date": "2026-06-24"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.14",
+      "date": "2026-06-24"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.15",
+      "date": "2026-06-24"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.16",
+      "date": "2026-06-25"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.21",
+      "date": "2026-06-25"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.22",
+      "date": "2026-06-25"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.25",
+      "date": "2026-06-25"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.26",
+      "date": "2026-06-26"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.27",
+      "date": "2026-06-27"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.28",
+      "date": "2026-06-27"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.29",
+      "date": "2026-06-28"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.31",
+      "date": "2026-06-29"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.32",
+      "date": "2026-07-01"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.33",
+      "date": "2026-07-02"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.34",
+      "date": "2026-07-02"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.35",
+      "date": "2026-07-03"
+    },
+    {
+      "version": "rust-v0.143.0-alpha.36",
+      "date": "2026-07-05"
+    },
+    {
+      "version": "rust-v0.143.0",
+      "date": "2026-07-08",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.144.0",
+      "date": "2026-07-09",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.144.1",
+      "date": "2026-07-09",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.144.2",
+      "date": "2026-07-13",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.144.3",
+      "date": "2026-07-13",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.144.4",
+      "date": "2026-07-14",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.144.5",
+      "date": "2026-07-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.144.6",
+      "date": "2026-07-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    }
+  ]
+}

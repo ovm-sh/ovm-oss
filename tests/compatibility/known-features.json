@@ -1,0 +1,54 @@
+{
+  "features": {
+    "buddy_command": {
+      "description": "/buddy slash command shows Quelpaw companion (implemented as a Claude Code skill)",
+      "introduced": "2.1.80",
+      "introduced_date": "2026-03-19",
+      "removed": "2.1.97",
+      "removed_date": "2026-04-08",
+      "last_supported": "2.1.96",
+      "last_supported_date": "2026-04-08",
+      "test_name": "buddy_command",
+      "notes": "Quelpaw present across ~15 releases. Removed silently in 2.1.97 as part of skill shuffling (see release notes around 2.1.97-2.1.98 for /reload-plugins and skill reorganization). Responds with 'Unknown skill: buddy' on 2.1.97+."
+    },
+    "help_output": {
+      "description": "claude --help exits cleanly with usage info",
+      "introduced": "0.1.0",
+      "removed": null,
+      "test_name": "help_output"
+    },
+    "version_output": {
+      "description": "claude --version prints version string",
+      "introduced": "0.1.0",
+      "removed": null,
+      "test_name": "version_output"
+    }
+  },
+  "version_results": {
+    "2.1.80":  { "date": "2026-03-19", "buddy_command": "pass" },
+    "2.1.81":  { "date": "2026-03-20", "buddy_command": "pass" },
+    "2.1.83":  { "date": "2026-03-22", "buddy_command": "pass" },
+    "2.1.84":  { "date": "2026-03-23", "buddy_command": "pass" },
+    "2.1.85":  { "date": "2026-03-24", "buddy_command": "pass" },
+    "2.1.86":  { "date": "2026-03-24", "buddy_command": "pass" },
+    "2.1.87":  { "date": "2026-03-25", "buddy_command": "pass" },
+    "2.1.89":  { "date": "2026-03-28", "buddy_command": "pass" },
+    "2.1.90":  { "date": "2026-03-29", "buddy_command": "pass" },
+    "2.1.91":  { "date": "2026-04-01", "buddy_command": "pass" },
+    "2.1.92":  { "date": "2026-04-01", "buddy_command": "pass" },
+    "2.1.94":  { "date": "2026-04-02", "buddy_command": "pass" },
+    "2.1.96":  { "date": "2026-04-03", "buddy_command": "pass" },
+    "2.1.97":  { "date": "2026-04-04", "buddy_command": "fail" },
+    "2.1.98":  { "date": "2026-04-05", "buddy_command": "fail" },
+    "2.1.100": { "date": "2026-04-10", "buddy_command": "fail" },
+    "2.1.101": { "date": "2026-04-10", "buddy_command": "fail" },
+    "2.1.104": { "date": "2026-04-13", "buddy_command": "fail" },
+    "2.1.105": { "date": "2026-04-13", "buddy_command": "fail" },
+    "2.1.107": { "date": "2026-04-14", "buddy_command": "fail" },
+    "2.1.108": { "date": "2026-04-14", "buddy_command": "fail" },
+    "2.1.109": { "date": "2026-04-15", "buddy_command": "fail" },
+    "2.1.110": { "date": "2026-04-15", "buddy_command": "fail" },
+    "2.1.111": { "date": "2026-04-16", "buddy_command": "fail" },
+    "2.1.112": { "date": "2026-04-16", "buddy_command": "fail" }
+  }
+}

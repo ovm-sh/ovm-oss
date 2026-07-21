@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+enable_free_tier: true
+tone_instructions: "Be concise, direct, and focus on correctness, security, release safety, and tests."
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  poem: false
+  in_progress_fortune: false
+  enable_prompt_for_ai_agents: true
+  path_instructions:
+    - path: "crates/ovm/src/sources/**"
+      instructions: "Prioritize supply-chain security issues: URL and host allow-listing, redirect behavior, archive extraction safety, signature verification, platform-specific trust assumptions, and error paths that might silently downgrade security."
+    - path: "docs/api/*.json"
+      instructions: "Review registry data as release-critical API data. Flag schema drift, suspicious hosts, unexpected URL formats, duplicate or malformed versions, and generated data that disagrees with source-specific validation rules."
+    - path: ".github/workflows/**"
+      instructions: "Prioritize release safety: token scopes, artifact provenance, attestations, signing, least-privilege permissions, and whether untrusted PR data can affect privileged steps."
+    - path: "install.sh"
+      instructions: "Prioritize installer safety: TLS-only downloads, no implicit external CLI auth flows, no secret exposure, clear failure behavior, and shell portability."
+  auto_review:
+    enabled: true
+    drafts: false
+
+chat:
+  auto_reply: true
