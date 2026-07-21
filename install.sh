@@ -80,7 +80,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # Mochi the Cat — the same mascot the installed CLI greets with (see
-# crates/ovm/src/mochi.rs). Message rides the cat's middle line.
+# crates/ovm/src/mochi.rs). Message rides the cat's middle line. The fur is
+# brand purple (ANSI 256 color 135 ≈ the app mascot's system purple) when
+# stderr is a real terminal; plain otherwise.
+if [ -t 2 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    MOCHI_FUR=$(printf '\033[38;5;135m')
+    MOCHI_RESET=$(printf '\033[0m')
+else
+    MOCHI_FUR=""
+    MOCHI_RESET=""
+fi
+
 mochi() {
     mood=$1
     shift
@@ -90,7 +100,10 @@ mochi() {
         working) eyes='-.-' ;;
         *) eyes='o.o' ;;
     esac
-    printf '\n  /\\_/\\ \n ( %s )  %s\n  > ^ < \n' "$eyes" "$*" >&2
+    printf '\n%s  /\\_/\\ %s\n%s ( %s )%s  %s\n%s  > ^ < %s\n' \
+        "$MOCHI_FUR" "$MOCHI_RESET" \
+        "$MOCHI_FUR" "$eyes" "$MOCHI_RESET" "$*" \
+        "$MOCHI_FUR" "$MOCHI_RESET" >&2
 }
 
 fail() {

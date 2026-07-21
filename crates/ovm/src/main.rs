@@ -557,7 +557,7 @@ fn format_clap_error(err: clap::Error) -> OvmError {
 fn abort(error: impl std::fmt::Display) -> ! {
     eprintln!();
     for line in mochi::SAD.lines() {
-        eprintln!("{}", console::style(line).red().dim());
+        eprintln!("{}", mochi::face_style(line));
     }
     eprintln!();
     eprintln!("{} {}", console::style("Error:").red().bold(), error);

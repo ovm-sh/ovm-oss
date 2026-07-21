@@ -58,7 +58,7 @@ fn print_banner() {
     ];
 
     for (line, copy) in face.lines().zip(copy) {
-        println!("{}  {}", style(line).magenta(), copy);
+        println!("{}  {}", crate::mochi::face_style(line), copy);
     }
 }
 

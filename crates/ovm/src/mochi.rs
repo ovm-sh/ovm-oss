@@ -16,19 +16,25 @@ pub const SAD: &str = "  /\\_/\\ \n ( u.u )\n  > ^ < ";
 /// Working — busy doing something (auto-update, download).
 pub const WORKING: &str = "  /\\_/\\ \n ( -.- )\n  > ^ < ";
 
+/// Mochi's fur is brand purple (ANSI 256 color 135 ≈ the app mascot's
+/// system-purple #AF52DE) in every mood; the mood color rides the message.
+pub fn face_style(line: &str) -> console::StyledObject<&str> {
+    console::style(line).color256(135)
+}
+
 /// Print `face` to stderr with `message` aligned on the cat's middle line.
 ///
 /// The faces are padded to a constant width (see module docs), so the message
 /// lines up after the cat on every call. `message` is printed as-is, so callers
-/// embed their own `console` styling; the art stays in the terminal's default
-/// color. A leading blank line gives the cat room to breathe.
+/// embed their own `console` styling; the art is always brand purple (see
+/// [`face_style`]). A leading blank line gives the cat room to breathe.
 pub fn say(face: &str, message: &str) {
     eprintln!();
     for (index, line) in face.lines().enumerate() {
         if index == 1 {
-            eprintln!("{line}  {message}");
+            eprintln!("{}  {message}", face_style(line));
         } else {
-            eprintln!("{line}");
+            eprintln!("{}", face_style(line));
         }
     }
 }

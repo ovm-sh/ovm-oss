@@ -38,9 +38,9 @@ pub fn run(vm: &VersionManager, version: &str) -> Result<()> {
     eprintln!();
     for (i, line) in mochi::HAPPY.lines().enumerate() {
         if i == 1 {
-            eprintln!("{}  {}", style(line).green(), msg);
+            eprintln!("{}  {}", mochi::face_style(line), msg);
         } else {
-            eprintln!("{}", style(line).green());
+            eprintln!("{}", mochi::face_style(line));
         }
     }
 

@@ -546,9 +546,9 @@ fn show_happy_switch(product_name: &str, version: &str) {
     eprintln!();
     for (i, line) in crate::mochi::HAPPY.lines().enumerate() {
         if i == 1 {
-            eprintln!("{}  {}", style(line).green(), msg);
+            eprintln!("{}  {}", crate::mochi::face_style(line), msg);
         } else {
-            eprintln!("{}", style(line).green());
+            eprintln!("{}", crate::mochi::face_style(line));
         }
     }
 }
