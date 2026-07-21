@@ -23,6 +23,32 @@ transparent order-of-magnitude comparison. They show that Codex was not the
 majority agent, but it was a recurring and material part of the engineering
 process.
 
+## GPT-5.6 SOL in the final shipping week
+
+From July 15 through July 22, 2026, the local OVM archive contains 38 session
+files whose turn metadata identifies the active model as `gpt-5.6-sol`. During
+that final week, SOL directly delivered changes in some sessions and served as
+an independent, read-only reviewer in others. Its concrete contributions
+included:
+
+- reviewing the consolidated self-management stack: immutable OVM versions,
+  current/previous activation, historical rollback, crash recovery, installer
+  portability, and release-manifest handling;
+- running the pre-open-source security rounds that challenged authenticated
+  self-update, redirect and extraction policy, the `claudex` listener-identity
+  boundary, credential scrubbing, and release-gate correctness;
+- reviewing the new benchmark metrics and batched-sweep pipeline across metric
+  collection, result storage, reports, workflows, and version-bound validation;
+- performing adversarial mobile QA on the live benchmark site, including real
+  WebKit checks for horizontal overflow, chart controls, touch targets, and
+  Safari-only layout behavior; and
+- producing and privacy-checking this public Codex attribution document from
+  the private session archive without publishing transcripts or identifiers.
+
+Some of those SOL sessions authored the delivered artifact; others produced
+findings that were fixed in subsequent commits and then re-verified. We count
+both as Codex contributions, but not as sole authorship of every resulting line.
+
 ## What Codex did
 
 ### Diagnosed and implemented product fixes
