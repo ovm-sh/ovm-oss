@@ -1,0 +1,209 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly cargo-audit run so new advisories against pinned deps surface
+    # even on quiet weeks. Monday 06:00 UTC.
+    - cron: '0 6 * * 1'
+
+# Least privilege by default; the audit job escalates to checks:write locally.
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: shellcheck .hooks/install.sh .hooks/pre-commit .hooks/pre-push install.sh scripts/bundle-manifest.sh scripts/dev-install.sh scripts/dev-uninstall.sh scripts/publish-npm.sh scripts/release.sh scripts/update-brew-formula.sh tests/scripts/*.sh
+
+      - name: Run actionlint
+        uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+
+  scripts:
+    name: Scripts smoke
+    # macOS is the primary developer platform; run the smoke suite on both so
+    # the uname-branched paths (mv -fh, shasum fallback, BSD mktemp/sed,
+    # bash 3.2) are actually exercised, not just their Linux counterparts.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install zsh (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      - name: Syntax-check shell scripts
+        run: bash tests/scripts/syntax-check.sh
+
+      - name: Canary script — missing version produces fail JSON
+        run: bash tests/scripts/canary-missing-version.sh
+
+      - name: npm installer platform map matches package metadata
+        run: bash tests/scripts/npm-package-map.sh
+
+      - name: npm installer replaces the live bundle transactionally
+        run: bash tests/scripts/npm-install-transactional.sh
+
+      - name: Bundle manifest is valid and extensible
+        run: bash tests/scripts/bundle-manifest.sh
+
+      - name: Bundle manifest drives Brew and npm
+        run: bash tests/scripts/bundle-contract.sh
+
+      - name: Developer install survives checkout moves
+        run: bash tests/scripts/dev-install-smoke.sh
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          # Full history so a secret buried in an old commit fails loudly
+          # before the repo ever goes public.
+          fetch-depth: 0
+      - name: Run gitleaks over full history
+        run: |
+          VERSION=8.30.1
+          asset="gitleaks_${VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
+          curl -fsSL "$base/$asset" -o "/tmp/$asset"
+          curl -fsSL "$base/gitleaks_${VERSION}_checksums.txt" -o /tmp/checksums.txt
+          (cd /tmp && grep "$asset" checksums.txt | sha256sum -c -)
+          tar -xzf "/tmp/$asset" -C /tmp gitleaks
+          /tmp/gitleaks git --config .gitleaks.toml --redact --verbose .
+
+  audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # rustsec/audit-check posts results to the Checks API; default
+      # GITHUB_TOKEN scope on this repo is contents:read only.
+      checks: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
+
+  # Installs the REAL control plane into an isolated HOME and exercises the
+  # actual command + shim surface on both platforms. Unit tests can't reach the
+  # control-plane → shim → plugin exec chain, so this is the gate that catches
+  # dispatch regressions (e.g. the ccxy break) before they reach a user.
+  e2e:
+    name: E2E command matrix (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run end-to-end command matrix
+        run: bash tests/scripts/e2e-command-matrix.sh
+
+  # Reports workspace line/region/function coverage and fails if line coverage
+  # drops below the floor, so the number can't silently rot.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Measure coverage
+        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 70
