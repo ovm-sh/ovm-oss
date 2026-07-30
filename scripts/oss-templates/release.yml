@@ -295,7 +295,10 @@ jobs:
       - name: Check for active public tag protection
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The immutable-releases setting needs repository-administration
+          # read, which the Actions token never has; the release token holds
+          # that read alongside its private-repo provenance reads.
+          GH_TOKEN: ${{ secrets.OVM_PRIVATE_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
           # GO-LIVE.md treats missing or unreadable tag protection as a release
@@ -446,7 +449,8 @@ jobs:
       - name: Re-check tag protection and immutability before publishing
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Same administration-read requirement as the draft-stage check.
+          GH_TOKEN: ${{ secrets.OVM_PRIVATE_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
           # The draft-stage check can be hours old by finalize time; a ruleset
