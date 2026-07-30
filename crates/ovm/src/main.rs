@@ -51,6 +51,12 @@ fn run() -> Result<()> {
     // claudex lease so the selected child remains the process that owns it.
     self_manager::proxy_if_needed(&args)?;
     claim_claudex_session_lease()?;
+    // Single pre-dispatch lifecycle hook: every invocation that reaches real
+    // work keeps OVM and the version indexes fresh. It sits above dispatch on
+    // purpose — built-ins, product launchers, claudex aliases, and PATH
+    // plugins all leave through different early returns (or `exit`), so a
+    // per-branch call is one refactor away from silently skipping a path.
+    spawn_background_refresh_if_due(&args);
 
     // The hidden background-refresh command is dispatched by its sentinel
     // argument *before* any name-based routing. When ovm is installed as the
@@ -326,6 +332,29 @@ fn invoked_as_product_launcher(argv0: Option<&String>) -> Option<Product> {
     [Product::Claude, Product::Codex, Product::Pi]
         .into_iter()
         .find(|product| product.binary_name() == name)
+}
+
+/// Fire the same due-gated, detached background refresh that product launches
+/// use, so OVM itself (and the product version indexes) stay fresh for users
+/// who only run the CLI and never launch a product through it. `ovm self …`
+/// is exempt: those commands manage versions deliberately and hold the self
+/// operation lock themselves. Fail-open — config or dirs errors just skip
+/// it — and cheap when nothing is due (a handful of cache-file stats).
+fn spawn_background_refresh_if_due(args: &[String]) {
+    // The detached refresh child must never spawn another refresh.
+    if args.get(1).map(String::as_str) == Some("__refresh-cache")
+        || std::env::var_os("OVM_BACKGROUND_REFRESH").is_some()
+    {
+        return;
+    }
+    if self_manager::is_self_management_command(args.get(1).map(String::as_str)) {
+        return;
+    }
+    let Ok(dirs) = config::OvmDirs::new() else {
+        return;
+    };
+    let config = config::OvmConfig::load(&dirs.config_file).unwrap_or_default();
+    commands::refresh_cache::spawn_all_products_if_due(&dirs, &config);
 }
 
 fn run_yolo_launch(product: Product, args: &[String]) -> Result<()> {

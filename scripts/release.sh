@@ -90,8 +90,10 @@ cargo fmt -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --quiet
 
-# Reminder to update CHANGELOG before commit
-if ! grep -q "v$NEW\|## \[$NEW\]" CHANGELOG.md 2>/dev/null; then
+# Reminder to update CHANGELOG before commit. Only a release-section heading
+# counts — link definitions or prose mentions of the version must not
+# satisfy this check.
+if ! grep -q "^## \[$NEW\]" CHANGELOG.md 2>/dev/null; then
     echo
     echo "WARNING: CHANGELOG.md has no entry for $NEW."
     printf "Open it now? (y/N) "

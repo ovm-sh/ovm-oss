@@ -166,10 +166,38 @@ pub fn self_check_due(base: &Path, config: &OvmConfig) -> bool {
     }
     match read_latest_cache(base) {
         Some(cache) => {
-            cache.channel != config.self_.channel.label()
+            if cache.channel != config.self_.channel.label()
                 || !cache_is_fresh(&cache, config.update_check_interval)
+            {
+                return true;
+            }
+            staging_outstanding(base, config, &cache.version)
         }
         None => true,
+    }
+}
+
+/// A fresh cache normally silences the background check — but when the cached
+/// latest is newer than the active version and no matching update is staged,
+/// an earlier staging attempt failed (transient network, killed child). That
+/// work must retry on the next invocation, not wait out the check window: the
+/// cache lookup is served locally, so the retry costs nothing unless the
+/// download itself is still needed.
+fn staging_outstanding(base: &Path, config: &OvmConfig, cached_latest: &str) -> bool {
+    if config.self_.auto_update != AutoUpdatePolicy::On {
+        return false;
+    }
+    let manager = SelfManager::at(OvmDirs::at(base.to_path_buf()));
+    let Ok(Some(current)) = manager.current_version() else {
+        return false;
+    };
+    if is_dev_snapshot(&current) || !semver_newer(cached_latest, &current) {
+        return false;
+    }
+    match read_pending(&pending_path(base)) {
+        Ok(Some(pending)) => pending.version != cached_latest,
+        Ok(None) => true,
+        Err(_) => true,
     }
 }
 
@@ -469,5 +497,33 @@ mod tests {
         config.self_.auto_update = AutoUpdatePolicy::Off;
         config.self_.channel = SelfChannel::Stable;
         assert!(!self_check_due(dir.path(), &config));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_staging_re_arms_the_due_check() {
+        let dir = tempdir().unwrap();
+        let dirs = OvmDirs::at(dir.path().to_path_buf());
+        let config = OvmConfig::default();
+
+        // Active version 0.0.3, fresh cache saying 0.0.4 is out.
+        let self_dirs = crate::self_manager::SelfDirs::at(&dirs.base);
+        let version_dir = self_dirs.versions.join("0.0.3");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::os::unix::fs::symlink(&version_dir, &self_dirs.current).unwrap();
+        write_latest_cache(dir.path(), SelfChannel::Stable, "0.0.4");
+
+        // Fresh cache + newer latest + nothing staged: an earlier staging
+        // attempt failed, so the check must stay due instead of sleeping
+        // out the interval.
+        assert!(self_check_due(dir.path(), &config));
+
+        // Once the matching version is staged, the check goes quiet.
+        write_pending(&pending_path(dir.path()), "0.0.4").unwrap();
+        assert!(!self_check_due(dir.path(), &config));
+
+        // A stale pending from a superseded candidate re-arms it again.
+        write_pending(&pending_path(dir.path()), "0.0.3-alpha.1").unwrap();
+        assert!(self_check_due(dir.path(), &config));
     }
 }

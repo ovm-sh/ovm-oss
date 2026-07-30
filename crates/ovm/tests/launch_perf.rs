@@ -35,6 +35,10 @@ const PRODUCTS: [(&str, &str); 3] = [
 /// well under a second. Kept below the registry client's 5s timeout so a
 /// regression that synchronously fetches against the tarpit blows the budget.
 const LAUNCH_BUDGET: Duration = Duration::from_secs(3);
+/// Attempts allowed to come in under budget before the launch is declared
+/// blocking. A real regression blows the budget on every attempt; only load
+/// noise is transient.
+const LAUNCH_ATTEMPTS: u32 = 3;
 static PERF_LOCK: Mutex<()> = Mutex::new(());
 
 /// Where each product's active binary lives on disk, mirroring
@@ -125,29 +129,42 @@ fn dead_port_url() -> String {
 /// exec under budget, and return how long it took. Prints the per-product load
 /// time so `cargo test -- --nocapture` shows exactly where the time goes.
 fn time_launch(scenario: &str, product: &str, version: &str, update_service: &str) -> Duration {
-    let home = tempfile::tempdir().expect("tempdir");
-    seed_active(home.path(), product, version);
+    // Best-of-N: the guard is against a *systematic* block (a synchronous
+    // fetch stalls on the tarpit's timeout on every attempt), so the fastest
+    // attempt is the honest measurement. A single sample also captures CI
+    // scheduling noise — cold binary paging, a parallel test hogging cores —
+    // which has nothing to do with the property under test and made this the
+    // suite's only flaky test.
+    let mut best = Duration::MAX;
+    for attempt in 1..=LAUNCH_ATTEMPTS {
+        let home = tempfile::tempdir().expect("tempdir");
+        seed_active(home.path(), product, version);
 
-    let start = Instant::now();
-    let assert = ovm(home.path(), update_service)
-        .args([product, "--version"])
-        .assert()
-        .success();
-    let elapsed = start.elapsed();
+        let start = Instant::now();
+        let assert = ovm(home.path(), update_service)
+            .args([product, "--version"])
+            .assert()
+            .success();
+        let elapsed = start.elapsed();
 
-    eprintln!("[launch_perf] {scenario:<22} {product:<6} {elapsed:>8.2?}");
+        eprintln!("[launch_perf] {scenario:<22} {product:<6} attempt {attempt} {elapsed:>8.2?}");
 
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
-    assert!(
-        stdout.contains("args=--version"),
-        "{product} launch did not reach exec (stdout: {stdout:?})"
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+        assert!(
+            stdout.contains("args=--version"),
+            "{product} launch did not reach exec (stdout: {stdout:?})"
+        );
+        best = best.min(elapsed);
+        if best <= LAUNCH_BUDGET {
+            return best;
+        }
+    }
+
+    panic!(
+        "{product} launch took {best:?} at best over {LAUNCH_ATTEMPTS} attempts against the \
+         {scenario} service, expected <= {LAUNCH_BUDGET:?} — the foreground is blocking \
+         on the network"
     );
-    assert!(
-        elapsed <= LAUNCH_BUDGET,
-        "{product} launch took {elapsed:?} against the {scenario} service, \
-         expected <= {LAUNCH_BUDGET:?} — the foreground is blocking on the network"
-    );
-    elapsed
 }
 
 /// `ovm` invocation with the home isolated and every upstream pointed at

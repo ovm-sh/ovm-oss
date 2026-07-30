@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
 
+## [0.0.3-alpha.7] - 2026-07-31
+
+### Changed
+
+- Every `ovm` invocation now kicks the same due-gated background refresh as
+  product launches — built-in commands, claudex aliases, and `ovm-*` PATH
+  plugins alike, from a single hook ahead of command dispatch (`ovm self …`
+  stays exempt; those commands manage versions deliberately). Users who only
+  interact with the `ovm` CLI, or only through a plugin, previously never
+  staged a self-update; now a stale check (older than `updateCheckInterval`)
+  triggers staging on any command, and the next invocation activates it with
+  the usual `↑ OVM <new>` notice.
+
+### Fixed
+
+- A self-update staging attempt that fails after the version check succeeds
+  (transient network drop mid-download) no longer waits out the full
+  `updateCheckInterval` before retrying: the background check re-arms
+  whenever the cached latest is newer than the active version and no
+  matching update is staged. The retry serves the version lookup from the
+  local cache, so only the outstanding download is repeated.
+
 ## [0.0.3-alpha.6] - 2026-07-30
 
 ### Changed
@@ -306,7 +328,7 @@ the real first public release carries the version the public repo ships.
   never via PATH. The 35-entry Codex migration manifest moves out of the core
   binary with it. Every official distribution (GitHub release tarball,
   `install.sh`, npm, Homebrew) bundles `ovm-codex-skew` alongside `ovm`, and it
-  is published to crates.io for `cargo install ovm-codex-skew` — see
+  is prepared for a future crates.io publication of `ovm-codex-skew` — see
   `RELEASING.md`.
 - `ovm doctor claude --fix` — Claude install hygiene. Reports (and with `--fix`
   repairs) setups where Claude could wrest version control back from OVM: it
@@ -330,7 +352,7 @@ the real first public release carries the version the public repo ships.
 
 **Distribution**
 - Release automation for prebuilt binaries on `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
-- Published to crates.io (`ovm` + `ovm-codex-skew`), npm platform packages, and a Homebrew tap — every channel bundles the `ovm-codex-skew` companion alongside `ovm`
+- Package-channel automation prepared for crates.io (`ovm` + `ovm-codex-skew`), npm platform packages, and a Homebrew tap — every prepared channel bundles the `ovm-codex-skew` companion alongside `ovm`. None of these were published; GitHub release bundles and the direct installer are the supported channels.
 - `curl -fsSL https://raw.githubusercontent.com/ovm-sh/ovm-oss/main/install.sh | sh` installer
 
 **Developer experience**
@@ -359,9 +381,10 @@ the real first public release carries the version the public repo ships.
 
 - `ovm cc latest` / `ovm cx latest` now make the resolved version the default even when extra args are present (including the injected flag from `ccy`/`cxy`), so subsequent plain `claude`/`codex` spawns pick it up. Previously only the bare no-arg form switched the active symlinks; the yolo aliases launched the latest once and left the default pinned. `--ovm-version latest` remains an ephemeral override.
 
-[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.3...HEAD
-[0.0.3-alpha.3]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.2...v0.0.3-alpha.3
-[0.0.3-alpha.2]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.1...v0.0.3-alpha.2
-[0.0.3-alpha.1]: https://github.com/ovm-sh/ovm-oss/releases/tag/v0.0.3-alpha.1
-[0.0.1]: https://github.com/ovm-sh/ovm-oss/releases/tag/v0.0.1
-[0.1.0]: https://github.com/ovm-sh/ovm-oss/releases/tag/v0.1.0
+<!-- v0.0.3-alpha.4 is the first tag on the repaired public history; older
+     versions predate it and intentionally have no public link targets. -->
+[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.7...HEAD
+[0.0.3-alpha.7]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.6...v0.0.3-alpha.7
+[0.0.3-alpha.6]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.5...v0.0.3-alpha.6
+[0.0.3-alpha.5]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.4...v0.0.3-alpha.5
+[0.0.3-alpha.4]: https://github.com/ovm-sh/ovm-oss/releases/tag/v0.0.3-alpha.4

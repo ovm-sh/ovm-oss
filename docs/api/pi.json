@@ -2,7 +2,7 @@
   "product": "pi",
   "display_name": "Pi",
   "source": "github:earendil-works/pi",
-  "updated_at": "2026-07-30T03:45:19Z",
+  "updated_at": "2026-07-30T08:42:05Z",
   "dist_tags": {
     "latest": "0.83.0"
   },

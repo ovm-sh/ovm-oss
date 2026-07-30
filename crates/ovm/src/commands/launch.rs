@@ -36,7 +36,8 @@ pub fn run(product: Product, args: &[String]) -> Result<()> {
         && first_arg.is_some_and(|arg| arg == "latest" || looks_like_version(arg));
 
     if requested_version.is_none() {
-        super::refresh_cache::spawn_all_products_if_due(&vm.dirs, &vm.config);
+        // The background refresh is spawned once per invocation from the
+        // pre-dispatch hook in `main`, which covers pinned launches too.
         super::cleanup::prune_all_products(&vm.config);
         // Under `notify` the prompt/notice replaces the generic nudge, so only
         // emit the banner for the other policies.

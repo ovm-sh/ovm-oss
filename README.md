@@ -35,10 +35,10 @@ Windows is not supported.
 
 ## Install
 
-The pre-live package baseline remains `v0.0.1`; do not select a higher public
-version until the release owner explicitly approves it. OVM's supported
-distribution paths are the verified GitHub release bundles and the direct
-installer built from those bundles:
+Public releases are published on `ovm-sh/ovm-oss`; the release marked
+**Latest** there is the supported version. OVM's supported distribution
+paths are the verified GitHub release bundles and the direct installer
+built from those bundles:
 
 ```bash
 curl -fsSL https://ovm.sh/install | sh
