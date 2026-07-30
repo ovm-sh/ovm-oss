@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-07-30T03:45:19Z",
+  "base_url": "https://ovm.sh/api",
+  "products": [
+    {
+      "product": "claude",
+      "display_name": "Claude Code",
+      "source": "npm:@anthropic-ai/claude-code",
+      "latest": "2.1.220",
+      "version_count": 472,
+      "retired_count": 0,
+      "updated_at": "2026-07-30T03:45:19Z"
+    },
+    {
+      "product": "cliproxyapi",
+      "display_name": "CLIProxyAPI",
+      "source": "github:router-for-me/CLIProxyAPI",
+      "latest": "7.2.109",
+      "version_count": 611,
+      "retired_count": 1,
+      "updated_at": "2026-07-30T03:45:19Z"
+    },
+    {
+      "product": "codex",
+      "display_name": "Codex",
+      "source": "github:openai/codex",
+      "latest": "rust-v0.145.0",
+      "version_count": 865,
+      "retired_count": 0,
+      "updated_at": "2026-07-30T03:45:19Z"
+    },
+    {
+      "product": "pi",
+      "display_name": "Pi",
+      "source": "github:earendil-works/pi",
+      "latest": "0.83.0",
+      "version_count": 252,
+      "retired_count": 0,
+      "updated_at": "2026-07-30T03:45:19Z"
+    }
+  ]
+}

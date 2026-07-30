@@ -1,0 +1,13 @@
+# gitleaks configuration for OVM.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake fixture keys used to test credential scrubbing — never real secrets."
+regexes = [
+  '''sk-live-abcdef123456''',
+  '''sk-abcdef-ghijkl-mnopqr''',
+]
+paths = [
+  '''crates/ovm-claudex/tests/.*''',
+]

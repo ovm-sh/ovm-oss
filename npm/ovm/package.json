@@ -1,0 +1,25 @@
+{
+  "name": "@mochiexists/ovm",
+  "version": "0.0.0",
+  "description": "Open Version Manager for AI coding tools",
+  "bin": {
+    "ovm": "bin/ovm"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "optionalDependencies": {
+    "@mochiexists/ovm-darwin-arm64": "0.0.0",
+    "@mochiexists/ovm-darwin-x64": "0.0.0",
+    "@mochiexists/ovm-linux-x64": "0.0.0",
+    "@mochiexists/ovm-linux-arm64": "0.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ovm-sh/ovm-oss.git",
+    "directory": "npm/ovm"
+  },
+  "homepage": "https://ovm.sh",
+  "keywords": ["version-manager", "claude", "codex", "ai"]
+}

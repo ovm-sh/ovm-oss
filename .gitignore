@@ -1,0 +1,62 @@
+# Build
+target/
+dist/
+build/
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment
+.env
+.env.local
+
+# Keys, credentials, and local tool config — never commit these
+*.pem
+*.key
+id_rsa*
+.npmrc
+credentials*
+.claude/settings.local.json
+.claude/worktrees/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary
+*.tmp
+.temp/
+
+# Test artifacts
+coverage/
+.nyc_output/
+.playwright-mcp/
+benchmark-model.png
+
+# Local OVM data
+.ovm/
+
+# Analysis pipeline local artifacts
+tools/analysis/node_modules/
+tools/analysis/dist/
+tools/analysis/data/**/*.tmp
+tools/analysis/coverage/
+
+# Formula is generated at release time and pushed to homebrew-ovm tap
+Formula/
+
+# Vercel project link + generated site HTML (publish source data, not HTML)
+.vercel
+site/benchmark.html

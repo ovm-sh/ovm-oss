@@ -1,0 +1,17 @@
+{
+  "name": "@mochiexists/ovm-darwin-x64",
+  "version": "0.0.0",
+  "description": "OVM binary for macOS x64",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "preferUnplugged": true,
+  "files": [
+    "ovm",
+    "ovm-*"
+  ],
+  "license": "MIT"
+}
