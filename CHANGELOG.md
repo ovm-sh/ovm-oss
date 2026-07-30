@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
 
+## [0.0.3-alpha.5] - 2026-07-30
+
+Proof release. Verifies real public-channel self-update between public
+alphas (`ovm self update` from v0.0.3-alpha.4, whose release feed is the
+public repository, hot-swaps to this version). No functional changes
+beyond the version itself.
+
 ## [0.0.3-alpha.4] - 2026-07-30
 
 Recovery release. This is the first release published from the repaired
