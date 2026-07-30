@@ -43,9 +43,10 @@ fn print_banner() {
     let face = crate::mochi::DEFAULT;
     let copy = [
         format!(
-            "{} {}",
+            "{} {} {}",
             style("ovm").bold(),
-            style("(open version manager)").dim()
+            style("(open version manager)").dim(),
+            style(concat!("v", env!("CARGO_PKG_VERSION"))).cyan()
         ),
         style("built by mochi and quelpaw")
             .dim()

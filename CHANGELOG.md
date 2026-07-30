@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
 
+## [0.0.3-alpha.6] - 2026-07-30
+
+### Changed
+
+- The `ovm` banner now shows the running OVM version, so a bare `ovm` is
+  enough to check which version is active.
+
 ## [0.0.3-alpha.5] - 2026-07-30
 
 Proof release. Verifies real public-channel self-update between public
