@@ -36,6 +36,19 @@ do
   LAST_ARCHIVE="$artifact_dir/ovm-$target.tar.gz"
 done
 
+# A publish that quietly skips a platform still publishes the root package
+# naming that platform in optionalDependencies, so users on it hit an install
+# failure from a release that reported success. The preflight must refuse.
+OVM_NPM_PREFLIGHT_ONLY=1 OVM_NPM_ARTIFACT_DIR="$TMP_DIR/artifacts" \
+  sh "$ROOT/scripts/publish-npm.sh"
+mv "$TMP_DIR/artifacts/ovm-aarch64-apple-darwin" "$TMP_DIR/artifact-held"
+if OVM_NPM_PREFLIGHT_ONLY=1 OVM_NPM_ARTIFACT_DIR="$TMP_DIR/artifacts" \
+  sh "$ROOT/scripts/publish-npm.sh"; then
+  echo "npm publish preflight accepted a missing platform artifact" >&2
+  exit 1
+fi
+mv "$TMP_DIR/artifact-held" "$TMP_DIR/artifacts/ovm-aarch64-apple-darwin"
+
 OVM_NPM_VALIDATE_ARCHIVE="$LAST_ARCHIVE" \
 OVM_BUNDLE_MANIFEST="$MANIFEST" \
 sh "$ROOT/scripts/publish-npm.sh"

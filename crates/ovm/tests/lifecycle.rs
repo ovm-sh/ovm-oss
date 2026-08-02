@@ -49,6 +49,7 @@ fn make_tarball(entry_name: &str, contents: &[u8]) -> Vec<u8> {
 fn ovm(home: &Path, releases_url: &str) -> Command {
     let mut cmd = Command::cargo_bin("ovm").expect("binary built");
     cmd.env("HOME", home)
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_CODEX_RELEASES_URL", releases_url)
         // Test fixtures are unsigned fake binaries; skip codesign verification.
         .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
@@ -104,6 +105,7 @@ fn setup_codex_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, Stri
     let asset_name = expected_codex_asset();
     let asset_entry = expected_codex_entry();
     let asset_body = make_tarball(asset_entry, binary_contents);
+    let asset_size = asset_body.len();
 
     // /assets/<asset_name> serves the tarball bytes
     server
@@ -116,7 +118,7 @@ fn setup_codex_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, Stri
     // /tags/<version> serves release metadata that references our mock asset URL
     let asset_url = format!("{}/assets/{asset_name}", server.url());
     let release_json = format!(
-        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}"}}]}}"#,
+        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
     );
     server
         .mock("GET", format!("/tags/{version}").as_str())
@@ -127,7 +129,7 @@ fn setup_codex_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, Stri
 
     // /?per_page=100&page=1 returns the version list (for ls --remote)
     let list_json = format!(
-        r#"[{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}"}}]}}]"#,
+        r#"[{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}]"#,
     );
     server
         .mock("GET", "/")
@@ -277,12 +279,14 @@ fn setup_codex_mock_with_sidecar(
 
     let asset_name = expected_codex_asset();
     let asset_body = make_tarball(expected_codex_entry(), binary_contents);
+    let asset_size = asset_body.len();
     let triple = expected_codex_entry()
         .strip_prefix("codex-")
         .expect("entry is codex-<triple>");
     let sidecar_entry = format!("codex-code-mode-host-{triple}");
     let sidecar_asset_name = format!("{sidecar_entry}.tar.gz");
     let sidecar_body = make_tarball(&sidecar_entry, sidecar_contents);
+    let sidecar_size = sidecar_body.len();
 
     server
         .mock("GET", format!("/assets/{asset_name}").as_str())
@@ -301,8 +305,8 @@ fn setup_codex_mock_with_sidecar(
     let sidecar_url = format!("{}/assets/{sidecar_asset_name}", server.url());
     let release_json = format!(
         r#"{{"tag_name":"{version}","assets":[
-            {{"name":"{asset_name}","browser_download_url":"{asset_url}"}},
-            {{"name":"{sidecar_asset_name}","browser_download_url":"{sidecar_url}"}}
+            {{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}},
+            {{"name":"{sidecar_asset_name}","browser_download_url":"{sidecar_url}","size":{sidecar_size}}}
         ]}}"#,
     );
     server
@@ -391,6 +395,69 @@ fn install_rejects_duplicate_version() {
         .stderr(predicates::str::contains("already installed"));
 }
 
+/// Signature verification is switched OFF in every other install test in this
+/// repo (`OVM_SKIP_SIGNATURE_VERIFY=1`), because the fixtures are unsigned fake
+/// binaries. That left the check itself unexercised through the CLI: nothing
+/// proved that a real `ovm install codex` refuses a binary that is not signed
+/// by OpenAI, so the guard could have been deleted, mis-wired, or applied to
+/// the wrong path and the suite would still have been green.
+///
+/// macOS only — `verify_macos_signature` is a no-op elsewhere, so on Linux
+/// there is nothing to assert.
+#[cfg(target_os = "macos")]
+#[test]
+fn install_refuses_a_codex_binary_that_is_not_signed_by_openai() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let version = "rust-v0.120.0";
+    // A shell script, not a signed Mach-O: exactly what an attacker-substituted
+    // or corrupted asset looks like to codesign.
+    let binary_contents = b"#!/bin/sh\necho unsigned\n";
+
+    let (_server, releases_url) = setup_codex_mock(version, binary_contents);
+
+    // Deliberately NOT setting OVM_SKIP_SIGNATURE_VERIFY, so this drives the
+    // production path. The npm fallback is pointed at a closed port so the
+    // failure is the signature check and not a stray network call.
+    Command::cargo_bin("ovm")
+        .expect("binary built")
+        .env("HOME", home.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
+        .env("OVM_CODEX_RELEASES_URL", &releases_url)
+        .env("OVM_CODEX_NPM_REGISTRY_URL", "http://127.0.0.1:9")
+        .env_remove("OVM_SKIP_SIGNATURE_VERIFY")
+        .env_remove("OVM_VERSION")
+        .env_remove("OVM_PRODUCT")
+        .args(["install", "codex", version])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "code signature verification failed",
+        ));
+
+    let installed_bin = home
+        .path()
+        .join(".ovm/products/codex/versions")
+        .join(version)
+        .join("release/bin/codex");
+    assert!(
+        !installed_bin.exists(),
+        "an unsigned binary was left on disk at {}",
+        installed_bin.display()
+    );
+
+    let list_output = ovm(home.path(), &releases_url)
+        .args(["list", "codex"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&list_output).contains("No codex versions installed"),
+        "a refused install still registered a version"
+    );
+}
+
 #[test]
 fn failed_install_leaves_no_trace() {
     let home = tempfile::tempdir().expect("tempdir");
@@ -447,12 +514,13 @@ fn concurrent_codex_install_waits_and_reuses_single_download() {
     let version = "rust-v0.130.0";
     let asset_name = expected_codex_asset();
     let asset_body = make_tarball(expected_codex_entry(), b"single-flight-codex");
+    let asset_size = asset_body.len();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind server");
     let address = listener.local_addr().expect("server address");
     let base_url = format!("http://{address}");
     let asset_url = format!("{base_url}/assets/{asset_name}");
     let release_body = format!(
-        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}"}}]}}"#
+        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#
     );
     let asset_requests = Arc::new(AtomicUsize::new(0));
     let asset_requests_for_server = Arc::clone(&asset_requests);
@@ -512,6 +580,7 @@ fn concurrent_codex_install_waits_and_reuses_single_download() {
         let mut command = std::process::Command::cargo_bin("ovm").expect("binary built");
         command
             .env("HOME", home.path())
+            .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
             .env("OVM_CODEX_RELEASES_URL", &base_url)
             .env("OVM_CODEX_NPM_REGISTRY_URL", "http://127.0.0.1:9")
             .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
@@ -588,6 +657,7 @@ fn setup_codex_mock_two_versions(
     let asset_name = expected_codex_asset();
     let asset_entry = expected_codex_entry();
     let asset_body = make_tarball(asset_entry, binary_contents);
+    let asset_size = asset_body.len();
 
     // Serve the same tarball bytes for every asset fetch in this test.
     server
@@ -601,7 +671,7 @@ fn setup_codex_mock_two_versions(
     for version in [version_a, version_b] {
         let asset_url = format!("{}/assets/{asset_name}", server.url());
         let release_json = format!(
-            r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}"}}]}}"#,
+            r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
         );
         server
             .mock("GET", format!("/tags/{version}").as_str())

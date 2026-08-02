@@ -255,6 +255,11 @@ fn update_with(
     }
     drop(operation);
     result?;
+    // An explicit update proves the candidate runs, so the automatic backoff
+    // has nothing left to hold against it. Without this, a version that failed
+    // repeatedly and was then installed by hand keeps its capped backoff, and a
+    // later rollback-and-auto-update to that same version inherits the delay.
+    crate::commands::self_autoupdate::clear_staging_failure(&manager.ovm_dirs.base);
     eprintln!(
         "  {} OVM {} is installed and active",
         console::style("✓").green(),
@@ -664,14 +669,35 @@ fn select_beta_release(releases: Vec<GithubRelease>) -> Result<GithubRelease> {
     let selected = latest_beta_newer_than_stable(versions).ok_or_else(|| {
         OvmError::Message("No OVM beta newer than the latest stable release was found".into())
     })?;
+    // Beta only ever picks a prerelease, so the lookup must not match a stable
+    // release that happens to carry the same version.
+    release_matching(releases, &selected, "beta", |release| release.prerelease)
+}
+
+/// Find the release a channel selected, by parsed tag.
+///
+/// Only the lookup is shared: each channel decides *which* version it wants,
+/// and how it recognizes a release of its own kind, at the call site
+/// (`matches_channel`). Draft releases are excluded here because no channel
+/// installs one.
+fn release_matching(
+    releases: Vec<GithubRelease>,
+    selected: &Version,
+    channel_word: &str,
+    matches_channel: impl Fn(&GithubRelease) -> bool,
+) -> Result<GithubRelease> {
     releases
         .into_iter()
         .find(|release| {
             !release.draft
-                && release.prerelease
-                && parse_tag(&release.tag_name).as_ref() == Some(&selected)
+                && matches_channel(release)
+                && parse_tag(&release.tag_name).as_ref() == Some(selected)
         })
-        .ok_or_else(|| OvmError::Message("Selected OVM beta release metadata disappeared".into()))
+        .ok_or_else(|| {
+            OvmError::Message(format!(
+                "Selected OVM {channel_word} release metadata disappeared"
+            ))
+        })
 }
 
 /// Alpha selects the highest-semver release on the repository *including*
@@ -686,10 +712,9 @@ fn select_alpha_release(releases: Vec<GithubRelease>) -> Result<GithubRelease> {
         .filter_map(|release| parse_tag(&release.tag_name))
         .max()
         .ok_or_else(|| OvmError::Message("No OVM release was found on the alpha channel".into()))?;
-    releases
-        .into_iter()
-        .find(|release| !release.draft && parse_tag(&release.tag_name).as_ref() == Some(&selected))
-        .ok_or_else(|| OvmError::Message("Selected OVM alpha release metadata disappeared".into()))
+    // Alpha takes the highest release of either kind, so it adds no
+    // prerelease requirement of its own.
+    release_matching(releases, &selected, "alpha", |_| true)
 }
 
 fn parse_tag(tag: &str) -> Option<Version> {

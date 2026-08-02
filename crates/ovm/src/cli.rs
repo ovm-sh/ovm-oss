@@ -161,7 +161,7 @@ pub enum Commands {
 
     /// Configure automatic cleanup of old inactive installs
     Cleanup {
-        /// Retention (`30`, `60`, or `never`)
+        /// Retention (`30`, `60`, `never`), or `now` to review and remove the backlog
         retention: Option<String>,
     },
 
@@ -216,8 +216,49 @@ pub enum Commands {
         shell: Shell,
     },
 
+    /// Update installed products to the latest release now
+    #[command(
+        long_about = "Update installed products to their latest release, right now.\n\
+        \n\
+        \x20 ovm update                      every installed product\n\
+        \x20 ovm update <product>            just that one (claude, codex, pi)\n\
+        \x20 ovm update self                 OVM itself (same as `ovm self update`)\n\
+        \x20 ovm update auto on|off|notify   launch-time policy for everything\n\
+        \x20 ovm update auto <product> off   launch-time policy for one product\n\
+        \x20 ovm update auto self notify     launch-time policy for OVM itself\n\
+        \n\
+        Latest is resolved upstream, because you asked for it by name — unlike a \
+        launch under `autoUpdate: on`, which only ever reads the local cache. \
+        The resulting on-disk state is identical.\n\
+        \n\
+        Edge cases:\n\
+        \x20 nothing installed  reported per product, with the `ovm install` line to run; \
+        never a silent success, and never an unrequested first install.\n\
+        \x20 offline            the resolver says so and falls back to the newest release \
+        already in your store; a product it cannot resolve at all is reported as failed \
+        and the command exits non-zero.\n\
+        \x20 pinned             `ovm update` reports the pin and leaves it; \
+        `ovm update <product>` overrides and clears it, resuming latest-tracking.\n\
+        \x20 dev builds         `dev:` versions have no upstream and are left alone.\n\
+        \x20 checkForUpdates    `false` turns off *automatic* checking, not this command; \
+        an update you typed still resolves and installs."
+    )]
+    Update {
+        /// `auto`, a product name, or `self`; omit to update everything
+        first: Option<String>,
+
+        /// Policy (`on`, `off`, `notify`) or product name after `auto`
+        second: Option<String>,
+
+        /// Policy (`on`, `off`, `notify`) after `auto <product>`
+        third: Option<String>,
+    },
+
     /// Configure whether launches auto-update to latest releases
-    #[command(name = "autoupdate", alias = "auto-update")]
+    ///
+    /// Hidden alias for `ovm update auto` — kept working for existing scripts,
+    /// docs and muscle memory. New surface: `ovm update auto on|off|notify`.
+    #[command(name = "autoupdate", alias = "auto-update", hide = true)]
     AutoUpdate {
         /// Policy (`off` or `on`) or product name
         first: Option<String>,

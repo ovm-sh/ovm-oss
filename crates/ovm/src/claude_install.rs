@@ -80,6 +80,34 @@ pub struct Status {
     pub managed_launcher_available: bool,
 }
 
+/// The two facts the launch path needs, and nothing else.
+///
+/// [`Status`] is what `ovm doctor` reports, and it costs what a report costs:
+/// `~/.claude.json` (half a megabyte on a working machine) parsed into a
+/// `serde_json::Value` and then *cloned*, plus a recursive size walk of
+/// `~/.local/share/claude`, which can be gigabytes. A launch reads neither of
+/// those numbers — it only asks whether Claude's native updater can still
+/// reclaim control — so it must not pay for them on every single spawn.
+#[derive(Debug)]
+pub struct LaunchStatus {
+    pub install_method: Option<String>,
+    pub launcher: LauncherState,
+}
+
+impl LaunchStatus {
+    pub fn install_method_is_native(&self) -> bool {
+        self.install_method.as_deref() == Some(NATIVE_METHOD)
+    }
+
+    /// Whether Claude's native updater is still in a position to take version
+    /// control back from OVM. A leftover native *tree* is inert while the
+    /// install method is non-native and the launcher is owned, so the launch
+    /// nudge does not consider it — `ovm doctor claude` still reports it.
+    pub fn updater_can_reclaim(&self) -> bool {
+        self.install_method_is_native() || self.launcher == LauncherState::Foreign
+    }
+}
+
 impl Status {
     pub fn install_method_is_native(&self) -> bool {
         self.install_method.as_deref() == Some(NATIVE_METHOD)
@@ -133,6 +161,16 @@ impl ClaudeHygiene {
             launcher: launcher_state(&self.native_launcher, &self.managed_launcher),
             native_install_bytes,
             managed_launcher_available: self.managed_launcher.exists(),
+        }
+    }
+
+    /// The launch-path half of [`Self::inspect`]: `installMethod` and the
+    /// launcher state, with no DOM parse of `~/.claude.json` and no size walk
+    /// of the native install tree. See [`LaunchStatus`].
+    pub fn inspect_for_launch(&self) -> LaunchStatus {
+        LaunchStatus {
+            install_method: read_install_method(&self.claude_json),
+            launcher: launcher_state(&self.native_launcher, &self.managed_launcher),
         }
     }
 
@@ -407,10 +445,88 @@ fn neutralize_config(path: &Path) -> Result<Vec<String>> {
 
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp = parent.join(format!(".ovm-claude-json-{}.tmp", std::process::id()));
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(&tmp, path)?;
+    // Unique per process *and* per call. A PID-only name collides between
+    // threads of one process, and `fs::write` would then have two writers
+    // truncating the same temp — or write through a symlink someone left at
+    // that predictable path. `write_new_file` creates with `O_EXCL`, so it
+    // refuses both.
+    static WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = parent.join(format!(".ovm-claude-json-{}.{seq}.tmp", std::process::id()));
+
+    crate::util::write_new_file(&tmp, contents.as_bytes())?;
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        // Never leave scratch behind in the user's home directory.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error.into());
+    }
     Ok(())
+}
+
+/// Read just `installMethod` out of `~/.claude.json`.
+///
+/// The targeted read is the point: serde skips every other key as it streams
+/// past instead of materializing the whole document (project history,
+/// conversation state, MCP config — hundreds of kilobytes) as a
+/// `serde_json::Value`. An unreadable or malformed file reads as "no install
+/// method", exactly as the DOM path does.
+///
+/// The visitor is hand-rolled rather than derived because a derived struct
+/// *rejects* a duplicate key ("duplicate field `installMethod`"), which would
+/// make a file JSON allows — and that `serde_json::Value` happily parses,
+/// keeping the last occurrence — read as "no install method" here and silence
+/// the launch nudge on exactly the config that needs it. This keeps the two
+/// paths agreeing: last occurrence wins, non-string values read as absent.
+fn read_install_method(path: &Path) -> Option<String> {
+    struct InstallMethodOnly(Option<String>);
+
+    impl<'de> serde::Deserialize<'de> for InstallMethodOnly {
+        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct MapVisitor;
+
+            impl<'de> serde::de::Visitor<'de> for MapVisitor {
+                type Value = InstallMethodOnly;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("a JSON object")
+                }
+
+                fn visit_map<M>(
+                    self,
+                    mut map: M,
+                ) -> std::result::Result<InstallMethodOnly, M::Error>
+                where
+                    M: serde::de::MapAccess<'de>,
+                {
+                    let mut found: Option<serde_json::Value> = None;
+                    while let Some(key) = map.next_key::<String>()? {
+                        if key == INSTALL_METHOD_KEY {
+                            // Overwrite: the DOM keeps the last occurrence too.
+                            found = Some(map.next_value()?);
+                        } else {
+                            // Skipped without allocating the value.
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                    Ok(InstallMethodOnly(
+                        found
+                            .as_ref()
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                    ))
+                }
+            }
+
+            deserializer.deserialize_map(MapVisitor)
+        }
+    }
+
+    let file = std::fs::File::open(path).ok()?;
+    let parsed: InstallMethodOnly = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
+    parsed.0
 }
 
 fn read_json_object(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
@@ -491,6 +607,118 @@ mod tests {
         let status = h.inspect();
         assert!(status.install_method_is_native());
         assert!(!status.is_clean());
+    }
+
+    #[test]
+    fn launch_inspection_matches_the_doctor_one_on_the_fields_it_reads() {
+        let dir = tempdir().unwrap();
+        let h = ClaudeHygiene::new(dir.path());
+        // A config shaped like the real one: the key we want, buried among
+        // large values the launch path must not materialize.
+        std::fs::write(
+            &h.claude_json,
+            format!(
+                r#"{{"projects":{{"a":"{}"}},"installMethod":"native","autoUpdates":true}}"#,
+                "x".repeat(64 * 1024)
+            ),
+        )
+        .unwrap();
+        write_native_install(&h, 4096);
+
+        let launch = h.inspect_for_launch();
+        let full = h.inspect();
+
+        assert_eq!(launch.install_method, full.install_method);
+        assert_eq!(launch.launcher, full.launcher);
+        assert!(launch.install_method_is_native());
+        assert!(launch.updater_can_reclaim());
+    }
+
+    #[test]
+    fn launch_inspection_is_quiet_when_ovm_is_authoritative() {
+        let dir = tempdir().unwrap();
+        let h = ClaudeHygiene::new(dir.path());
+        std::fs::write(&h.claude_json, r#"{"installMethod":"global"}"#).unwrap();
+        seed_managed_launcher(&h);
+        ensure_owned_launcher(&h.native_launcher, &h.managed_launcher).unwrap();
+
+        let launch = h.inspect_for_launch();
+        assert_eq!(launch.launcher, LauncherState::OvmOwned);
+        assert!(!launch.updater_can_reclaim());
+    }
+
+    #[test]
+    fn launch_inspection_survives_a_missing_or_broken_config() {
+        let dir = tempdir().unwrap();
+        let h = ClaudeHygiene::new(dir.path());
+
+        // Absent.
+        assert_eq!(h.inspect_for_launch().install_method, None);
+
+        // Present but not JSON: read as "no install method", same as the DOM
+        // path, and never as `native` (which would nag on every launch).
+        std::fs::write(&h.claude_json, "{not valid json").unwrap();
+        let launch = h.inspect_for_launch();
+        assert_eq!(launch.install_method, None);
+        assert!(!launch.updater_can_reclaim());
+
+        // Valid JSON that simply has no `installMethod` — the common case
+        // before Claude has ever installed itself natively.
+        std::fs::write(&h.claude_json, r#"{"autoUpdates":false}"#).unwrap();
+        let launch = h.inspect_for_launch();
+        assert_eq!(launch.install_method, h.inspect().install_method);
+        assert_eq!(launch.install_method, None);
+        assert!(!launch.updater_can_reclaim());
+    }
+
+    /// JSON permits a repeated key, and `serde_json::Value` — the doctor path —
+    /// resolves it by keeping the last occurrence. A derived struct on the
+    /// launch path instead *errors* on the duplicate, and an error there reads
+    /// as "no install method": the one config that most needs the nudge would
+    /// be the one that never got it. Both paths must agree.
+    #[test]
+    fn a_duplicate_install_method_resolves_the_same_way_on_both_paths() {
+        let dir = tempdir().unwrap();
+        let h = ClaudeHygiene::new(dir.path());
+
+        std::fs::write(
+            &h.claude_json,
+            r#"{"installMethod":"global","autoUpdates":true,"installMethod":"native"}"#,
+        )
+        .unwrap();
+        let launch = h.inspect_for_launch();
+        assert_eq!(launch.install_method, h.inspect().install_method);
+        assert_eq!(launch.install_method.as_deref(), Some(NATIVE_METHOD));
+        assert!(
+            launch.install_method_is_native(),
+            "a duplicate key must not suppress the launch notice"
+        );
+
+        // Last occurrence wins in the other direction too.
+        std::fs::write(
+            &h.claude_json,
+            r#"{"installMethod":"native","installMethod":"global"}"#,
+        )
+        .unwrap();
+        let launch = h.inspect_for_launch();
+        assert_eq!(launch.install_method, h.inspect().install_method);
+        assert_eq!(launch.install_method.as_deref(), Some("global"));
+
+        // A non-string value is "no install method" on both paths, and a later
+        // non-string still overrides an earlier string, as the DOM does.
+        for config in [
+            r#"{"installMethod":42}"#,
+            r#"{"installMethod":"native","installMethod":42}"#,
+        ] {
+            std::fs::write(&h.claude_json, config).unwrap();
+            let launch = h.inspect_for_launch();
+            assert_eq!(
+                launch.install_method,
+                h.inspect().install_method,
+                "{config}"
+            );
+            assert_eq!(launch.install_method, None, "{config}");
+        }
     }
 
     #[test]

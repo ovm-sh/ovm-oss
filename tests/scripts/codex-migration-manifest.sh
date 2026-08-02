@@ -79,4 +79,41 @@ then
   exit 1
 fi
 
+# The manifest may only grow. Generation rewrites the whole block from one
+# upstream tag, so if a later tag dropped or reworded a historical migration a
+# plain overwrite would silently discard coverage — and losing a `breaking`
+# entry turns a real downgrade hazard into a clean "compatible" verdict.
+SHRUNK="$TMP_DIR/shrunk"
+mkdir -p "$SHRUNK"
+cp "$MIGRATIONS"/0001_*.sql "$SHRUNK/"
+if python3 "$ROOT/scripts/gen-codex-migration-manifest.py" \
+  "$SHRUNK" --source-ref rust-v9.9.9 --write "$TARGET" 2>"$TMP_DIR/shrink.err"
+then
+  echo "a shrinking manifest was accepted" >&2
+  exit 1
+fi
+grep -Fq 'may only grow' "$TMP_DIR/shrink.err" || {
+  echo "shrink was rejected for the wrong reason:" >&2
+  cat "$TMP_DIR/shrink.err" >&2
+  exit 1
+}
+
+# Rewording a known migration is equally unsafe: descriptions are the identity
+# the guard matches against the DB's own migration table.
+REWORDED="$TMP_DIR/reworded"
+mkdir -p "$REWORDED"
+cp "$MIGRATIONS"/*.sql "$REWORDED/"
+mv "$REWORDED"/0001_*.sql "$REWORDED/0001_threads_renamed.sql"
+if python3 "$ROOT/scripts/gen-codex-migration-manifest.py" \
+  "$REWORDED" --source-ref rust-v9.9.9 --write "$TARGET" 2>"$TMP_DIR/reword.err"
+then
+  echo "a reworded migration was accepted" >&2
+  exit 1
+fi
+grep -Fq 'refusing to' "$TMP_DIR/reword.err" || {
+  echo "reword was rejected for the wrong reason:" >&2
+  cat "$TMP_DIR/reword.err" >&2
+  exit 1
+}
+
 echo "codex-migration-manifest: ok"

@@ -35,7 +35,8 @@ Out of scope:
 
 - OVM only executes binaries placed by the user (via `install`) or picked up from `$PATH` (plugins)
 - Downloads are verified by SHA-256 hash where upstream provides one; npm tarballs are verified against the registry's SHA-512 Subresource-Integrity metadata
-- On macOS, downloaded Claude Code and Codex binaries are verified with `codesign` against the publisher's expected Apple Developer ID team (Anthropic / OpenAI) before install; a missing or mismatched signature aborts the install (bypass with `OVM_SKIP_SIGNATURE_VERIFY=1`)
+- On macOS, Claude Code and Codex binaries are verified with `codesign` against the publisher's expected Apple Developer ID team (Anthropic / OpenAI) before they are published into the version store — whether downloaded or imported from the local machine by `ovm adopt`; a missing or mismatched signature aborts the install (bypass with `OVM_SKIP_SIGNATURE_VERIFY=1`)
+- `ovm adopt` verifies the staged copy of the local binary, not the original path: the signature check and a `--version` re-check both run on the exact bytes about to be published, so a file swapped mid-adopt is rejected rather than mislabeled
 - Download URLs from release/registry metadata are restricted to HTTPS and an allow-list of expected hosts, and redirects may not downgrade off HTTPS
 - No arbitrary code from version manifests is executed — manifests are data only
 - All archive extraction validates entry paths against traversal attacks (`..` components and absolute paths are rejected) and rejects symlink/hardlink/special entries

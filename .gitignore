@@ -41,6 +41,7 @@ npm-debug.log*
 
 # Test artifacts
 coverage/
+lcov.info
 .nyc_output/
 .playwright-mcp/
 benchmark-model.png
@@ -60,3 +61,7 @@ Formula/
 # Vercel project link + generated site HTML (publish source data, not HTML)
 .vercel
 site/benchmark.html
+
+# Python bytecode caches: build output, never source.
+__pycache__/
+*.pyc

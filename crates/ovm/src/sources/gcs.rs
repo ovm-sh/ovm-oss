@@ -149,7 +149,10 @@ pub fn download_binary(version: &str, dest: &Path) -> Result<()> {
         .parent()
         .expect("dest has parent (ensured above)")
         .join("manifest.json");
-    std::fs::write(manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    crate::util::write_new_file(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest)?.as_bytes(),
+    )?;
 
     Ok(())
 }
@@ -168,9 +171,11 @@ fn write_verified_binary(
     url: &str,
 ) -> Result<()> {
     let result = (|| -> Result<()> {
-        let mut file = std::fs::File::create(temp_dest)?;
+        // create_new + handle chmod: a symlink planted at the `.part` path
+        // must fail the install, not have the download truncate its target.
+        let mut file = crate::util::create_new_file(temp_dest)?;
         stream_and_validate(reader, &mut file, platform_info, progress, url)?;
-        crate::util::make_executable(temp_dest)?;
+        crate::util::make_handle_executable(&file)?;
         super::verify_product_binary(crate::product::Product::Claude, temp_dest)?;
         std::fs::rename(temp_dest, dest)?;
         Ok(())

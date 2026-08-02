@@ -71,8 +71,9 @@ pub fn run() -> Result<()> {
             proxy::ProxyProbe::Unverified(why) => bad(
                 &format!(
                     "port 127.0.0.1:{} has a listener claudex could not verify as its proxy \
-                     ({why}); run `ovm claudex stop` and relaunch",
-                    config.proxy.port
+                     ({why}). {}",
+                    config.proxy.port,
+                    proxy::unverified_identity_remedy(config.proxy.port, &why)
                 ),
                 &mut healthy,
             ),
@@ -114,6 +115,65 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// What the live proxy's model list says about the configured registry.
+#[derive(Debug, PartialEq, Eq)]
+enum RegistryStatus {
+    /// Nothing to check against: the proxy advertises no models at all, or the
+    /// config names none. Either way the green line would be a claim about an
+    /// empty set, so it is never printed.
+    NothingToVerify,
+    /// Configured tier models the proxy does not expose.
+    Missing(Vec<String>),
+    /// Tier models resolve, but the `-fast` aliases are not exposed yet.
+    FastAliasesMissing,
+    Ready,
+}
+
+/// The distinct tier models the config asks the proxy to serve.
+fn required_models(config: &ClaudexConfig) -> Vec<String> {
+    let mut required: Vec<String> = vec![
+        config.models.opus.clone(),
+        config.models.sonnet.clone(),
+        config.models.haiku.clone(),
+        config.models.default.clone(),
+        config.models.subagent.clone(),
+    ]
+    .into_iter()
+    .filter(|model| !model.trim().is_empty())
+    .collect();
+    required.sort();
+    required.dedup();
+    required
+}
+
+/// Compare the configured tier models against what the proxy actually serves.
+///
+/// Both sets must be non-empty before anything can be called verified: an
+/// "all of them are present" test over an empty set is vacuously true, which
+/// would let doctor report a healthy registry against a proxy serving nothing.
+fn model_registry_status(config: &ClaudexConfig, available: &[String]) -> RegistryStatus {
+    let required = required_models(config);
+    if required.is_empty() || available.is_empty() {
+        return RegistryStatus::NothingToVerify;
+    }
+
+    let missing: Vec<String> = required
+        .iter()
+        .filter(|model| !available.contains(model))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        return RegistryStatus::Missing(missing);
+    }
+    if !required
+        .iter()
+        .all(|model| available.contains(&format!("{model}-fast")))
+    {
+        return RegistryStatus::FastAliasesMissing;
+    }
+    RegistryStatus::Ready
+}
+
 /// Every registry model — and its fast alias — must be selectable through
 /// the live proxy, or `/model` choices will 502 at first use.
 fn check_model_registry(config: &ClaudexConfig, healthy: &mut bool) {
@@ -122,44 +182,26 @@ fn check_model_registry(config: &ClaudexConfig, healthy: &mut bool) {
         return;
     };
 
-    let mut required: Vec<String> = vec![
-        config.models.opus.clone(),
-        config.models.sonnet.clone(),
-        config.models.haiku.clone(),
-        config.models.default.clone(),
-        config.models.subagent.clone(),
-    ];
-    required.sort();
-    required.dedup();
-
-    let missing: Vec<&String> = required
-        .iter()
-        .filter(|model| !available.contains(model))
-        .collect();
-    if missing.is_empty() {
-        let fast_ready = required
-            .iter()
-            .all(|model| available.contains(&format!("{model}-fast")));
-        if fast_ready {
-            ok("model registry live: all tier models + fast aliases selectable");
-        } else {
-            eprintln!(
-                "  {} fast aliases not exposed yet — re-run `ovm claudex setup` to regenerate the proxy config",
-                style("!").yellow()
-            );
+    match model_registry_status(config, &available) {
+        RegistryStatus::Ready => {
+            ok("model registry live: all tier models + fast aliases selectable")
         }
-    } else {
-        bad(
+        RegistryStatus::FastAliasesMissing => eprintln!(
+            "  {} fast aliases not exposed yet — re-run `ovm claudex setup` to regenerate the proxy config",
+            style("!").yellow()
+        ),
+        RegistryStatus::NothingToVerify => bad(
+            "the proxy advertises no models (or none are configured) — nothing is selectable; \
+             check the Codex OAuth grant, then re-run: ovm claudex setup",
+            healthy,
+        ),
+        RegistryStatus::Missing(missing) => bad(
             &format!(
                 "registry models not available on this account/proxy: {}",
-                missing
-                    .iter()
-                    .map(|model| model.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                missing.join(", ")
             ),
             healthy,
-        );
+        ),
     }
 }
 
@@ -227,4 +269,90 @@ fn claude_version() -> Option<String> {
     }
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!version.is_empty()).then_some(version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{model_registry_status, required_models, RegistryStatus};
+    use crate::config::ClaudexConfig;
+
+    fn models(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    /// A proxy serving nothing must never read as a verified registry: with an
+    /// empty available set, "every required model is present" is only true
+    /// because there is nothing to check.
+    #[test]
+    fn a_proxy_serving_no_models_is_never_reported_ready() {
+        let config = ClaudexConfig::default();
+        assert_eq!(
+            model_registry_status(&config, &[]),
+            RegistryStatus::NothingToVerify
+        );
+    }
+
+    /// Same guard from the other side: a config that names no tier models has
+    /// nothing to verify either.
+    #[test]
+    fn a_config_naming_no_models_is_never_reported_ready() {
+        let mut config = ClaudexConfig::default();
+        config.models.opus = String::new();
+        config.models.sonnet = "   ".into();
+        config.models.haiku = String::new();
+        config.models.default = String::new();
+        config.models.subagent = String::new();
+        assert!(required_models(&config).is_empty());
+        assert_eq!(
+            model_registry_status(&config, &models(&["gpt-5.6-sol"])),
+            RegistryStatus::NothingToVerify
+        );
+    }
+
+    #[test]
+    fn a_partially_stocked_proxy_names_the_missing_models() {
+        let config = ClaudexConfig::default();
+        match model_registry_status(&config, &models(&["gpt-5.6-sol", "gpt-5.6-sol-fast"])) {
+            RegistryStatus::Missing(missing) => {
+                assert!(
+                    missing.contains(&"gpt-5.6-terra".to_string()),
+                    "{missing:?}"
+                );
+                assert!(missing.contains(&"gpt-5.6-luna".to_string()), "{missing:?}");
+                assert!(!missing.contains(&"gpt-5.6-sol".to_string()), "{missing:?}");
+            }
+            other => panic!("expected missing models, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tier_models_without_fast_aliases_are_not_ready() {
+        let config = ClaudexConfig::default();
+        assert_eq!(
+            model_registry_status(
+                &config,
+                &models(&["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+            ),
+            RegistryStatus::FastAliasesMissing
+        );
+    }
+
+    #[test]
+    fn a_fully_stocked_proxy_is_ready() {
+        let config = ClaudexConfig::default();
+        assert_eq!(
+            model_registry_status(
+                &config,
+                &models(&[
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "gpt-5.6-luna",
+                    "gpt-5.6-sol-fast",
+                    "gpt-5.6-terra-fast",
+                    "gpt-5.6-luna-fast",
+                ])
+            ),
+            RegistryStatus::Ready
+        );
+    }
 }

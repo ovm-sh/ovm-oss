@@ -38,13 +38,198 @@ update_claude() {
     echo "  Updating claude..."
 
     python3 -c "
-import json, subprocess, sys
+import datetime
+import json, os, re, subprocess, sys
+
+# npm guarantees semver for every published version, so a version entry that
+# does not parse as semver is not a version — it is an error body wearing a
+# list ([\"error\"], [\"temporarily unavailable\"]). Those pass every shape check
+# there is (a non-empty list of non-empty unpadded strings), and then no real
+# release appears in 'current' and all 472 published versions retire in one
+# write.
+#
+# This is the official semver grammar, not an approximation of it, because npm
+# enforces the real thing on publish: numeric segments without leading zeros,
+# ASCII digits only, prerelease and build as dot-separated NONEMPTY identifiers.
+# The loose version accepted '01.2.3', '1.2.3-01', '1.2.3-alpha..1', '1.2.3-.'
+# and — via \d, which matches every Unicode decimal digit — '1.2.٣'. npm can
+# publish none of them, so each one reaching here means the answer is not a
+# version list, which is the one thing this check exists to notice. Unlike the
+# registry gate's deliberately loose rule, tightening here cannot brick a
+# refresh: what it refuses, npm cannot have published.
+# (All 472 currently published claude versions match.)
+NPM_SEMVER_RE = re.compile(
+    r'^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
+    r'(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+    r'(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?'
+    r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+)
+
+# A date is a date, or it is absent. 'date' is already optional in a registry
+# entry, so absence is a legal state every consumer handles — but a value that
+# merely LOOKS sliceable is not: npm answering {'2.1.220': 'temporarily
+# unavailable'} wrote date 'temporaril', a field that is not a date and that no
+# reader can tell from one. Same deliberate choice as the non-string case
+# below: drop the field rather than refuse the run or write nonsense into it.
+def leading_calendar_date(value):
+    # A shape check alone still admitted 2026-99-99; only a value whose first
+    # ten characters parse as a real calendar date is a date.
+    try:
+        return datetime.date.fromisoformat(value[:10]).isoformat()
+    except (ValueError, TypeError):
+        return None
+
+# A refresh only ever sees the listing it was handed, and cannot prove that
+# listing complete from this side: an error body shaped like a version list, a
+# paginated walk truncated by one transient empty page, an upstream index
+# rebuilding — each is indistinguishable from 'upstream unpublished
+# everything', and each retires the missing releases in a single write. So the
+# protection is placed where it works regardless of cause: a run that would
+# newly retire more than max(5, 10%) of what was previously published refuses
+# to write at all. The floor of 5 leaves small or young registries room for a
+# genuine cleanup; the 10% share keeps the ceiling proportional for the large
+# ones (claude 472 -> 47, codex 866 -> 86). Both bounds are far above any real
+# upstream behaviour observed so far (npm unpublishes are rare and singular,
+# GitHub releases are effectively append-only) and far below the mass event a
+# truncated listing produces. A genuine upstream mass-unpublish is a deliberate
+# act, so unblocking it is deliberate too — and per product, because the
+# deliberation was: OVM_ALLOW_MASS_RETIREMENT=claude (see
+# mass_retirement_override).
+MASS_RETIREMENT_FLOOR = 5
+MASS_RETIREMENT_SHARE = 0.10
+
+# The override names the product(s) it covers, and a blanket value is not one
+# of them. OVM_ALLOW_MASS_RETIREMENT=1 switched the breaker off for EVERY
+# product in the run, so an operator who had checked a genuine claude cleanup by
+# hand also waved through a codex listing that one empty page had truncated in
+# the same invocation — the precise event the breaker exists to catch, permitted
+# by a decision that was never about codex. An operator can vouch for a listing
+# they inspected; nobody can vouch for 'whatever else this run happens to find'.
+MASS_RETIREMENT_BLANKET = ('1', 'true', 'yes', 'on', 'all', '*')
+
+def mass_retirement_override(product):
+    # (permitted, complaint) for one product, read from the operator's value.
+    raw = os.environ.get('OVM_ALLOW_MASS_RETIREMENT', '')
+    named = {token.strip().lower() for token in raw.split(',') if token.strip()}
+    if not named:
+        return False, ''
+    blanket = ', '.join(sorted(named.intersection(MASS_RETIREMENT_BLANKET)))
+    if blanket:
+        return False, (
+            f'OVM_ALLOW_MASS_RETIREMENT={raw} permits nothing: {blanket} would '
+            f'cover every product in this run, including one truncated by a '
+            f'transient upstream failure nobody looked at. Name the product(s) '
+            f'it covers instead, comma-separated: '
+            f'OVM_ALLOW_MASS_RETIREMENT={product}'
+        )
+    if product.lower() in named:
+        return True, ''
+    listed = ', '.join(sorted(named))
+    return False, (
+        f'OVM_ALLOW_MASS_RETIREMENT names {listed}, not {product}. If this '
+        f'cleanup was reviewed too, say so explicitly: '
+        f'OVM_ALLOW_MASS_RETIREMENT={raw},{product}'
+    )
+
+def guard_mass_retirement(product, previously_published, newly_retired):
+    if not newly_retired:
+        return
+    threshold = max(
+        MASS_RETIREMENT_FLOOR, int(len(previously_published) * MASS_RETIREMENT_SHARE)
+    )
+    if len(newly_retired) <= threshold:
+        return
+    permitted, complaint = mass_retirement_override(product)
+    if permitted:
+        print(
+            f'warning: retiring {len(newly_retired)} {product} versions in one run '
+            f'(threshold {threshold}) — allowed by OVM_ALLOW_MASS_RETIREMENT '
+            f'naming {product}',
+            file=sys.stderr,
+        )
+        return
+    sample = ', '.join(sorted(newly_retired)[:5])
+    refusal = (
+        f'{product}: this refresh would newly retire {len(newly_retired)} of '
+        f'{len(previously_published)} published versions in one run, over the '
+        f'threshold of {threshold} (e.g. {sample}). A truncated or error-shaped '
+        f'upstream listing looks exactly like this, so the registry is left '
+        f'untouched. If upstream really did unpublish them, rerun with '
+        f'OVM_ALLOW_MASS_RETIREMENT={product} — the override has to name the '
+        f'product it permits, so allowing this one cannot also wave through '
+        f'another product truncated in the same run.'
+    )
+    if complaint:
+        refusal = f'{refusal} {complaint}'
+    raise SystemExit(refusal)
 
 def parse_semver(v):
-    parts = v.split('.')
-    if len(parts) != 3: return (0, 0, 0)
-    try: return tuple(int(p) for p in parts)
-    except: return (0, 0, 0)
+    # Splitting the whole string on '.' only works for bare X.Y.Z: a prerelease
+    # like 2.1.220-beta.1 has FOUR parts, fell into the (0, 0, 0) bucket, and so
+    # sorted ahead of 0.0.1 and compared equal to every other prerelease. Parse
+    # the semver shape instead, matching what the Codex updater's semver_key
+    # already does: build metadata is ignored, a stable release sorts AFTER its
+    # own prereleases, and numeric prerelease identifiers compare numerically
+    # (beta.9 < beta.10) while alphanumeric ones sort after numeric ones.
+    # Anything that is not X.Y.Z at all keeps the old total-function behaviour:
+    # a constant key, so sorted() leaves those entries in listing order rather
+    # than raising mid-refresh.
+    core, _, prerelease = v.split('+', 1)[0].partition('-')
+    parts = core.split('.')
+    if len(parts) != 3:
+        return (0, 0, 0, 0, ())
+    try:
+        major, minor, patch = (int(p) for p in parts)
+    except ValueError:
+        return (0, 0, 0, 0, ())
+    if not prerelease:
+        return (major, minor, patch, 1, ())
+    prerelease_key = tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in prerelease.split('.')
+    )
+    return (major, minor, patch, 0, prerelease_key)
+
+def require_version_list(payload, source):
+    # npm does not only answer with a list of versions. It exits 0 and prints a
+    # JSON OBJECT on some failures ({'error': {...}}), and it prints a BARE
+    # STRING for a package with a single version. Both transform without ever
+    # raising: sorted() over a dict yields its keys, sorted() over a string
+    # yields its characters, and the empty-list guard downstream sees a
+    # non-empty list of garbage and lets it through — at which point every real
+    # release is absent from 'current' and gets retired in one write. So the
+    # shape is checked BEFORE the transform, not the emptiness of the result
+    # after it.
+    if not isinstance(payload, list):
+        raise SystemExit(
+            f'{source}: expected a JSON list of versions, got '
+            f'{type(payload).__name__} ({payload!r:.200}); refusing to overwrite registry'
+        )
+    if not payload:
+        raise SystemExit(f'{source}: empty version list; refusing to overwrite registry')
+    for position, item in enumerate(payload):
+        if not isinstance(item, str) or not item.strip():
+            raise SystemExit(
+                f'{source}: entry {position} is not a version string ({item!r}); '
+                f'refusing to overwrite registry'
+            )
+        if item != item.strip():
+            # Machine-written input; padding means something mangled it, and a
+            # padded version matches nothing downstream.
+            raise SystemExit(
+                f'{source}: entry {position} has surrounding whitespace ({item!r}); '
+                f'refusing to overwrite registry'
+            )
+        if not NPM_SEMVER_RE.match(item):
+            # Shape was never enough: a list of non-empty unpadded strings is
+            # exactly what an error body degrades into, and every one of those
+            # strings would then be absent from 'current'.
+            raise SystemExit(
+                f'{source}: entry {position} is not a semver version ({item!r}); '
+                f'npm publishes only semver, so this is an error body in disguise; '
+                f'refusing to overwrite registry'
+            )
+    return payload
 
 def load_previous(path):
     try:
@@ -66,15 +251,18 @@ def compute_retired_versions(previous, current_versions, sort_key):
         for entry in previous.get('retired_versions', [])
         if entry.get('version') not in current
     }
+    newly_retired = []
     for version, entry in previous_versions.items():
         if version in current or version in retired:
             continue
+        newly_retired.append(version)
         retired[version] = {
             'version': version,
             'date': entry.get('date', ''),
             'last_seen_at': previous.get('updated_at', ''),
             'retired_at': '$TIMESTAMP',
         }
+    guard_mass_retirement('claude', previous_versions, newly_retired)
     return sorted(retired.values(), key=lambda entry: sort_key(entry['version']))
 
 def write_if_changed(path, registry):
@@ -96,7 +284,7 @@ r1 = subprocess.run(
 )
 if r1.returncode != 0:
     raise SystemExit(f'npm versions lookup failed: {r1.stderr}')
-version_list = json.loads(r1.stdout)
+version_list = require_version_list(json.loads(r1.stdout), 'npm versions lookup')
 
 # Fetch timestamps
 r2 = subprocess.run(
@@ -106,6 +294,11 @@ r2 = subprocess.run(
 if r2.returncode != 0:
     raise SystemExit(f'npm time lookup failed: {r2.stderr}')
 time_data = json.loads(r2.stdout)
+if not isinstance(time_data, dict):
+    raise SystemExit(
+        f'npm time lookup: expected a JSON object, got {type(time_data).__name__}; '
+        f'refusing to overwrite registry'
+    )
 
 # Fetch dist-tags
 r3 = subprocess.run(
@@ -115,14 +308,66 @@ r3 = subprocess.run(
 if r3.returncode != 0:
     raise SystemExit(f'npm dist-tags lookup failed: {r3.stderr}')
 dist_tags = json.loads(r3.stdout)
+if not isinstance(dist_tags, dict) or not all(
+    isinstance(tag, str) and isinstance(target, str) for tag, target in dist_tags.items()
+):
+    raise SystemExit(
+        f'npm dist-tags lookup: expected a JSON object of tag -> version, got '
+        f'{dist_tags!r:.200}; refusing to overwrite registry'
+    )
 
 # Merge: version list is canonical, dates from time_data
 versions = []
 for v in sorted(version_list, key=parse_semver):
     entry = {'version': v}
-    if v in time_data:
-        entry['date'] = time_data[v][:10]
+    published_at = time_data.get(v)
+    # A non-string time value is treated as ABSENT rather than refusing the
+    # run, and the asymmetry is the point. 'date' is already optional in a
+    # registry entry — npm's time map does not cover every version — so a
+    # missing date is a legal, harmless state every consumer already handles.
+    # Slicing a non-string, by contrast, writes what it slices: {'2.1.220':
+    # ['...']} yields an ARRAY-valued 'date', which the Rust registry reader
+    # (crates/ovm/src/sources/registry.rs, where dates are Strings) rejects on
+    # deserialize — one malformed value from npm would brick the entire Claude
+    # registry for every client. Dropping one date costs a display field;
+    # refusing the run would trade a client-visible brick for a publish outage
+    # over a value the file does not need.
+    #
+    # A string that does not OPEN with a real calendar date is treated the same
+    # way, and for the same reason: slicing it writes what it slices, so
+    # 'temporarily unavailable' became the date 'temporaril', and a shape check
+    # alone would still publish 2026-99-99. Everything else is date-absent.
+    if isinstance(published_at, str):
+        parsed = leading_calendar_date(published_at)
+        if parsed is not None:
+            entry['date'] = parsed
     versions.append(entry)
+
+# The other products refuse an empty upstream listing; Claude must too, or a
+# transient empty npm answer retires every published release in one write.
+if not versions:
+    raise SystemExit('No Claude versions found; refusing to overwrite registry')
+
+# A dist tag may only advertise a version this file publishes. npm hands the
+# tags over verbatim, so an unpublished target would leave a client resolving
+# the tag to a version with no registry entry — the same dangling tag the gate
+# refuses to write on its way out. '' is how both layers spell 'no version'.
+published = {entry['version'] for entry in versions}
+# npm always answers with a 'latest' tag pointing at a published version, so
+# its absence is not 'this package has no latest' — it is the answer not being
+# a dist-tags document at all. {'message': 'temporarily unavailable'} is a
+# str->str object, passes the type check above, and then filters down to
+# {'message': ''}: a registry published with no latest pointer, which every
+# client resolving 'claude latest' reads as nothing to install.
+if dist_tags.get('latest') not in published:
+    raise SystemExit(
+        f'npm dist-tags lookup: no \"latest\" tag naming a published version '
+        f'(got {dist_tags!r:.200}); refusing to overwrite registry'
+    )
+dist_tags = {
+    tag: (target if target in published else '')
+    for tag, target in dist_tags.items()
+}
 
 path = '$API_DIR/claude.json'
 previous = load_previous(path)
@@ -167,6 +412,79 @@ def load_previous(path):
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
+# Mass-retirement circuit breaker. Same rule and same numbers as update_claude
+# (see the rationale there); it matters even more here, because the GitHub
+# updaters walk paginated listings and treat ANY empty page as the end of the
+# list — so one transient empty page truncates the walk and everything past it
+# reads as unpublished.
+MASS_RETIREMENT_FLOOR = 5
+MASS_RETIREMENT_SHARE = 0.10
+
+# The override names the product(s) it covers, and a blanket value is not one
+# of them. OVM_ALLOW_MASS_RETIREMENT=1 switched the breaker off for EVERY
+# product in the run, so an operator who had checked a genuine claude cleanup by
+# hand also waved through a codex listing that one empty page had truncated in
+# the same invocation — the precise event the breaker exists to catch, permitted
+# by a decision that was never about codex. An operator can vouch for a listing
+# they inspected; nobody can vouch for 'whatever else this run happens to find'.
+MASS_RETIREMENT_BLANKET = ('1', 'true', 'yes', 'on', 'all', '*')
+
+def mass_retirement_override(product):
+    # (permitted, complaint) for one product, read from the operator's value.
+    raw = os.environ.get('OVM_ALLOW_MASS_RETIREMENT', '')
+    named = {token.strip().lower() for token in raw.split(',') if token.strip()}
+    if not named:
+        return False, ''
+    blanket = ', '.join(sorted(named.intersection(MASS_RETIREMENT_BLANKET)))
+    if blanket:
+        return False, (
+            f'OVM_ALLOW_MASS_RETIREMENT={raw} permits nothing: {blanket} would '
+            f'cover every product in this run, including one truncated by a '
+            f'transient upstream failure nobody looked at. Name the product(s) '
+            f'it covers instead, comma-separated: '
+            f'OVM_ALLOW_MASS_RETIREMENT={product}'
+        )
+    if product.lower() in named:
+        return True, ''
+    listed = ', '.join(sorted(named))
+    return False, (
+        f'OVM_ALLOW_MASS_RETIREMENT names {listed}, not {product}. If this '
+        f'cleanup was reviewed too, say so explicitly: '
+        f'OVM_ALLOW_MASS_RETIREMENT={raw},{product}'
+    )
+
+def guard_mass_retirement(product, previously_published, newly_retired):
+    if not newly_retired:
+        return
+    threshold = max(
+        MASS_RETIREMENT_FLOOR, int(len(previously_published) * MASS_RETIREMENT_SHARE)
+    )
+    if len(newly_retired) <= threshold:
+        return
+    permitted, complaint = mass_retirement_override(product)
+    if permitted:
+        print(
+            f'warning: retiring {len(newly_retired)} {product} versions in one run '
+            f'(threshold {threshold}) — allowed by OVM_ALLOW_MASS_RETIREMENT '
+            f'naming {product}',
+            file=sys.stderr,
+        )
+        return
+    sample = ', '.join(sorted(newly_retired)[:5])
+    refusal = (
+        f'{product}: this refresh would newly retire {len(newly_retired)} of '
+        f'{len(previously_published)} published versions in one run, over the '
+        f'threshold of {threshold} (e.g. {sample}). A truncated or error-shaped '
+        f'upstream listing looks exactly like this, so the registry is left '
+        f'untouched. If upstream really did unpublish them, rerun with '
+        f'OVM_ALLOW_MASS_RETIREMENT={product} — the override has to name the '
+        f'product it permits, so allowing this one cannot also wave through '
+        f'another product truncated in the same run.'
+    )
+    if complaint:
+        refusal = f'{refusal} {complaint}'
+    raise SystemExit(refusal)
+
 def compute_retired_versions(previous, current_versions, sort_key):
     if not previous:
         return []
@@ -180,15 +498,18 @@ def compute_retired_versions(previous, current_versions, sort_key):
         for entry in previous.get('retired_versions', [])
         if entry.get('version') not in current
     }
+    newly_retired = []
     for version, entry in previous_versions.items():
         if version in current or version in retired:
             continue
+        newly_retired.append(version)
         retired[version] = {
             'version': version,
             'date': entry.get('date', ''),
             'last_seen_at': previous.get('updated_at', ''),
             'retired_at': '$TIMESTAMP',
         }
+    guard_mass_retirement('codex', previous_versions, newly_retired)
     return sorted(retired.values(), key=lambda entry: sort_key(entry['version']))
 
 def write_if_changed(path, registry):
@@ -242,6 +563,15 @@ while True:
                 raise SystemExit(1)
             print(f'GitHub API error (attempt {attempt + 1}, retrying): {e}', file=sys.stderr)
             time.sleep(5 * 2 ** attempt)
+
+    # A GitHub error body ({'message': 'API rate limit exceeded'}) parses fine
+    # and is not empty, and iterating it yields strings whose .get() blows up
+    # with an AttributeError nobody can read. Name the shape instead.
+    if not isinstance(releases, list):
+        raise SystemExit(
+            f'GitHub releases response was {type(releases).__name__}, not a list '
+            f'({releases!r:.200}); refusing to overwrite registry'
+        )
 
     if not releases:
         break
@@ -380,6 +710,79 @@ def load_previous(path):
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
+# Mass-retirement circuit breaker. Same rule and same numbers as update_claude
+# (see the rationale there); it matters even more here, because the GitHub
+# updaters walk paginated listings and treat ANY empty page as the end of the
+# list — so one transient empty page truncates the walk and everything past it
+# reads as unpublished.
+MASS_RETIREMENT_FLOOR = 5
+MASS_RETIREMENT_SHARE = 0.10
+
+# The override names the product(s) it covers, and a blanket value is not one
+# of them. OVM_ALLOW_MASS_RETIREMENT=1 switched the breaker off for EVERY
+# product in the run, so an operator who had checked a genuine claude cleanup by
+# hand also waved through a codex listing that one empty page had truncated in
+# the same invocation — the precise event the breaker exists to catch, permitted
+# by a decision that was never about codex. An operator can vouch for a listing
+# they inspected; nobody can vouch for 'whatever else this run happens to find'.
+MASS_RETIREMENT_BLANKET = ('1', 'true', 'yes', 'on', 'all', '*')
+
+def mass_retirement_override(product):
+    # (permitted, complaint) for one product, read from the operator's value.
+    raw = os.environ.get('OVM_ALLOW_MASS_RETIREMENT', '')
+    named = {token.strip().lower() for token in raw.split(',') if token.strip()}
+    if not named:
+        return False, ''
+    blanket = ', '.join(sorted(named.intersection(MASS_RETIREMENT_BLANKET)))
+    if blanket:
+        return False, (
+            f'OVM_ALLOW_MASS_RETIREMENT={raw} permits nothing: {blanket} would '
+            f'cover every product in this run, including one truncated by a '
+            f'transient upstream failure nobody looked at. Name the product(s) '
+            f'it covers instead, comma-separated: '
+            f'OVM_ALLOW_MASS_RETIREMENT={product}'
+        )
+    if product.lower() in named:
+        return True, ''
+    listed = ', '.join(sorted(named))
+    return False, (
+        f'OVM_ALLOW_MASS_RETIREMENT names {listed}, not {product}. If this '
+        f'cleanup was reviewed too, say so explicitly: '
+        f'OVM_ALLOW_MASS_RETIREMENT={raw},{product}'
+    )
+
+def guard_mass_retirement(product, previously_published, newly_retired):
+    if not newly_retired:
+        return
+    threshold = max(
+        MASS_RETIREMENT_FLOOR, int(len(previously_published) * MASS_RETIREMENT_SHARE)
+    )
+    if len(newly_retired) <= threshold:
+        return
+    permitted, complaint = mass_retirement_override(product)
+    if permitted:
+        print(
+            f'warning: retiring {len(newly_retired)} {product} versions in one run '
+            f'(threshold {threshold}) — allowed by OVM_ALLOW_MASS_RETIREMENT '
+            f'naming {product}',
+            file=sys.stderr,
+        )
+        return
+    sample = ', '.join(sorted(newly_retired)[:5])
+    refusal = (
+        f'{product}: this refresh would newly retire {len(newly_retired)} of '
+        f'{len(previously_published)} published versions in one run, over the '
+        f'threshold of {threshold} (e.g. {sample}). A truncated or error-shaped '
+        f'upstream listing looks exactly like this, so the registry is left '
+        f'untouched. If upstream really did unpublish them, rerun with '
+        f'OVM_ALLOW_MASS_RETIREMENT={product} — the override has to name the '
+        f'product it permits, so allowing this one cannot also wave through '
+        f'another product truncated in the same run.'
+    )
+    if complaint:
+        refusal = f'{refusal} {complaint}'
+    raise SystemExit(refusal)
+
 def compute_retired_versions(previous, current_versions):
     if not previous:
         return []
@@ -393,15 +796,18 @@ def compute_retired_versions(previous, current_versions):
         for entry in previous.get('retired_versions', [])
         if entry.get('version') not in current
     }
+    newly_retired = []
     for version, entry in previous_versions.items():
         if version in current or version in retired:
             continue
+        newly_retired.append(version)
         retired[version] = {
             'version': version,
             'date': entry.get('date', ''),
             'last_seen_at': previous.get('updated_at', ''),
             'retired_at': '$TIMESTAMP',
         }
+    guard_mass_retirement('pi', previous_versions, newly_retired)
     return sorted(retired.values(), key=lambda entry: parse_pi_version(entry['version']))
 
 def write_if_changed(path, registry):
@@ -435,6 +841,15 @@ while True:
                 raise SystemExit(1)
             print(f'GitHub API error (attempt {attempt + 1}, retrying): {e}', file=sys.stderr)
             time.sleep(5 * 2 ** attempt)
+
+    # A GitHub error body ({'message': 'API rate limit exceeded'}) parses fine
+    # and is not empty, and iterating it yields strings whose .get() blows up
+    # with an AttributeError nobody can read. Name the shape instead.
+    if not isinstance(releases, list):
+        raise SystemExit(
+            f'GitHub releases response was {type(releases).__name__}, not a list '
+            f'({releases!r:.200}); refusing to overwrite registry'
+        )
 
     if not releases:
         break
@@ -507,6 +922,79 @@ def load_previous(path):
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
+# Mass-retirement circuit breaker. Same rule and same numbers as update_claude
+# (see the rationale there); it matters even more here, because the GitHub
+# updaters walk paginated listings and treat ANY empty page as the end of the
+# list — so one transient empty page truncates the walk and everything past it
+# reads as unpublished.
+MASS_RETIREMENT_FLOOR = 5
+MASS_RETIREMENT_SHARE = 0.10
+
+# The override names the product(s) it covers, and a blanket value is not one
+# of them. OVM_ALLOW_MASS_RETIREMENT=1 switched the breaker off for EVERY
+# product in the run, so an operator who had checked a genuine claude cleanup by
+# hand also waved through a codex listing that one empty page had truncated in
+# the same invocation — the precise event the breaker exists to catch, permitted
+# by a decision that was never about codex. An operator can vouch for a listing
+# they inspected; nobody can vouch for 'whatever else this run happens to find'.
+MASS_RETIREMENT_BLANKET = ('1', 'true', 'yes', 'on', 'all', '*')
+
+def mass_retirement_override(product):
+    # (permitted, complaint) for one product, read from the operator's value.
+    raw = os.environ.get('OVM_ALLOW_MASS_RETIREMENT', '')
+    named = {token.strip().lower() for token in raw.split(',') if token.strip()}
+    if not named:
+        return False, ''
+    blanket = ', '.join(sorted(named.intersection(MASS_RETIREMENT_BLANKET)))
+    if blanket:
+        return False, (
+            f'OVM_ALLOW_MASS_RETIREMENT={raw} permits nothing: {blanket} would '
+            f'cover every product in this run, including one truncated by a '
+            f'transient upstream failure nobody looked at. Name the product(s) '
+            f'it covers instead, comma-separated: '
+            f'OVM_ALLOW_MASS_RETIREMENT={product}'
+        )
+    if product.lower() in named:
+        return True, ''
+    listed = ', '.join(sorted(named))
+    return False, (
+        f'OVM_ALLOW_MASS_RETIREMENT names {listed}, not {product}. If this '
+        f'cleanup was reviewed too, say so explicitly: '
+        f'OVM_ALLOW_MASS_RETIREMENT={raw},{product}'
+    )
+
+def guard_mass_retirement(product, previously_published, newly_retired):
+    if not newly_retired:
+        return
+    threshold = max(
+        MASS_RETIREMENT_FLOOR, int(len(previously_published) * MASS_RETIREMENT_SHARE)
+    )
+    if len(newly_retired) <= threshold:
+        return
+    permitted, complaint = mass_retirement_override(product)
+    if permitted:
+        print(
+            f'warning: retiring {len(newly_retired)} {product} versions in one run '
+            f'(threshold {threshold}) — allowed by OVM_ALLOW_MASS_RETIREMENT '
+            f'naming {product}',
+            file=sys.stderr,
+        )
+        return
+    sample = ', '.join(sorted(newly_retired)[:5])
+    refusal = (
+        f'{product}: this refresh would newly retire {len(newly_retired)} of '
+        f'{len(previously_published)} published versions in one run, over the '
+        f'threshold of {threshold} (e.g. {sample}). A truncated or error-shaped '
+        f'upstream listing looks exactly like this, so the registry is left '
+        f'untouched. If upstream really did unpublish them, rerun with '
+        f'OVM_ALLOW_MASS_RETIREMENT={product} — the override has to name the '
+        f'product it permits, so allowing this one cannot also wave through '
+        f'another product truncated in the same run.'
+    )
+    if complaint:
+        refusal = f'{refusal} {complaint}'
+    raise SystemExit(refusal)
+
 def compute_retired_versions(previous, current_versions):
     if not previous:
         return []
@@ -520,15 +1008,18 @@ def compute_retired_versions(previous, current_versions):
         for entry in previous.get('retired_versions', [])
         if entry.get('version') not in current
     }
+    newly_retired = []
     for version, entry in previous_versions.items():
         if version in current or version in retired:
             continue
+        newly_retired.append(version)
         retired[version] = {
             'version': version,
             'date': entry.get('date', ''),
             'last_seen_at': previous.get('updated_at', ''),
             'retired_at': '$TIMESTAMP',
         }
+    guard_mass_retirement('cliproxyapi', previous_versions, newly_retired)
     return sorted(retired.values(), key=lambda entry: parse_version(entry['version']))
 
 def write_if_changed(path, registry):
@@ -565,6 +1056,15 @@ while True:
                 raise SystemExit(1)
             print(f'GitHub API error (attempt {attempt + 1}, retrying): {e}', file=sys.stderr)
             time.sleep(5 * 2 ** attempt)
+
+    # A GitHub error body ({'message': 'API rate limit exceeded'}) parses fine
+    # and is not empty, and iterating it yields strings whose .get() blows up
+    # with an AttributeError nobody can read. Name the shape instead.
+    if not isinstance(releases, list):
+        raise SystemExit(
+            f'GitHub releases response was {type(releases).__name__}, not a list '
+            f'({releases!r:.200}); refusing to overwrite registry'
+        )
 
     if not releases:
         break

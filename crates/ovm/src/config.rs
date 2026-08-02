@@ -42,10 +42,16 @@ pub struct OvmConfig {
     #[serde(default, flatten)]
     pub(crate) extra: serde_json::Map<String, serde_json::Value>,
 
-    /// Serialized state observed by [`load`](Self::load), used for a
-    /// field-level three-way merge when another process saved first.
+    /// The document [`load`](Self::load) read, kept verbatim so [`save`](Self::save)
+    /// can reconstruct the state this process started from for a field-level
+    /// three-way merge when another process saved first.
+    ///
+    /// Held as text rather than as the merge baseline itself because the
+    /// baseline is only ever needed by `save`: every read-only load — and a
+    /// launch does several — would otherwise pay a full re-serialization of the
+    /// config it just parsed. `None` means "no config file on disk".
     #[serde(skip)]
-    pub(crate) baseline: serde_json::Value,
+    pub(crate) baseline_source: Option<String>,
 
     /// JSON paths explicitly assigned by a command. This distinguishes an
     /// intentional write of a default value from an untouched synthesized
@@ -367,7 +373,7 @@ impl Default for OvmConfig {
             self_: SelfConfig::default(),
             advanced: AdvancedConfig::default(),
             extra: serde_json::Map::new(),
-            baseline: serde_json::Value::Null,
+            baseline_source: None,
             explicit_changes: BTreeSet::new(),
         }
     }
@@ -673,11 +679,26 @@ impl OvmConfig {
         match std::fs::read_to_string(path) {
             Ok(contents) => {
                 let mut config: Self = serde_json::from_str(&contents)?;
-                config.baseline = serde_json::to_value(&config)?;
+                config.baseline_source = Some(contents);
                 Ok(config)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The merge baseline: this config exactly as it was loaded, before any
+    /// command mutated it. Reconstructed from the text `load` kept — parsing
+    /// the same document twice is deterministic, so this is the value `load`
+    /// used to compute eagerly. `Null` means there was no config file, which
+    /// [`save`](Self::save) reads as "compare against the built-in defaults".
+    fn baseline(&self) -> Result<serde_json::Value> {
+        match &self.baseline_source {
+            Some(contents) => {
+                let as_loaded: Self = serde_json::from_str(contents)?;
+                Ok(serde_json::to_value(&as_loaded)?)
+            }
+            None => Ok(serde_json::Value::Null),
         }
     }
 
@@ -705,11 +726,12 @@ impl OvmConfig {
         let mut merged = match std::fs::read(path) {
             Ok(contents) => {
                 let mut current: serde_json::Value = serde_json::from_slice(&contents)?;
-                if self.baseline.is_null() {
+                let baseline = self.baseline()?;
+                if baseline.is_null() {
                     let missing_file_baseline = serde_json::to_value(Self::default())?;
                     merge_config_changes(&mut current, &missing_file_baseline, &desired);
                 } else {
-                    merge_config_changes(&mut current, &self.baseline, &desired);
+                    merge_config_changes(&mut current, &baseline, &desired);
                 }
                 current
             }

@@ -46,6 +46,7 @@ fn make_pi_bundle(binary_contents: &[u8]) -> Vec<u8> {
 fn ovm(home: &Path, releases_url: &str) -> Command {
     let mut cmd = Command::cargo_bin("ovm").expect("binary built");
     cmd.env("HOME", home)
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_PI_RELEASES_URL", releases_url)
         .env("OVM_PI_NPM_REGISTRY_URL", releases_url);
     cmd
@@ -75,6 +76,7 @@ fn setup_pi_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, String)
 
     let asset_name = expected_pi_asset();
     let asset_body = make_pi_bundle(binary_contents);
+    let asset_size = asset_body.len();
 
     // Asset download endpoint
     server
@@ -87,7 +89,7 @@ fn setup_pi_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, String)
     // /tags/v<version> — Pi normalizes to "v" prefix
     let asset_url = format!("{}/assets/{asset_name}", server.url());
     let release_json = format!(
-        r#"{{"tag_name":"v{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}"}}]}}"#,
+        r#"{{"tag_name":"v{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
     );
     server
         .mock("GET", format!("/tags/v{version}").as_str())
@@ -132,6 +134,7 @@ fn setup_pi_update_mock(
     let asset_name = expected_pi_asset();
 
     let old_asset_body = make_pi_bundle(old_binary);
+    let old_asset_size = old_asset_body.len();
     server
         .mock(
             "GET",
@@ -143,6 +146,7 @@ fn setup_pi_update_mock(
         .create();
 
     let latest_asset_body = make_pi_bundle(latest_binary);
+    let latest_asset_size = latest_asset_body.len();
     server
         .mock(
             "GET",
@@ -155,7 +159,7 @@ fn setup_pi_update_mock(
 
     let old_asset_url = format!("{}/assets/{old_version}/{asset_name}", server.url());
     let old_release_json = format!(
-        r#"{{"tag_name":"v{old_version}","assets":[{{"name":"{asset_name}","browser_download_url":"{old_asset_url}"}}]}}"#,
+        r#"{{"tag_name":"v{old_version}","assets":[{{"name":"{asset_name}","browser_download_url":"{old_asset_url}","size":{old_asset_size}}}]}}"#,
     );
     server
         .mock("GET", format!("/tags/v{old_version}").as_str())
@@ -166,7 +170,7 @@ fn setup_pi_update_mock(
 
     let latest_asset_url = format!("{}/assets/{latest_version}/{asset_name}", server.url());
     let latest_release_json = format!(
-        r#"{{"tag_name":"v{latest_version}","assets":[{{"name":"{asset_name}","browser_download_url":"{latest_asset_url}"}}]}}"#,
+        r#"{{"tag_name":"v{latest_version}","assets":[{{"name":"{asset_name}","browser_download_url":"{latest_asset_url}","size":{latest_asset_size}}}]}}"#,
     );
     server
         .mock("GET", format!("/tags/v{latest_version}").as_str())
@@ -316,6 +320,7 @@ fn pi_launcher_refresh_cache_sentinel_does_not_relaunch_pi() {
     let launcher = home.path().join(".ovm/bin/pi");
     Command::new(&launcher)
         .env("HOME", home.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_PI_RELEASES_URL", &releases_url)
         .env("OVM_PI_NPM_REGISTRY_URL", &releases_url)
         .env("OVM_REGISTRY_BASE_URL", &releases_url)
@@ -348,6 +353,7 @@ fn bare_pi_update_updates_extensions_then_switches_latest_via_ovm() {
     let launcher = home.path().join(".ovm/bin/pi");
     Command::new(&launcher)
         .env("HOME", home.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_PI_RELEASES_URL", &releases_url)
         .env("OVM_PI_NPM_REGISTRY_URL", &releases_url)
         .arg("update")
@@ -366,6 +372,7 @@ fn bare_pi_update_updates_extensions_then_switches_latest_via_ovm() {
 
     Command::new(&launcher)
         .env("HOME", home.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_PI_RELEASES_URL", &releases_url)
         .env("OVM_PI_NPM_REGISTRY_URL", &releases_url)
         .arg("--version")

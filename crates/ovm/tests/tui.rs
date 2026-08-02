@@ -87,6 +87,7 @@ fn install_codex_version(home: &Path, version: &str) -> MockEnv {
     let asset_name = expected_codex_asset();
     let entry = expected_codex_entry();
     let tarball = make_tarball(entry, b"#!/bin/sh\necho fake\n");
+    let asset_size = tarball.len();
 
     releases_server
         .mock("GET", format!("/assets/{asset_name}").as_str())
@@ -96,7 +97,7 @@ fn install_codex_version(home: &Path, version: &str) -> MockEnv {
 
     let asset_url = format!("{}/assets/{asset_name}", releases_server.url());
     let release_json = format!(
-        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}"}}]}}"#,
+        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
     );
     releases_server
         .mock("GET", format!("/tags/{version}").as_str())
@@ -127,6 +128,7 @@ fn install_codex_version(home: &Path, version: &str) -> MockEnv {
     let ovm_bin = assert_cmd::cargo::cargo_bin("ovm");
     std::process::Command::new(&ovm_bin)
         .env("HOME", home)
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_CODEX_RELEASES_URL", &releases_url)
         .env("OVM_REGISTRY_BASE_URL", &registry_url)
         .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
@@ -205,7 +207,7 @@ fn product_picker_esc_exits_cleanly() {
 
     // Spawn `ovm select` in a PTY. No product → opens product picker.
     let cmd = format!(
-        "env HOME={} {} select",
+        "env HOME={} OVM_DISABLE_BACKGROUND_REFRESH=1 {} select",
         home.path().display(),
         bin.display()
     );
@@ -234,7 +236,7 @@ fn version_picker_shows_installed_version() {
 
     let bin = ovm_bin_path();
     let cmd = format!(
-        "env HOME={} OVM_CODEX_RELEASES_URL={} OVM_REGISTRY_BASE_URL={} OVM_SKIP_SIGNATURE_VERIFY=1 {} select codex",
+        "env HOME={} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={} OVM_REGISTRY_BASE_URL={} OVM_SKIP_SIGNATURE_VERIFY=1 {} select codex",
         home.path().display(),
         env.releases_url,
         env.registry_url,
@@ -267,7 +269,7 @@ fn version_picker_shows_installed_instantly_when_registry_unreachable() {
 
     let bin = ovm_bin_path();
     let cmd = format!(
-        "env HOME={} NO_COLOR=1 OVM_REGISTRY_BASE_URL={} OVM_CODEX_RELEASES_URL={} {} select codex",
+        "env HOME={} NO_COLOR=1 OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_REGISTRY_BASE_URL={} OVM_CODEX_RELEASES_URL={} {} select codex",
         home.path().display(),
         dead,
         dead,
@@ -311,7 +313,7 @@ fn codex_picker_defaults_to_real_releases_and_r_toggles_all_releases() {
     let registry_server = mockito::Server::new();
     let bin = ovm_bin_path();
     let cmd = format!(
-        "env HOME={} NO_COLOR=1 OVM_REGISTRY_BASE_URL={} {} select codex",
+        "env HOME={} NO_COLOR=1 OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_REGISTRY_BASE_URL={} {} select codex",
         home.path().display(),
         registry_server.url(),
         bin.display(),
@@ -402,7 +404,7 @@ fn version_picker_loads_quickly_for_all_products_from_registry() {
     for (product, version) in products {
         let home = tempfile::tempdir().expect("tempdir");
         let cmd = format!(
-            "env HOME={} OVM_REGISTRY_BASE_URL={} {} select {}",
+            "env HOME={} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_REGISTRY_BASE_URL={} {} select {}",
             home.path().display(),
             registry_server.url(),
             bin.display(),
@@ -438,7 +440,7 @@ fn product_picker_lists_ovm_when_alpha_channel_is_set() {
 
     let bin = ovm_bin_path();
     let cmd = format!(
-        "env HOME={} NO_COLOR=1 {} select",
+        "env HOME={} NO_COLOR=1 OVM_DISABLE_BACKGROUND_REFRESH=1 {} select",
         home.path().display(),
         bin.display()
     );
@@ -467,6 +469,7 @@ fn select_with_direct_version_switches_non_interactively() {
     assert_cmd::Command::cargo_bin("ovm")
         .expect("bin")
         .env("HOME", home.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_CODEX_RELEASES_URL", &env.releases_url)
         .env("OVM_REGISTRY_BASE_URL", &env.registry_url)
         .env("OVM_SKIP_SIGNATURE_VERIFY", "1")

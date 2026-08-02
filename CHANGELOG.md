@@ -10,6 +10,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
 
+## [0.0.3-alpha.8] - 2026-08-03
+
+### Added
+
+- `ovm update` — a verb that actually updates. There was previously no way to
+  say "update my tools now": `autoupdate` only configured whether it happened
+  on launch. `ovm update` moves every installed product to its latest release,
+  `ovm update <product>` moves one, and `ovm update self` updates OVM itself
+  (the same thing `ovm self update` does). It reuses the launch-time update
+  path, so an explicit update and an `autoUpdate: on` launch converge on the
+  same on-disk state; the only difference is that "latest" is resolved upstream
+  here, because you asked for it by name.
+  - Nothing installed for a product is reported per product with the
+    `ovm install` line to run — never a silent "up to date", and never an
+    install you did not ask for.
+  - Offline, the resolver says so and falls back to the newest release already
+    in your store; a product it cannot resolve at all is reported as failed and
+    the command exits non-zero.
+  - A pinned product is reported and left alone by a bare `ovm update`;
+    `ovm update <product>` overrides the pin and resumes latest-tracking.
+    `dev:` builds have no upstream and are always left alone.
+- `ovm help launch` — the full launch-shortcut table, moved out of `ovm help`.
+
+### Changed
+
+- The launch-time setting moved under the new verb as
+  `ovm update auto [product|self] [on|off|notify]`. **`ovm autoupdate …` keeps
+  working unchanged** as a hidden alias, so existing scripts, docs and muscle
+  memory are unaffected.
+- A bare `ovm` now shows six command lines instead of ~25 commands, 11 launch
+  shortcuts and 18 examples. Everything omitted is one `ovm help` away, and a
+  test enforces the ceiling.
+- `ovm help` teaches the `y` = yolo / `f` = fast shortcut pattern with two
+  examples instead of printing the eight-row `ccy/cxy/cxf/cxyf/ccx…` matrix,
+  and groups `ls`/`current`/`which`/`info`/`stats` under one **Inspect**
+  heading. No shortcut or command was removed.
+
+### Security
+
+- `ovm adopt` now verifies what it publishes, not what it looked at: the
+  local binary is captured into the install transaction's staging area first,
+  and the publisher signature check (the same macOS `codesign` team-ID
+  verification downloads pass) plus a `--version` re-check run on that staged
+  copy before it is published. A file swapped mid-adopt — an ordinary
+  `brew upgrade` racing the adopt looks exactly like this — is rejected
+  instead of being mislabeled. On macOS this means an unsigned or re-signed
+  local build now fails adoption rather than importing.
+- A Pi release that publishes a `SHA256SUMS` manifest which cannot be fetched
+  or parsed (rate limit, HTTP 500, malformed content) now refuses to install
+  instead of quietly falling back to length-only verification. Releases that
+  genuinely publish no checksum still install with length checks, stated as
+  such.
+- Adoption and dev installs are now bound to the file they validated, not to
+  a path name: the source is resolved once, opened without following a final
+  symlink, proven by identity (not by path) to be the file its name claimed,
+  and every later step — the containment check, the identity comparison, the
+  copy itself — reads that open descriptor. A rename, retarget, or link swap
+  after validation can no longer change what gets published, and a source
+  that *is* a file the install transaction would delete is refused before
+  anything is removed. Previously, `ovm adopt` pointed at a binary inside an
+  incomplete managed install tree deleted the user's file, then reported the
+  original was left untouched.
+- Every file an install transaction writes into its freshly prepared tree —
+  copies, markers, metadata, manifests, and all four products' download
+  destinations — is now opened create-only (`O_CREAT|O_EXCL`), and
+  permissions are set through the file handle rather than the path. A link
+  standing at any of those destinations now fails the install cleanly instead
+  of redirecting the write onto whatever the link points at.
+
+### Fixed
+
+- `checkForUpdates: false` now means no update checks anywhere: the launch
+  auto-update, the `notify` prompt and the update banner all stop consulting
+  the cached latest (which other commands keep writing), so a plain launch can
+  no longer download a release the cache learned before checks were turned
+  off. Explicitly named versions and switches to already-installed releases
+  are unaffected.
+- `ovm adopt` refuses a path that is already inside OVM's own store, with the
+  repair commands spelled out (`ovm install` to finish an incomplete install,
+  `ovm use` to select a complete one) — adopting brings an *outside* install
+  under management.
+- The registry refresh defends itself against damaged upstream answers: a
+  version list must be a real list of plausible version strings, no single
+  refresh may retire more than a small bounded fraction of the published
+  registry (a truncated listing used to be able to retire 471 of 472 Claude
+  versions in one write; the override that permits a genuine mass removal
+  must name the product it covers), dates must parse as calendar dates or the
+  field is omitted, and dist tags may only advertise versions the registry
+  actually publishes.
+
 ## [0.0.3-alpha.7] - 2026-07-31
 
 ### Changed

@@ -4,9 +4,19 @@ use crate::error::{OvmError, Result};
 use crate::product::Product;
 use crate::version_manager::{InstallRequest, VersionManager};
 use console::style;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Bring an existing unmanaged install under OVM without deleting it.
+///
+/// Adoption preserves the version the machine is already on: read it from the
+/// binary, then make that exact version a managed install. Where the managed
+/// layout is a single self-contained executable, the user's own binary is
+/// **imported from disk** — no download, so this works with no network at all.
+/// A wrapper script (npm/Homebrew shim) or a bundled product cannot be copied
+/// as one file, so those fall back to fetching that same version from upstream
+/// (see [`import_local_binary`]).
 pub fn run(vm: &VersionManager, path: Option<PathBuf>) -> Result<()> {
     let product = vm.product();
     let binary = match path {
@@ -21,16 +31,9 @@ pub fn run(vm: &VersionManager, path: Option<PathBuf>) -> Result<()> {
             binary.display()
         )));
     }
+    reject_ovm_managed_binary(vm, &binary)?;
 
-    let output = version_output(&binary)?;
-    let raw_version = extract_semver(&output).ok_or_else(|| {
-        OvmError::Message(format!(
-            "Could not parse a version from `{}` output:\n{}",
-            binary.display(),
-            output.trim()
-        ))
-    })?;
-    let version = product.normalize_version(&raw_version);
+    let version = reported_store_version(product, &binary)?;
 
     println!(
         "{} Found {} {} at {}",
@@ -49,16 +52,35 @@ pub fn run(vm: &VersionManager, path: Option<PathBuf>) -> Result<()> {
         );
         version
     } else {
-        println!(
-            "{} Installing managed {} {}",
-            style("→").dim(),
-            product.display_name(),
-            style(&version).green().bold()
-        );
-        vm.install(InstallRequest::Standard {
-            use_npm: false,
-            version,
-        })?
+        match import_rejection(vm, &binary, &version) {
+            None => {
+                let installed = vm.install(InstallRequest::Import {
+                    version,
+                    binary: binary.clone(),
+                })?;
+                println!(
+                    "{} Imported the local binary as managed {} {} — nothing downloaded",
+                    style("✓").green(),
+                    product.display_name(),
+                    style(&installed).green().bold()
+                );
+                installed
+            }
+            Some(reason) => {
+                println!(
+                    "{} The local {} is {} — downloading managed {} {} instead",
+                    style("→").dim(),
+                    product.binary_name(),
+                    reason,
+                    product.display_name(),
+                    style(&version).green().bold()
+                );
+                vm.install(InstallRequest::Standard {
+                    use_npm: false,
+                    version,
+                })?
+            }
+        }
     };
 
     vm.use_version(&installed_version)?;
@@ -86,6 +108,106 @@ pub fn run(vm: &VersionManager, path: Option<PathBuf>) -> Result<()> {
     nudge_if_claude_install_drift(vm);
 
     Ok(())
+}
+
+/// Refuse a path that is already inside OVM's own store.
+///
+/// Adoption imports an install from *outside* OVM, and pointing it at a managed
+/// path is not merely a redundant no-op. The import transaction quarantines and
+/// removes that version's source tree before it copies anything, so a source
+/// under the tree it is about to rebuild — an install that died half-way, say,
+/// leaving a binary and no `.complete` — is deleted while it is still needed:
+/// the copy fails and the file is gone, from the one command that promises to
+/// leave the original untouched.
+///
+/// PATH discovery already filters these out ([`find_foreign_binary_in_paths`]);
+/// this covers the path the user typed, which is the only way one gets in.
+/// The message says what to run instead, because the user's real intent is
+/// visible from the state on disk: an incomplete managed install wants
+/// repairing, a complete one wants selecting.
+fn reject_ovm_managed_binary(vm: &VersionManager, binary: &Path) -> Result<()> {
+    if !is_ovm_managed(&vm.dirs, binary) {
+        return Ok(());
+    }
+
+    let product = vm.product();
+    Err(OvmError::Message(format!(
+        "{} is already inside OVM's store ({}), so there is nothing to adopt.\n  \
+         `ovm adopt` brings an install from OUTSIDE OVM under management.\n  \
+         See what is installed:        `ovm ls {name}`\n  \
+         Repair an incomplete install: `ovm install {name} <version>`\n  \
+         Select a complete one:        `ovm use {name} <version>`",
+        binary.display(),
+        vm.dirs.base.display(),
+        name = product.canonical_name(),
+    )))
+}
+
+/// Decide whether the user's binary can become the managed install itself.
+/// `None` means it can; `Some(reason)` is the user-facing explanation, phrased
+/// to slot into "The local <binary> is <reason> — downloading … instead".
+///
+/// Adoption's whole point is that the version already on the machine is
+/// preserved; downloading a byte-identical copy of it is a redundant transfer
+/// on a good network and a hard failure on a bad one. So where the managed
+/// layout for a product is one self-contained executable, copy theirs into the
+/// store instead of fetching it (see
+/// [`VersionManager::install`] with [`InstallRequest::Import`], which publishes
+/// it under the same locked transaction a download install uses).
+///
+/// Rejected cases fall back to the download, because an import there would
+/// produce an install that only *looks* managed:
+///   - a wrapper script (`#!…`): an npm or Homebrew shim is a few lines that
+///     reach into a package tree we are not copying, so the imported copy would
+///     break the moment the user removes the original — which adopt goes on to
+///     tell them they may do;
+///   - Pi, whose managed install is a whole bundle (binary + `package.json` +
+///     assets), not a single file;
+///   - a version string OVM cannot map to a real release, which must never
+///     become a directory name in the version store.
+fn import_rejection(vm: &VersionManager, source: &Path, version: &str) -> Option<&'static str> {
+    let product = vm.product();
+    // `version` came from running a foreign binary, so it is untrusted input
+    // that is about to become a path component and a store key.
+    if vm.reject_version_traversal(version).is_err() || !product.is_official_remote_version(version)
+    {
+        return Some("reporting a version OVM cannot map to a release");
+    }
+    if !is_self_contained_executable(source) {
+        return Some("a wrapper script, not a self-contained binary");
+    }
+    // Pi ships as a bundle; one copied file would be a broken install.
+    if product == Product::Pi {
+        return Some("part of a bundle OVM cannot copy as one file");
+    }
+
+    None
+}
+
+/// Whether `path` is an executable OVM can copy on its own — i.e. not a `#!`
+/// script standing in for a package installed elsewhere.
+fn is_self_contained_executable(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 2];
+    match file.read_exact(&mut magic) {
+        Ok(()) => &magic != b"#!",
+        // Too short to be a real program; let the download decide.
+        Err(_) => false,
+    }
+}
+
+/// The unmanaged install of this product on PATH, if any.
+///
+/// Used by the first-launch bootstrap to prefer adopting what the machine
+/// already has over downloading a fresh copy, and to fall back to executing it
+/// when nothing can be installed. Answers `None` on any problem (no PATH,
+/// nothing found) — the caller falls back to installing.
+pub(crate) fn foreign_binary_on_path(dirs: &OvmDirs, product: Product) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let paths = std::env::split_paths(&path).collect::<Vec<_>>();
+    find_foreign_binary_in_paths(dirs, product, &paths)
 }
 
 fn find_foreign_binary(dirs: &OvmDirs, product: Product) -> Result<PathBuf> {
@@ -298,13 +420,32 @@ fn npm_package_from_path(path: &Path) -> Option<String> {
 }
 
 fn is_ovm_managed(dirs: &OvmDirs, candidate: &Path) -> bool {
-    let base = canonicalize_best_effort(&dirs.base);
-    let candidate = canonicalize_best_effort(candidate);
-    candidate.starts_with(base)
+    crate::version_manager::path_is_inside(&dirs.base, candidate)
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Ask `binary` what it is, and answer with the version OVM would store it
+/// under (`--version` output → semver → the product's storage spelling, e.g.
+/// Codex's `rust-v0.144.0`).
+///
+/// One definition on purpose. Adoption decides *which* version it is adopting
+/// with this, and the import install re-asks the copy it staged with the same
+/// question ([`crate::version_manager`]); if the two derivations could drift,
+/// the re-check would compare a version against a differently-spelled version
+/// and reject binaries that are perfectly fine.
+pub(crate) fn reported_store_version(product: Product, binary: &Path) -> Result<String> {
+    let output = version_output(binary)?;
+    let raw_version = extract_semver(&output).ok_or_else(|| {
+        OvmError::Message(format!(
+            "Could not parse a version from `{}` output:\n{}",
+            binary.display(),
+            output.trim()
+        ))
+    })?;
+    Ok(product.normalize_version(&raw_version))
 }
 
 fn version_output(binary: &Path) -> Result<String> {

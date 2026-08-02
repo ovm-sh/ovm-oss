@@ -62,8 +62,8 @@ pub fn run(first: Option<&str>, second: Option<&str>) -> Result<()> {
 
         _ => {
             return Err(OvmError::Message(
-                "Usage: ovm autoupdate [on|off|notify], ovm autoupdate <product> [on|off|notify], \
-                 or ovm autoupdate self [on|off|notify]"
+                "Usage: ovm update auto [on|off|notify], ovm update auto <product> [on|off|notify], \
+                 or ovm update auto self [on|off|notify]"
                     .into(),
             ));
         }

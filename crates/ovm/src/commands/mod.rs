@@ -22,6 +22,7 @@ pub mod self_update;
 pub mod shortcuts;
 pub mod stats;
 pub mod uninstall;
+pub mod update;
 pub mod use_version;
 pub mod which;
 
@@ -52,6 +53,10 @@ pub(crate) fn maintain_claude_launcher(vm: &crate::version_manager::VersionManag
 /// tree by itself is inert when the method is global and the launcher is owned;
 /// `ovm doctor claude` still reports that disk cleanup without alarming on each
 /// launch. Informs only — repair remains the explicit doctor command.
+///
+/// Uses the launch-path inspection, not the doctor one: this runs before every
+/// Claude spawn, and it must not DOM-parse `~/.claude.json` or size the native
+/// install tree to answer a two-field question.
 pub(crate) fn nudge_if_claude_install_drift(vm: &crate::version_manager::VersionManager) {
     if vm.product() != crate::product::Product::Claude {
         return;
@@ -59,10 +64,8 @@ pub(crate) fn nudge_if_claude_install_drift(vm: &crate::version_manager::Version
     let Some(home) = dirs::home_dir() else {
         return;
     };
-    let status = crate::claude_install::ClaudeHygiene::new(&home).inspect();
-    if status.install_method_is_native()
-        || status.launcher == crate::claude_install::LauncherState::Foreign
-    {
+    let status = crate::claude_install::ClaudeHygiene::new(&home).inspect_for_launch();
+    if status.updater_can_reclaim() {
         eprintln!(
             "  {} Claude's native updater can reclaim version control here — run `ovm doctor claude --fix`",
             console::style("⚠").yellow()

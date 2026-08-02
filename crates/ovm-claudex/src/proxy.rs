@@ -486,10 +486,31 @@ fn port_collision_error(port: u16, why: &str) -> ClaudexError {
 fn unverified_identity_error(port: u16, why: &str) -> ClaudexError {
     ClaudexError::Message(format!(
         "Something is listening on 127.0.0.1:{port}, but claudex could not confirm it is its own \
-         proxy ({why}). Refusing to send the proxy key to an unverified listener. Run \
-         `ovm claudex stop` and relaunch; if the listener is not claudex's proxy, stop it or \
-         change proxy.port in ~/.ovm/claudex/config.json and re-run: ovm claudex setup"
+         proxy ({why}). Refusing to send the proxy key to an unverified listener. {}",
+        unverified_identity_remedy(port, why)
     ))
+}
+
+/// The next step for an unverified listener.
+///
+/// `ovm claudex stop` works off the pidfile, so recommending it when the
+/// pidfile is precisely what is missing sends the operator in a circle: stop
+/// prints "Proxy is not running (no pidfile)" and the port stays occupied.
+/// In that case name the listener directly instead.
+pub fn unverified_identity_remedy(port: u16, why: &str) -> String {
+    if why.contains("no proxy pidfile") {
+        return format!(
+            "There is no proxy pidfile, so `ovm claudex stop` has nothing to act on. Find the \
+             listener with `lsof -nP -iTCP:{port} -sTCP:LISTEN` and stop it (it is likely a \
+             cliproxyapi started outside claudex), or change proxy.port in \
+             ~/.ovm/claudex/config.json and re-run: ovm claudex setup"
+        );
+    }
+    format!(
+        "Run `ovm claudex stop` and relaunch; if that does not free the port, identify the \
+         listener with `lsof -nP -iTCP:{port} -sTCP:LISTEN` and stop it, or change proxy.port \
+         in ~/.ovm/claudex/config.json and re-run: ovm claudex setup"
+    )
 }
 
 /// Session launches call this while holding the session lock. The pid record
@@ -699,11 +720,38 @@ fn verify_running_matches_pin(dirs: &ClaudexDirs, config: &ClaudexConfig) -> Res
     )))
 }
 
-/// Kill and reap a child that failed to come up healthy; drop its pidfile.
+/// Kill and reap a child that failed to come up healthy, then drop its pidfile.
+///
+/// The pidfile is the ONLY handle `ovm claudex stop` has on the daemon, so it
+/// may only be deleted once the process is known dead. Removing it after a
+/// failed kill would strand a live proxy that nothing can find or stop again.
 fn reap_failed_spawn(dirs: &ClaudexDirs, child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-    let _ = std::fs::remove_file(dirs.proxy_pid_file());
+    let dead = kill_and_reap(child);
+    retire_pid_record(dirs, child.id(), dead);
+}
+
+/// Terminate `child` and confirm it is gone. Returns false only when the
+/// process could not be killed and reaped — i.e. it may still be running.
+///
+/// `kill` is a no-op for a child that has already exited (including one the
+/// startup loop's `try_wait` already reaped), so this covers both the live and
+/// already-dead cases.
+fn kill_and_reap(child: &mut std::process::Child) -> bool {
+    child.kill().is_ok() && child.wait().is_ok()
+}
+
+/// Drop the pidfile once the recorded process is confirmed dead; otherwise
+/// keep it (and say so) so the operator has something to act on.
+fn retire_pid_record(dirs: &ClaudexDirs, pid: u32, dead: bool) {
+    if dead {
+        let _ = std::fs::remove_file(dirs.proxy_pid_file());
+        return;
+    }
+    eprintln!(
+        "  {} Could not stop the half-started cliproxyapi (pid {pid}); its pidfile is kept at {} so `ovm claudex stop` can retry. If that fails, kill {pid} manually.",
+        style("!").yellow(),
+        display(&dirs.proxy_pid_file())
+    );
 }
 
 /// What the pidfile records: enough to verify process identity before ever
@@ -1567,6 +1615,90 @@ mod tests {
                 .any(|request| request.contains("Bearer canary-")),
             "the canary probe (random key) should still have been attempted"
         );
+    }
+
+    /// The pidfile is the only handle `stop` has on the daemon. Dropping it
+    /// after a kill that did NOT succeed leaves a live proxy holding the port
+    /// with nothing left to find it by.
+    #[test]
+    fn a_proxy_that_could_not_be_killed_keeps_its_pidfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dirs = ClaudexDirs::at(temp.path().to_path_buf());
+        dirs.ensure_layout().expect("layout");
+        write_pid_record(&dirs, 4242, std::path::Path::new("/x/cliproxyapi"), true).expect("write");
+
+        retire_pid_record(&dirs, 4242, false);
+
+        assert!(
+            dirs.proxy_pid_file().is_file(),
+            "a surviving proxy must stay findable by `ovm claudex stop`"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_dead_proxy_drops_its_pidfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dirs = ClaudexDirs::at(temp.path().to_path_buf());
+        dirs.ensure_layout().expect("layout");
+        write_pid_record(&dirs, 4242, std::path::Path::new("/x/cliproxyapi"), true).expect("write");
+
+        retire_pid_record(&dirs, 4242, true);
+
+        assert!(!dirs.proxy_pid_file().exists());
+    }
+
+    /// The normal failed-spawn path: a live child is terminated, reaped, and
+    /// reported dead so its pidfile is cleared.
+    #[test]
+    #[cfg(unix)]
+    fn a_live_child_is_killed_and_reaped() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dirs = ClaudexDirs::at(temp.path().to_path_buf());
+        dirs.ensure_layout().expect("layout");
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "while :; do sleep 1; done"])
+            .spawn()
+            .unwrap();
+        write_pid_record(&dirs, child.id(), std::path::Path::new("/bin/sh"), true).unwrap();
+
+        assert!(kill_and_reap(&mut child));
+        reap_failed_spawn(&dirs, &mut child);
+        assert!(!dirs.proxy_pid_file().exists());
+    }
+
+    /// `ovm claudex stop` reads the pidfile, so telling the operator to run it
+    /// when the missing pidfile is the whole reason for the state is a loop.
+    #[test]
+    fn missing_pidfile_guidance_does_not_send_the_user_back_to_stop() {
+        let why =
+            "no proxy pidfile, so the listener on the port cannot be confirmed as claudex's proxy";
+        let remedy = unverified_identity_remedy(8317, why);
+
+        assert!(
+            !remedy.contains("Run `ovm claudex stop`"),
+            "stop cannot act without a pidfile: {remedy}"
+        );
+        assert!(
+            remedy.contains("has nothing to act on"),
+            "say why stop won't help: {remedy}"
+        );
+        // Something the operator can actually run to free the port.
+        assert!(remedy.contains("lsof -nP -iTCP:8317"), "{remedy}");
+
+        // The full error keeps the same actionable guidance.
+        let error = unverified_identity_error(8317, why).to_string();
+        assert!(error.contains("lsof -nP -iTCP:8317"), "{error}");
+        assert!(!error.contains("Run `ovm claudex stop`"), "{error}");
+    }
+
+    /// When a pidfile DOES exist, restarting is the right first move — the
+    /// listener is plausibly our own daemon that `ps`/`lsof` could not confirm.
+    #[test]
+    fn other_unverified_causes_still_recommend_a_restart() {
+        let remedy =
+            unverified_identity_remedy(8317, "could not verify the proxy pid (`ps` failed)");
+        assert!(remedy.contains("ovm claudex stop"), "{remedy}");
+        assert!(remedy.contains("lsof -nP -iTCP:8317"), "{remedy}");
     }
 
     #[test]

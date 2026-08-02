@@ -3,6 +3,16 @@ set -e
 
 echo "=== OVM pre-commit ==="
 
+# Checks that could not run (missing toolchain, missing manifest). A check that
+# did not run is NOT a check that passed, so it is named at the end instead of
+# disappearing into a "checks passed" line. Set OVM_HOOK_REQUIRE_ALL=1 to turn
+# any skipped check into a hard failure (what CI effectively does).
+NOT_RUN=""
+not_run() {
+    NOT_RUN="$NOT_RUN $1"
+    echo "NOT RUN: $2"
+}
+
 # Check for PII / path leaks in staged files
 echo "[1/8] Scanning for path leaks..."
 # Scan added lines only and allow explicit placeholder usernames in examples.
@@ -10,7 +20,7 @@ LEAKED_PATHS=$(git diff --staged --unified=0 --no-color | grep -E '^\+' | grep -
 if [ -n "$LEAKED_PATHS" ]; then
     echo "ERROR: Staged changes contain absolute user paths."
     echo "       Replace with relative paths or ~ before committing."
-    echo "$LEAKED_PATHS" | head -5
+    echo "$LEAKED_PATHS" | head -5 # pipefail-safe: /bin/sh, no pipefail, and this is a diagnostic
     exit 1
 fi
 
@@ -24,7 +34,7 @@ fi
 LEAKED_SECRETS=$(git diff --staged --unified=0 --no-color | grep -E '^\+' | grep -vE '^\+\+\+' | grep -iE '(api[_-]?key|secret[_-]?key|password|token|authorization)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_+/=-]{12,}["'"'"']?[;,]?[[:space:]]*$|BEGIN [A-Z ]*PRIVATE KEY|npm_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9_-]{20,}' | grep -vE '\$\{\{[[:space:]]*secrets\.' | grep -vE '\$\{\{[[:space:]]*github\.token[[:space:]]*\}\}' | grep -vE 'id-token:' | grep -vE 'x-access-token:' || true)
 if [ -n "$LEAKED_SECRETS" ]; then
     echo "ERROR: Staged changes may contain secrets."
-    echo "$LEAKED_SECRETS" | head -5
+    echo "$LEAKED_SECRETS" | head -5 # pipefail-safe: /bin/sh, no pipefail, and this is a diagnostic
     exit 1
 fi
 
@@ -34,6 +44,8 @@ if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
         echo "ERROR: cargo fmt failed. Run: cargo fmt"
         exit 1
     }
+else
+    not_run "cargo-fmt" "no Cargo manifest here — formatting was not checked."
 fi
 
 echo "[3/8] Running clippy..."
@@ -42,6 +54,8 @@ if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
         echo "ERROR: clippy found warnings."
         exit 1
     }
+else
+    not_run "clippy" "no Cargo manifest here — clippy did not run."
 fi
 
 echo "[4/8] Running tests..."
@@ -50,22 +64,34 @@ if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
         echo "ERROR: Tests failed."
         exit 1
     }
+else
+    not_run "cargo-test" "no Cargo manifest here — the test suite did not run."
 fi
 
 echo "[5/8] Running shellcheck..."
 if command -v shellcheck > /dev/null 2>&1; then
-    if [ -f scripts/copy-ledger-with-retry.sh ]; then
-        shellcheck scripts/copy-ledger-with-retry.sh || {
-            echo "ERROR: shellcheck found issues."
-            exit 1
-        }
-    fi
-    shellcheck .hooks/install.sh .hooks/pre-commit .hooks/pre-push install.sh scripts/bundle-manifest.sh scripts/dev-install.sh scripts/dev-uninstall.sh scripts/export-oss.sh scripts/promote-release.sh scripts/publish-npm.sh scripts/release.sh scripts/sync-codex-migration-manifest.sh scripts/update-brew-formula.sh scripts/update-registry.sh tests/scripts/*.sh || {
+    # Only check what this checkout actually has. The public export ships this
+    # hook but not every script named here, so a hardcoded list made shellcheck
+    # exit 2 on a missing file and failed EVERY commit for outside contributors
+    # who followed CONTRIBUTING.md and installed the hooks.
+    shellcheck_targets=""
+    for candidate in .hooks/install.sh .hooks/pre-commit .hooks/pre-push install.sh \
+        scripts/bundle-manifest.sh scripts/copy-ledger-with-retry.sh \
+        scripts/dev-install.sh scripts/dev-uninstall.sh scripts/export-oss.sh \
+        scripts/promote-release.sh scripts/publish-npm.sh scripts/release.sh \
+        scripts/sync-codex-migration-manifest.sh scripts/update-brew-formula.sh \
+        scripts/update-registry.sh scripts/verify-subscription-auth.sh \
+        tests/scripts/*.sh
+    do
+        [ -f "$candidate" ] && shellcheck_targets="$shellcheck_targets $candidate"
+    done
+    # shellcheck disable=SC2086  # deliberate word-splitting of the file list
+    shellcheck $shellcheck_targets || {
         echo "ERROR: shellcheck found issues."
         exit 1
     }
 else
-    echo "SKIP: shellcheck not installed."
+    not_run "shellcheck" "shellcheck is not installed — shell scripts were not linted (brew install shellcheck)."
 fi
 
 echo "[6/8] Running actionlint..."
@@ -75,7 +101,7 @@ if command -v actionlint > /dev/null 2>&1; then
         exit 1
     }
 else
-    echo "SKIP: actionlint not installed."
+    not_run "actionlint" "actionlint is not installed — workflows were not linted (brew install actionlint)."
 fi
 
 # Check for devlog and changelog updates on feat/fix commits
@@ -104,5 +130,14 @@ if [ "$SRC_CHANGES" -gt 5 ] && [ "$HAS_BACKLOG" -eq 0 ]; then
     echo "REMINDER: Large change — check if any BACKLOG.md items should be updated."
 fi
 
-echo "[8/8] Pre-commit checks passed."
+if [ -n "$NOT_RUN" ]; then
+    echo "[8/8] Pre-commit INCOMPLETE — checks that did NOT RUN:$NOT_RUN"
+    echo "      They did not pass; they never executed. CI runs them all."
+    if [ "${OVM_HOOK_REQUIRE_ALL:-}" = "1" ]; then
+        echo "ERROR: OVM_HOOK_REQUIRE_ALL=1 and the checks above could not run."
+        exit 1
+    fi
+else
+    echo "[8/8] Pre-commit checks passed."
+fi
 echo ""

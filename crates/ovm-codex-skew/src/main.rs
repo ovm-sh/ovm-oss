@@ -34,6 +34,9 @@ fn main() {
 
     let Some(binary) = binary else {
         if classification_only {
+            // Reason first, class last: callers read the class with `tail -1`,
+            // so the explanation rides along without changing that contract.
+            println!("reason: no Codex binary supplied to assess");
             println!("indeterminate");
         }
         return;
@@ -45,6 +48,14 @@ fn main() {
     let outcome = ovm_codex_skew::assess(&binary);
 
     if classification_only {
+        // "indeterminate" alone cannot distinguish "the migrations were read
+        // and one could not be classified" from "the state DB was unreadable"
+        // — one is a property of the release, the other is broken plumbing,
+        // and only the first is something a human can adjudicate. Emit the
+        // reason so the caller can record which it was.
+        if let ovm_codex_skew::AssessmentOutcome::Indeterminate(indeterminate) = &outcome {
+            println!("reason: {}", indeterminate.reason);
+        }
         println!("{}", outcome.classification());
         return;
     }

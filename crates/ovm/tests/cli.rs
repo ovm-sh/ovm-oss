@@ -12,6 +12,7 @@ fn ovm() -> Command {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut cmd = Command::cargo_bin("ovm").expect("binary built");
     cmd.env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env_remove("OVM_VERSION")
         .env_remove("OVM_PRODUCT");
     // Keep tempdir alive via leaked reference — sufficient for test lifetime
@@ -37,6 +38,103 @@ fn bare_ovm_shows_short_help() {
     assert!(stdout.contains("Run `ovm help`"));
 }
 
+/// The bare-`ovm` screen is the first thing a new user sees, and it grew to ~25
+/// commands, 11 launch shortcuts and 18 examples before anyone noticed. This
+/// ceiling is what stops it creeping back: anything new belongs in `ovm help`.
+#[test]
+fn bare_ovm_short_help_stays_short() {
+    let output = ovm().assert().success().get_output().stdout.clone();
+    let stdout = console::strip_ansi_codes(&String::from_utf8_lossy(&output)).to_string();
+
+    let total = stdout.lines().count();
+    assert!(
+        total <= 20,
+        "the short help must stay under 20 lines, got {total}:\n{stdout}"
+    );
+
+    // Six command rows under `Common:`, not one per subcommand.
+    let commands = stdout
+        .lines()
+        .skip_while(|line| !line.starts_with("Common:"))
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .count();
+    assert!(
+        commands <= 6,
+        "the short help must list at most 6 command rows, got {commands}:\n{stdout}"
+    );
+
+    // Two worked examples teach the y/f pattern; the exhaustive matrix belongs
+    // in `ovm help launch`. `ccy, cxyf` are the examples, so the claudex rows
+    // are the tell that the table crept back.
+    for banished in ["ccxy", "ccxf", "ccxyf"] {
+        assert!(
+            !stdout.contains(banished),
+            "the short help must not spell out `{banished}`:\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("update"),
+        "`update` must be visible up front"
+    );
+}
+
+/// The eight-row shortcut cross-product moved out of `ovm help` and into its
+/// own topic page. The shortcuts themselves are unchanged.
+#[test]
+fn help_launch_holds_the_full_shortcut_table() {
+    let output = ovm()
+        .args(["help", "launch"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = console::strip_ansi_codes(&String::from_utf8_lossy(&output)).to_string();
+
+    for shortcut in [
+        "cc", "ccy", "cx", "cxy", "cxf", "cxyf", "pi", "ccx", "ccxy", "ccxf", "ccxyf",
+    ] {
+        assert!(
+            stdout.contains(shortcut),
+            "`ovm help launch` must list {shortcut}:\n{stdout}"
+        );
+    }
+
+    // The overview teaches the pattern instead of printing the table.
+    let overview = ovm()
+        .arg("help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let overview = String::from_utf8_lossy(&overview).to_string();
+    let section = overview
+        .lines()
+        .skip_while(|line| !line.starts_with("Launch shortcuts:"))
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .count();
+    assert!(
+        section <= 5,
+        "the overview must teach the pattern, not print the 8-row matrix \
+         (got {section} lines):\n{overview}"
+    );
+    assert!(overview.contains("ovm help launch"));
+}
+
+/// `ovm help shortcuts` must keep showing the `shortcuts` *command*'s help —
+/// the launch topic is reached as `ovm help launch`, and must not shadow it.
+#[test]
+fn help_shortcuts_still_documents_the_shortcuts_command() {
+    ovm()
+        .args(["help", "shortcuts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("~/.local/bin"));
+}
+
 #[test]
 fn ovm_help_redirected_stdout_is_ansi_free_and_shows_full_overview() {
     let output = ovm()
@@ -55,8 +153,9 @@ fn ovm_help_redirected_stdout_is_ansi_free_and_shows_full_overview() {
     for expected in [
         "Interactive:",
         "Version management:",
-        "Query:",
+        "Inspect:",
         "Maintenance:",
+        "update",
         "Launch shortcuts:",
         "Examples:",
         "claude",
@@ -223,19 +322,29 @@ fn product_aliases_work() {
 
 #[test]
 fn yolo_launch_aliases_are_native_commands() {
-    ovm()
-        .arg("ccy")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("No active version set"))
-        .stderr(predicate::str::contains("unrecognized subcommand").not());
-
-    ovm()
-        .arg("cxy")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("No active version set"))
-        .stderr(predicate::str::contains("unrecognized subcommand").not());
+    // The claim is that `ccy`/`cxy` are real commands rather than typos clap
+    // rejects. This used to be proved by the "No active version set" dead end,
+    // which no longer happens: a first launch now bootstraps instead. Assert
+    // the actual claim — clap recognised it and it reached product handling —
+    // rather than pinning whatever error the launch path happened to produce.
+    for (alias, product) in [("ccy", "Claude"), ("cxy", "Codex")] {
+        // Pin a version so the launch takes the explicit path and fails fast
+        // on "not installed". Letting it bootstrap would spend minutes
+        // retrying the network to prove a point about argument parsing.
+        let output = ovm()
+            .args([alias, "--ovm-version", "9.9.9"])
+            .output()
+            .expect("run ovm");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("unrecognized subcommand"),
+            "`ovm {alias}` must be a native command, got: {stderr}"
+        );
+        assert!(
+            stderr.contains(product),
+            "`ovm {alias}` should reach {product} handling, got: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -270,6 +379,165 @@ fn completions_generates_shell_script() {
         .stdout(predicate::str::contains("_ovm"));
 }
 
+/// `ovm update` is a verb that acts. It must exist, dispatch, and — with an
+/// empty store — say *per product* that there is nothing installed rather than
+/// reporting a clean "up to date".
+#[test]
+fn update_exists_and_reports_per_product_state() {
+    let assert = ovm().arg("update").assert().success();
+    let stdout = console::strip_ansi_codes(&String::from_utf8_lossy(&assert.get_output().stdout))
+        .to_string();
+
+    for product in ["Claude Code", "Codex", "Pi"] {
+        assert!(
+            stdout.contains(product),
+            "`ovm update` must report {product}:\n{stdout}"
+        );
+    }
+    assert_eq!(
+        stdout.matches("not installed").count(),
+        3,
+        "an empty store must be reported, not silently called up to date:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ovm install claude latest"),
+        "the skip must name the command that fixes it:\n{stdout}"
+    );
+    assert!(stdout.contains("0 updated"), "summary missing:\n{stdout}");
+}
+
+/// A single product still dispatches through the same path.
+#[test]
+fn update_accepts_a_single_product() {
+    ovm()
+        .args(["update", "codex"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex").and(predicate::str::contains("not installed")));
+}
+
+/// The setting lives under `ovm update auto …`.
+#[test]
+fn update_auto_configures_the_launch_policy() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    Command::cargo_bin("ovm")
+        .expect("binary built")
+        .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
+        .args(["update", "auto", "codex", "notify"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex auto-update: notify"));
+
+    Command::cargo_bin("ovm")
+        .expect("binary built")
+        .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
+        .args(["update", "auto", "self", "off"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OVM self auto-update: off"));
+
+    let config =
+        std::fs::read_to_string(tmp.path().join(".ovm/config.json")).expect("config written");
+    assert!(config.contains(r#""codex": "notify""#));
+    assert!(config.contains(r#""autoUpdate": "off""#));
+}
+
+/// `autoupdate` is a *hidden alias*, not a removed command: existing scripts,
+/// docs and muscle memory keep working, byte for byte, and land in the same
+/// config as the new spelling.
+#[test]
+fn autoupdate_alias_matches_the_new_update_auto_form() {
+    let old = tempfile::tempdir().expect("tempdir");
+    let new = tempfile::tempdir().expect("tempdir");
+
+    let run = |home: &std::path::Path, args: &[&str]| {
+        let output = Command::cargo_bin("ovm")
+            .expect("binary built")
+            .env("HOME", home)
+            .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8_lossy(&output).to_string()
+    };
+
+    assert_eq!(
+        run(old.path(), &["autoupdate", "notify"]),
+        run(new.path(), &["update", "auto", "notify"]),
+        "the alias must print exactly what the new form prints"
+    );
+    assert_eq!(
+        run(old.path(), &["autoupdate", "codex", "off"]),
+        run(new.path(), &["update", "auto", "codex", "off"]),
+    );
+    assert_eq!(
+        run(old.path(), &["autoupdate", "self", "notify"]),
+        run(new.path(), &["update", "auto", "self", "notify"]),
+    );
+    // `auto-update` (hyphenated) was an alias before and stays one.
+    assert_eq!(
+        run(old.path(), &["auto-update", "claude", "off"]),
+        run(new.path(), &["update", "auto", "claude", "off"]),
+    );
+
+    let old_config =
+        std::fs::read_to_string(old.path().join(".ovm/config.json")).expect("old config");
+    let new_config =
+        std::fs::read_to_string(new.path().join(".ovm/config.json")).expect("new config");
+    assert_eq!(
+        old_config, new_config,
+        "both spellings must write the same config"
+    );
+}
+
+/// Hidden means hidden: `update` is advertised, `autoupdate` is not — but it
+/// still runs.
+#[test]
+fn autoupdate_is_hidden_from_help_but_still_runs() {
+    let output = ovm()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = console::strip_ansi_codes(&String::from_utf8_lossy(&output)).to_string();
+
+    assert!(
+        stdout.contains("update"),
+        "`update` must be advertised:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("autoupdate"),
+        "`autoupdate` must be hidden from help:\n{stdout}"
+    );
+
+    ovm().arg("autoupdate").assert().success();
+}
+
+/// The old setting words are not products. Guessing here would either update
+/// something the user did not ask about or silently do nothing.
+#[test]
+fn update_redirects_setting_words_to_the_auto_form() {
+    ovm()
+        .args(["update", "on"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ovm update auto on"));
+
+    ovm()
+        .args(["update", "codex", "notify"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ovm update auto codex notify"));
+}
+
 #[test]
 fn autoupdate_configures_global_and_product_policy() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -277,6 +545,7 @@ fn autoupdate_configures_global_and_product_policy() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .arg("autoupdate")
         .assert()
         .success()
@@ -285,6 +554,7 @@ fn autoupdate_configures_global_and_product_policy() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .args(["autoupdate", "on"])
         .assert()
         .success()
@@ -293,6 +563,7 @@ fn autoupdate_configures_global_and_product_policy() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .args(["autoupdate", "codex", "off"])
         .assert()
         .success()
@@ -312,6 +583,7 @@ fn autoupdate_status_lists_self_and_supports_self_notify() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .arg("autoupdate")
         .assert()
         .success()
@@ -321,6 +593,7 @@ fn autoupdate_status_lists_self_and_supports_self_notify() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .args(["autoupdate", "self", "notify"])
         .assert()
         .success()
@@ -330,6 +603,7 @@ fn autoupdate_status_lists_self_and_supports_self_notify() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .args(["autoupdate", "claude", "notify"])
         .assert()
         .success()
@@ -351,6 +625,7 @@ fn select_ovm_is_always_a_product_for_a_default_stable_user() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .args(["select", "ovm", "0.0.1"])
         .assert()
         .failure()
@@ -375,6 +650,7 @@ fn select_ovm_direct_works_the_same_on_the_alpha_channel() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .args(["select", "ovm", "0.0.1"])
         .assert()
         .failure()
@@ -408,6 +684,7 @@ fn self_update_cargo_beta_dry_run_pins_prerelease() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_SELF_UPDATE_BETA_VERSION", "0.0.1-beta.1")
         .args([
             "self-update",
@@ -465,6 +742,7 @@ fn cleanup_configures_install_retention() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .arg("cleanup")
         .assert()
         .success()
@@ -473,6 +751,7 @@ fn cleanup_configures_install_retention() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .args(["cleanup", "never"])
         .assert()
         .success()
@@ -507,6 +786,7 @@ fn plugin_command_dispatches_with_args_and_exit_code() {
 
     let mut cmd = Command::cargo_bin("ovm").expect("binary built");
     cmd.env("HOME", tmp.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env(
             "PATH",
             format!(
@@ -549,6 +829,7 @@ fn bundled_plugin_dispatches_via_sibling_when_absent_from_path() {
     let run = || {
         Command::new(&ovm_copy)
             .env("HOME", home.path())
+            .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
             .env("PATH", "/usr/bin:/bin")
             .env_remove("OVM_VERSION")
             .env_remove("OVM_PRODUCT")
@@ -595,4 +876,40 @@ fn ls_remote_flag_hits_registry_or_fallback() {
         .args(["ls", "claude", "--remote"])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
+}
+
+/// `ovm ls codex | head` must not panic.
+///
+/// Rust ignores SIGPIPE, so a closed stdout turned the next `println!` into a
+/// panic: exit 101 and a Rust backtrace at a user who piped into `head` or
+/// quit `less`. It also flipped a CI assertion into its own opposite —
+/// `ovm ls | grep -q` panicked when grep exited on a match, and `pipefail`
+/// reported "adopted version not listed" for a version that was listed.
+#[test]
+fn closing_stdout_early_does_not_panic() {
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("ovm"))
+        .args(["ls", "codex"])
+        .env("HOME", tempfile::tempdir().expect("tempdir").path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ovm");
+
+    // Drop the read end immediately: the next write gets EPIPE.
+    drop(child.stdout.take());
+    let output = child.wait_with_output().expect("wait");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "closing stdout must not panic, got: {stderr}"
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(101),
+        "exit 101 is the Rust panic exit; SIGPIPE should end this quietly"
+    );
 }

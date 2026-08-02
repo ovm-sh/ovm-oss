@@ -31,5 +31,26 @@ names = {t["name"]: t["status"] for t in data["tests"]}
 assert names.get("binary_exists") == "fail", f"binary_exists not fail: {names}"
 for skipped in ("version_output", "help_output", "buddy_command"):
     assert names.get(skipped) == "skip", f"{skipped} not skip: {names}"
+# Tests that did not run are counted, not folded into silence.
+assert data["skipped"] == 3, data
+assert data["failed"] == 1, data
 print("canary-missing-version: ok")
 PY
+
+# A canary where nothing failed but something never ran is NOT a pass. The
+# verdict rule is exposed as `--verdict <passed> <failed> <skipped>` precisely
+# so this can be asserted without a real Claude install.
+check_verdict() {
+    local expected="$1" passed="$2" failed="$3" skipped="$4" actual
+    actual=$(zsh scripts/version-canary-test.sh --verdict "$passed" "$failed" "$skipped")
+    if [ "$actual" != "$expected" ]; then
+        echo "verdict($passed,$failed,$skipped) = $actual, expected $expected" >&2
+        exit 1
+    fi
+}
+
+check_verdict pass 4 0 0
+check_verdict fail 3 1 0
+check_verdict incomplete 3 0 1   # nothing failed, but a test never ran
+check_verdict incomplete 0 0 0   # no evidence at all is not a green canary
+echo "canary-verdict-rule: ok"

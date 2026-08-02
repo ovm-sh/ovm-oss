@@ -178,9 +178,11 @@ pub fn download_tarball(version: &str, dest: &Path) -> Result<()> {
         });
     }
 
-    let total_size = resp.content_length().unwrap_or(0);
+    // Read before the body is consumed: this is both the progress-bar total and
+    // the length the finished download is checked against.
+    let content_length = resp.content_length();
 
-    let pb = ProgressBar::new(total_size);
+    let pb = ProgressBar::new(content_length.unwrap_or(0));
     pb.set_style(
         ProgressStyle::default_bar()
             .template("  {bar:40.cyan/dim} {bytes}/{total_bytes} {msg}")
@@ -196,6 +198,7 @@ pub fn download_tarball(version: &str, dest: &Path) -> Result<()> {
         &mut reader,
         dest,
         tarball.integrity.as_deref(),
+        content_length,
         &tarball_url,
         &pb,
     );
@@ -203,22 +206,32 @@ pub fn download_tarball(version: &str, dest: &Path) -> Result<()> {
     result
 }
 
-/// Stream a tarball to `dest`, hashing as it goes, and verify it against the
-/// registry's SHA-512 SRI metadata when present.
+/// Stream a tarball to `dest`, hashing as it goes, and verify it against every
+/// declaration we hold: the registry's SHA-512 SRI metadata and the declared
+/// body length.
 ///
-/// On any failure — a mid-stream connection drop (the server promised more via
-/// Content-Length then closed) as much as an integrity mismatch — the
-/// half-written tarball is removed so it can never be mistaken for a good
-/// download.
+/// A body that ends early without erroring is otherwise indistinguishable from
+/// a complete one — we would hash whatever arrived and store it. Comparing the
+/// byte count against `content_length` closes that.
+///
+/// Residual, stated rather than papered over: when the response carries no
+/// `Content-Length` AND the registry publishes no sha512 SRI for the version,
+/// a truncated tarball is undetectable here. It surfaces later as a corrupt
+/// archive at extraction, which is a worse message but not a silent install.
+///
+/// On any failure — a mid-stream connection drop, a short body, an integrity
+/// mismatch — the half-written tarball is removed so it can never be mistaken
+/// for a good download.
 fn stream_tarball_to_file(
     reader: &mut impl Read,
     dest: &Path,
     integrity: Option<&str>,
+    content_length: Option<u64>,
     url: &str,
     pb: &ProgressBar,
 ) -> Result<()> {
     let result = (|| -> Result<()> {
-        let mut file = std::fs::File::create(dest)?;
+        let mut file = crate::util::create_new_file(dest)?;
         let mut downloaded: u64 = 0;
         let mut buffer = [0u8; 8192];
         let mut hasher = Sha512::new();
@@ -240,6 +253,8 @@ fn stream_tarball_to_file(
             downloaded += bytes_read as u64;
             pb.set_position(downloaded);
         }
+
+        super::validate_downloaded_size(url, downloaded, content_length, None)?;
 
         if let Some(integrity) = integrity {
             verify_sha512_integrity(integrity, &hasher.finalize())?;
@@ -307,9 +322,9 @@ pub fn npm_install(package_ref: &Path, install_dir: &Path) -> Result<()> {
         "private": true,
         "dependencies": {}
     });
-    std::fs::write(
-        install_dir.join("package.json"),
-        serde_json::to_string_pretty(&pkg_json)?,
+    crate::util::write_new_file(
+        &install_dir.join("package.json"),
+        serde_json::to_string_pretty(&pkg_json)?.as_bytes(),
     )?;
 
     let status = std::process::Command::new(&npm)
@@ -665,6 +680,7 @@ mod tests {
             &mut reader,
             &dest,
             None,
+            None,
             "https://registry.test/claude.tgz",
             &ProgressBar::hidden(),
         )
@@ -693,6 +709,7 @@ mod tests {
             &mut reader,
             &dest,
             Some(&wrong_sri),
+            None,
             "https://registry.test/claude.tgz",
             &ProgressBar::hidden(),
         )
@@ -706,6 +723,57 @@ mod tests {
             !dest.exists(),
             "the version dir must not keep a checksum-failed tarball"
         );
+    }
+
+    /// A body that ends cleanly but short of what the registry declared. The
+    /// old code captured `Content-Length` only to size the progress bar, so a
+    /// truncated tarball was hashed and stored as if whole — the corruption
+    /// only surfaced later as an unreadable archive.
+    #[test]
+    fn a_body_shorter_than_its_declared_length_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("raw").join("claude-code.tgz");
+        std::fs::create_dir_all(dest.parent().unwrap()).expect("parent");
+
+        let bytes = vec![b'x'; 4096];
+        let mut reader = std::io::Cursor::new(bytes);
+
+        let error = stream_tarball_to_file(
+            &mut reader,
+            &dest,
+            None,
+            Some(8192),
+            "https://registry.test/claude.tgz",
+            &ProgressBar::hidden(),
+        )
+        .expect_err("a short body must be refused");
+
+        assert!(error.to_string().contains("incomplete download"), "{error}");
+        assert!(
+            !dest.exists(),
+            "a truncated tarball must not be left on disk"
+        );
+    }
+
+    /// The same check must not refuse a complete download — with or without a
+    /// declared length.
+    #[test]
+    fn a_complete_body_passes_the_declared_length_check() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (name, declared) in [("sized.tgz", Some(4096_u64)), ("unsized.tgz", None)] {
+            let dest = dir.path().join(name);
+            let mut reader = std::io::Cursor::new(vec![b'x'; 4096]);
+            stream_tarball_to_file(
+                &mut reader,
+                &dest,
+                None,
+                declared,
+                "https://registry.test/claude.tgz",
+                &ProgressBar::hidden(),
+            )
+            .expect("a complete download must be accepted");
+            assert_eq!(std::fs::metadata(&dest).expect("stat").len(), 4096);
+        }
     }
 
     #[test]

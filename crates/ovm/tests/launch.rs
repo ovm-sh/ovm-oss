@@ -36,6 +36,7 @@ fn ovm(home: &Path, releases_url: &str) -> Command {
     ensure_test_config(home);
     let mut cmd = Command::cargo_bin("ovm").expect("binary built");
     cmd.env("HOME", home)
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_CODEX_RELEASES_URL", releases_url)
         .env("OVM_REGISTRY_BASE_URL", releases_url)
         .env("OVM_CODEX_NPM_REGISTRY_URL", releases_url)
@@ -105,6 +106,7 @@ fn install_fake_codex(home: &Path, version: &str, script: &str) -> (ServerGuard,
     let asset_name = expected_codex_asset();
     let entry = expected_codex_entry();
     let tarball = make_tarball(entry, script.as_bytes());
+    let asset_size = tarball.len();
 
     server
         .mock("GET", format!("/assets/{asset_name}").as_str())
@@ -114,7 +116,7 @@ fn install_fake_codex(home: &Path, version: &str, script: &str) -> (ServerGuard,
 
     let asset_url = format!("{}/assets/{asset_name}", server.url());
     let release_json = format!(
-        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}"}}]}}"#,
+        r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
     );
     server
         .mock("GET", format!("/tags/{version}").as_str())
@@ -540,6 +542,7 @@ fn use_claude_creates_ovm_owned_local_bin_launcher() {
     Command::cargo_bin("ovm")
         .expect("binary built")
         .env("HOME", hp)
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("NO_COLOR", "1")
         .args(["use", "claude", version])
         .assert()

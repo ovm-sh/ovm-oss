@@ -28,7 +28,28 @@ use std::path::Path;
 use std::path::PathBuf;
 use version_manager::{DevInstallSource, InstallRequest, VersionManager};
 
+/// Restore the default SIGPIPE disposition.
+///
+/// Rust ignores SIGPIPE, so a closed stdout turns the next `println!` into a
+/// panic — `ovm ls codex | head` exits 101 and prints a Rust backtrace at a
+/// user who did something completely ordinary. Every other Unix CLI simply
+/// stops. Restoring the default makes the process die quietly with SIGPIPE
+/// instead.
+///
+/// This also flipped a CI assertion into its own opposite: `ovm ls | grep -q`
+/// panicked when grep exited on a match, and `pipefail` reported "adopted
+/// version not listed" for a version that was very much listed.
+///
+/// Safe: called once, before any threads exist, and `SIG_DFL` for SIGPIPE is
+/// the process state Rust deliberately overrode at startup.
+fn restore_default_sigpipe() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 fn main() {
+    restore_default_sigpipe();
     if let Err(error) = run() {
         abort(error);
     }
@@ -83,12 +104,20 @@ fn run() -> Result<()> {
         return commands::help::run_short();
     }
 
+    // `ovm help` and its topic pages. `ovm help <command>` is left to clap, so
+    // per-command help keeps coming from the one place that defines it.
+    if args.get(1).map(String::as_str) == Some("help") {
+        if args.len() == 2 {
+            commands::help::run()?;
+            return Ok(());
+        }
+        if args.len() == 3 && commands::help::run_topic(&args[2]) {
+            return Ok(());
+        }
+    }
+
     if let Some(command) = args.get(1).map(String::as_str) {
         match command {
-            "help" if args.len() == 2 => {
-                commands::help::run()?;
-                return Ok(());
-            }
             "claude" | "cc" => {
                 commands::claude::run(&args[2..])?;
                 return Ok(());
@@ -165,7 +194,7 @@ fn run() -> Result<()> {
             remote,
             all,
         } => {
-            let vm = VersionManager::new(required_product(&product)?)?;
+            let vm = vm_for(&product)?;
             let scope = if all {
                 commands::list::Scope::All
             } else if remote {
@@ -176,24 +205,22 @@ fn run() -> Result<()> {
             commands::list::run(&vm, scope)
         }
         Commands::Current { product } => match product {
-            Some(p) => commands::current::run(&VersionManager::new(required_product(&p)?)?),
+            Some(p) => commands::current::run(&vm_for(&p)?),
             None => commands::current::run_all(),
         },
         Commands::Which { product } => match product {
-            Some(p) => commands::which::run(&VersionManager::new(required_product(&p)?)?),
+            Some(p) => commands::which::run(&vm_for(&p)?),
             None => commands::which::run_all(),
         },
         Commands::Use { product, version } => {
-            let vm = VersionManager::new(required_product(&product)?)?;
+            let vm = vm_for(&product)?;
             commands::use_version::run(&vm, &version)?;
             commands::use_version::note_pin(&vm);
             Ok(())
         }
-        Commands::Adopt { product, path } => {
-            commands::adopt::run(&VersionManager::new(required_product(&product)?)?, path)
-        }
+        Commands::Adopt { product, path } => commands::adopt::run(&vm_for(&product)?, path),
         Commands::Uninstall { product, version } => {
-            commands::uninstall::run(&VersionManager::new(required_product(&product)?)?, &version)
+            commands::uninstall::run(&vm_for(&product)?, &version)
         }
         Commands::Clean {
             product,
@@ -234,7 +261,7 @@ fn run() -> Result<()> {
             commands::select::run_top(product.as_deref(), version.as_deref())
         }
         Commands::Info { product, version } => {
-            let vm = VersionManager::new(required_product(&product)?)?;
+            let vm = vm_for(&product)?;
             let version = match version {
                 Some(v) => v,
                 None => vm.current_version()?.ok_or(OvmError::NoActiveVersion)?,
@@ -245,6 +272,13 @@ fn run() -> Result<()> {
             commands::completions::run(shell);
             Ok(())
         }
+        Commands::Update {
+            first,
+            second,
+            third,
+        } => commands::update::run(first.as_deref(), second.as_deref(), third.as_deref()),
+        // `autoupdate` is the hidden pre-`ovm update` spelling of
+        // `ovm update auto …`; it stays wired to the same handler.
         Commands::AutoUpdate { first, second } => {
             commands::autoupdate::run(first.as_deref(), second.as_deref())
         }
@@ -272,7 +306,7 @@ fn run() -> Result<()> {
             version,
             fix,
         } => {
-            let vm = VersionManager::new(required_product(&product)?)?;
+            let vm = vm_for(&product)?;
             commands::doctor::run(&vm, version.as_deref(), fix)
         }
     };
@@ -489,6 +523,12 @@ fn required_product(value: &str) -> Result<Product> {
             "Unknown product {value}. Use one of: claude, cc, codex, cx, pi."
         ))
     })
+}
+
+/// Resolve a product argument and open its version manager — what nearly every
+/// product-scoped subcommand does first.
+fn vm_for(value: &str) -> Result<VersionManager> {
+    VersionManager::new(required_product(value)?)
 }
 
 /// Translate clap parse failures into our `OvmError` so they go through the same
@@ -763,7 +803,7 @@ mod tests {
                 assert!(!use_npm);
                 assert_eq!(version, "latest");
             }
-            InstallRequest::Dev { .. } => panic!("expected standard install"),
+            _ => panic!("expected a standard install request"),
         }
     }
 
@@ -813,7 +853,7 @@ mod tests {
                 );
                 assert!(link);
             }
-            InstallRequest::Standard { .. } => panic!("expected dev install"),
+            _ => panic!("expected a dev install request"),
         }
     }
 }

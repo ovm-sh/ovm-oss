@@ -68,8 +68,19 @@ fn release_asset(version: &str) -> String {
     } else {
         "linux"
     };
+    // Upstream renamed the 64-bit ARM token at 7.0.0: <=6.9.0 is arm64,
+    // >=7.0.0 is aarch64. Mirror production rather than pinning one spelling.
+    let major: u32 = version
+        .split('.')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(u32::MAX);
     let arch = if cfg!(target_arch = "aarch64") {
-        "aarch64"
+        if major >= 7 {
+            "aarch64"
+        } else {
+            "arm64"
+        }
     } else {
         "amd64"
     };
@@ -1219,4 +1230,75 @@ fn stale_pidfile_for_a_dead_process_is_cleaned_without_signalling() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("stale pidfile"), "{stderr}");
     assert!(!proxy_dir.join("cliproxyapi.pid").exists());
+}
+
+/// Allocate a pty and return (master, slave path). Used to give a child a real
+/// terminal on stderr while stdin stays a pipe — the shape `echo y | claudex
+/// uninstall --purge` has when run from a terminal.
+#[cfg(unix)]
+fn open_pty() -> (std::fs::File, std::path::PathBuf) {
+    use std::os::fd::FromRawFd;
+
+    // SAFETY: standard POSIX pty setup; each call is checked before the fd is
+    // wrapped, and the fd is owned by the returned File from then on.
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        assert!(master >= 0, "posix_openpt failed");
+        assert_eq!(libc::grantpt(master), 0, "grantpt failed");
+        assert_eq!(libc::unlockpt(master), 0, "unlockpt failed");
+        let name = libc::ptsname(master);
+        assert!(!name.is_null(), "ptsname failed");
+        let slave_path =
+            std::path::PathBuf::from(std::ffi::CStr::from_ptr(name).to_str().expect("pty name"));
+        (std::fs::File::from_raw_fd(master), slave_path)
+    }
+}
+
+/// `--purge` deletes the Codex OAuth grant and every claudex session. A piped
+/// `y` is not consent: stdin must be a terminal too, or the answer could come
+/// from a script that never intended to purge. Guards against checking only
+/// stderr, which is a tty whenever the command runs from a terminal.
+#[test]
+#[cfg(unix)]
+fn purge_refuses_a_piped_yes_even_from_a_terminal() {
+    use std::process::Stdio;
+
+    let temp = tempfile::tempdir().unwrap();
+    seeded_home(temp.path(), 8317);
+    let grant = temp.path().join("proxy/auth/e2e-grant.json");
+    assert!(grant.is_file(), "fixture must seed a grant to protect");
+
+    let (_master, slave_path) = open_pty();
+    let terminal_stderr = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
+
+    let mut command = std::process::Command::cargo_bin("ovm-claudex").unwrap();
+    let mut child = command
+        .args(["uninstall", "--purge"])
+        .env("OVM_CLAUDEX_HOME", temp.path())
+        // Keep shim removal inside the sandbox: it resolves ~/.local/bin.
+        .env("HOME", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(terminal_stderr))
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"y\n").unwrap();
+    let status = child.wait().unwrap();
+
+    assert!(
+        !status.success(),
+        "a piped `y` must never be accepted as purge consent"
+    );
+    assert!(
+        grant.is_file(),
+        "the Codex OAuth grant was deleted without interactive consent"
+    );
+    assert!(
+        temp.path().join("config.json").is_file(),
+        "claudex data was purged without interactive consent"
+    );
 }

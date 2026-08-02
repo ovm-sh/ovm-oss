@@ -44,8 +44,8 @@ pub struct Migration {
 
 // CODEX_STATE_MIGRATIONS_BEGIN
 // Codex `state` migrator — generated from openai/codex codex-rs/state/migrations
-// at rust-v0.145.0 (regenerate with scripts/gen-codex-migration-manifest.py).
-// source commit: 25af12f7e61572b0bc18ddb1008be543b91519b0
+// at rust-v0.146.0 (regenerate with scripts/gen-codex-migration-manifest.py).
+// source commit: e363b08c9175ac1cbe5893615dd2cb9ddf95043b
 // Keep in version
 // order; `breaking` flags removals only.
 #[rustfmt::skip]
@@ -92,6 +92,8 @@ const CODEX_STATE_MIGRATIONS: &[Migration] = &[
     Migration { version: 40, description: "threads history mode", breaking: false },
     Migration { version: 41, description: "threads name", breaking: false },
     Migration { version: 42, description: "drop agent jobs", breaking: true }, // removes agent_job_items, agent_jobs
+    Migration { version: 43, description: "threads is pinned", breaking: false },
+    Migration { version: 44, description: "external agent config imports provider id", breaking: false },
 ];
 // CODEX_STATE_MIGRATIONS_END
 
@@ -625,16 +627,26 @@ mod tests {
     #[test]
     fn unknown_migration_reports_database_and_guard_bounds() {
         let dir = tempdir().expect("tempdir");
-        state_db(dir.path(), &[(43, "future migration", true)]);
+        let future = guard_max() + 1;
+        state_db(dir.path(), &[(future, "future migration", true)]);
         let binary = write(dir.path(), "codex", &["future migration"]);
 
         let AssessmentOutcome::Indeterminate(indeterminate) = assess_in_dir(&binary, dir.path())
         else {
             panic!("expected indeterminate outcome");
         };
+        // This exact sentence is what tells an operator the guard is stale
+        // rather than the release being suspect. Codex rust-v0.146.0 was
+        // withheld for two months' worth of migrations past this ceiling, and
+        // the reason never reached anyone because the caller printed only the
+        // word "indeterminate".
         assert_eq!(
             indeterminate.reason,
-            "state DB is at migration 43, guard knows through 42; first unknown migration is 43"
+            format!(
+                "state DB is at migration {future}, guard knows through {}; \
+                 first unknown migration is {future}",
+                guard_max()
+            )
         );
     }
 
@@ -649,6 +661,17 @@ mod tests {
         ));
     }
 
+    /// The newest migration the guard knows. Derived, never hardcoded: a
+    /// manifest sync moves this, and a test that pins the old number fails for
+    /// the wrong reason and teaches you to edit the number instead of asking
+    /// why the ceiling moved.
+    fn guard_max() -> u32 {
+        CODEX_STATE_MIGRATIONS
+            .last()
+            .expect("manifest is non-empty")
+            .version
+    }
+
     #[test]
     fn in_sync_binary_is_not_degraded() {
         let all: Vec<&str> = CODEX_STATE_MIGRATIONS
@@ -658,11 +681,11 @@ mod tests {
         let a = assess_blobs(&all, &all);
         assert!(!a.degraded());
         assert!(a.ahead.is_empty());
-        assert_eq!(a.db_max_applied, 42);
+        assert_eq!(a.db_max_applied, guard_max());
     }
 
     #[test]
-    fn codex_0145_migrations_are_backfilled() {
+    fn recent_migrations_are_backfilled() {
         let tail = CODEX_STATE_MIGRATIONS
             .iter()
             .filter(|migration| migration.version >= 40)
@@ -675,6 +698,8 @@ mod tests {
                 (40, "threads history mode", false),
                 (41, "threads name", false),
                 (42, "drop agent jobs", true),
+                (43, "threads is pinned", false),
+                (44, "external agent config imports provider id", false),
             ]
         );
     }
@@ -695,7 +720,7 @@ mod tests {
         let breaking: Vec<u32> = a.breaking().map(|m| m.version).collect();
         assert_eq!(breaking, vec![35, 42]);
         assert_eq!(a.binary_max_known, 34);
-        assert_eq!(a.db_max_applied, 42);
+        assert_eq!(a.db_max_applied, guard_max());
     }
 
     #[test]
@@ -730,8 +755,8 @@ mod tests {
         let a = assess_blobs(&applied, &known);
         assert!(a.degraded(), "migration 42 drops the agent-job tables");
         assert_eq!(a.binary_max_known, 35);
-        assert_eq!(a.db_max_applied, 42);
-        assert_eq!(a.additive().count(), 6); // 36–41
+        assert_eq!(a.db_max_applied, guard_max());
+        assert_eq!(a.additive().count(), 8); // 36–41, 43, 44
         assert_eq!(
             a.breaking().map(|m| m.version).collect::<Vec<_>>(),
             vec![42]

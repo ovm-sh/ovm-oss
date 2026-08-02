@@ -93,6 +93,48 @@ def render_manifest(files: list[str], source_ref: str, source_commit: Optional[s
     return "\n".join(lines) + "\n"
 
 
+MIGRATION_ENTRY = re.compile(
+    r"Migration \{ version: (\d+), description: \"((?:[^\"\\]|\\.)*)\", breaking: (true|false) \}"
+)
+
+
+def parse_manifest_entries(text: str) -> dict:
+    """Every `Migration { ... }` between the markers, keyed by version."""
+    if BEGIN_MARKER not in text or END_MARKER not in text:
+        return {}
+    block = text.split(BEGIN_MARKER, 1)[1].split(END_MARKER, 1)[0]
+    return {
+        int(version): (description, breaking == "true")
+        for version, description, breaking in MIGRATION_ENTRY.findall(block)
+    }
+
+
+def assert_monotonic(current_text: str, generated: str) -> None:
+    """Refuse to forget or rewrite a migration the guard already knows.
+
+    Generation replaces the whole manifest from whatever upstream ships at one
+    tag. If a later tag were to drop or reword a historical migration file, a
+    plain overwrite would silently discard known coverage — most dangerously a
+    `breaking` entry, whose absence turns a real downgrade hazard into a clean
+    "compatible" verdict. The manifest may only ever grow.
+    """
+    old = parse_manifest_entries(current_text)
+    new = parse_manifest_entries(BEGIN_MARKER + "\n" + generated + END_MARKER)
+    if not old:
+        return
+    missing = sorted(set(old) - set(new))
+    if missing:
+        raise ValueError(
+            "refusing to drop known migration(s) "
+            + ", ".join(f"{v} ({old[v][0]!r})" for v in missing)
+            + "; the manifest may only grow"
+        )
+    changed = sorted(v for v in old if v in new and old[v] != new[v])
+    if changed:
+        detail = "; ".join(f"{v}: {old[v]} -> {new[v]}" for v in changed)
+        raise ValueError(f"refusing to rewrite known migration(s) {detail}")
+
+
 def replace_manifest(target_text: str, generated: str) -> str:
     if target_text.count(BEGIN_MARKER) != 1 or target_text.count(END_MARKER) != 1:
         raise ValueError("target must contain exactly one migration manifest marker pair")
@@ -134,6 +176,7 @@ def main() -> int:
     try:
         with open(target, encoding="utf-8") as target_file:
             current = target_file.read()
+        assert_monotonic(current, generated)
         updated = replace_manifest(current, generated)
     except (OSError, ValueError) as error:
         print(f"cannot update {target}: {error}", file=sys.stderr)

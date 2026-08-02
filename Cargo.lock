@@ -1076,7 +1076,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "ovm"
-version = "0.0.3-alpha.7"
+version = "0.0.3-alpha.8"
 dependencies = [
  "assert_cmd",
  "base64",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-claudex"
-version = "0.0.3-alpha.7"
+version = "0.0.3-alpha.8"
 dependencies = [
  "assert_cmd",
  "console 0.16.3",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-codex-skew"
-version = "0.0.3-alpha.7"
+version = "0.0.3-alpha.8"
 dependencies = [
  "console 0.15.11",
  "dirs",

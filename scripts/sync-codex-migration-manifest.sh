@@ -19,7 +19,7 @@ git clone --quiet --depth 1 --branch "$TAG" "$SOURCE_URL" "$TMP_DIR/codex"
 
 actual_commit=$(git -C "$TMP_DIR/codex" rev-parse HEAD)
 remote_refs=$(git ls-remote "$SOURCE_URL" "refs/tags/$TAG" "refs/tags/$TAG^{}")
-expected_commit=$(printf '%s\n' "$remote_refs" | awk '/\^\{\}$/ { print $1; exit }')
+expected_commit=$(awk '/\^\{\}$/ { print $1; exit }' <<<"$remote_refs")
 if [[ -z "$expected_commit" ]]; then
   expected_commit=$(printf '%s\n' "$remote_refs" | awk 'NR == 1 { print $1 }')
 fi

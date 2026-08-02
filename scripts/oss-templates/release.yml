@@ -80,7 +80,11 @@ jobs:
             echo "invalid private build commit: $PRIVATE_COMMIT" >&2
             exit 1
           }
-          crate_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/ovm/Cargo.toml | head -1)
+          # `shell: bash` runs with -o pipefail, so `| head -1` would fail this
+          # assignment the moment sed has a second line to write. Take the first
+          # line in the shell instead.
+          crate_versions=$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/ovm/Cargo.toml)
+          crate_version=${crate_versions%%$'\n'*}
           [[ "$tag" == "v$crate_version" ]] || {
             echo "tag $tag does not match crate version $crate_version" >&2
             exit 1
@@ -653,3 +657,35 @@ jobs:
           else
             echo "Release $RELEASE_TAG was already published; fully re-verified in the requested final state."
           fi
+
+  verify-public-install:
+    # The release is live at this point, so prove a person can actually use it.
+    # Every other check here confirms the ASSETS exist; none of them installs.
+    # That gap is exactly how a release shipped whose installer left users with
+    # "command not found" — the artifacts were perfect and unusable.
+    #
+    # This must live on THIS workflow, not the private one: this is the pipeline
+    # that publishes what users install.
+    needs: [metadata, finalize]
+    if: needs.metadata.outputs.stage == 'finalize'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install from the public URL and use it as a new user would
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          OVM_ACCEPTANCE_REMOTE=1 \
+          OVM_ACCEPTANCE_PUBLISHED="${RELEASE_TAG#v}" \
+            bash tests/scripts/first-run-acceptance.sh

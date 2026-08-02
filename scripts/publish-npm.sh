@@ -57,6 +57,48 @@ validate_platform_bundle() {
     return 1
 }
 
+PLATFORMS="darwin-arm64 darwin-x64 linux-x64 linux-arm64"
+ARTIFACT_DIR="${OVM_NPM_ARTIFACT_DIR:-artifacts}"
+
+target_for_platform() {
+    case "$1" in
+        darwin-arm64) echo "aarch64-apple-darwin" ;;
+        darwin-x64) echo "x86_64-apple-darwin" ;;
+        linux-x64) echo "x86_64-unknown-linux-gnu" ;;
+        linux-arm64) echo "aarch64-unknown-linux-gnu" ;;
+        *)
+            echo "Unknown platform: $1" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Every platform package must exist before anything is published. The loop
+# below used to print "Skipping <platform> (no artifact)" and carry on — and
+# the root package is still published with that platform in its
+# optionalDependencies, so users on it get an install failure while the release
+# reports success. A missing artifact is a broken release, not a skipped step.
+require_all_artifacts() {
+    missing=""
+    for platform in $PLATFORMS; do
+        target=$(target_for_platform "$platform")
+        if [ ! -f "$ARTIFACT_DIR/ovm-${target}/ovm-${target}.tar.gz" ]; then
+            missing="$missing $platform"
+        fi
+    done
+    if [ -n "$missing" ]; then
+        echo "ERROR: no build artifact for:$missing" >&2
+        echo "       Publishing would ship a root package whose optionalDependencies" >&2
+        echo "       name packages that do not exist. Refusing to publish." >&2
+        return 1
+    fi
+    return 0
+}
+
+if [ -n "${OVM_NPM_PREFLIGHT_ONLY:-}" ]; then
+    require_all_artifacts
+    exit $?
+fi
 if [ -n "${OVM_NPM_CLEAN_DIR:-}" ]; then
     clean_platform_bundle "$OVM_NPM_CLEAN_DIR"
     exit 0
@@ -72,12 +114,15 @@ if [ -n "${OVM_NPM_VALIDATE_ARCHIVE:-}" ]; then
     exit $?
 fi
 
-VERSION=$(cargo metadata --no-deps --format-version=1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+# pipefail-safe: /bin/sh with `set -e` only. `head -1` does cut grep off (its
+# status is 141), but without pipefail the assignment takes cut's status, so the
+# version still lands. Rewrite this line before adding `set -o pipefail`.
+VERSION=$(cargo metadata --no-deps --format-version=1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4) # pipefail-safe: see the note above
 NPM_TAG="${NPM_TAG:-latest}"
 echo "Publishing OVM v${VERSION} to npm with dist-tag '${NPM_TAG}'..."
 
-PLATFORMS="darwin-arm64 darwin-x64 linux-x64 linux-arm64"
 scripts/bundle-manifest.sh validate "$BUNDLE_MANIFEST"
+require_all_artifacts
 
 # Attach npm provenance in CI (requires the Actions OIDC token, so it is
 # skipped for local runs).
@@ -89,29 +134,11 @@ publish_pkg() {
     fi
 }
 
-target_for_platform() {
-    case "$1" in
-        darwin-arm64) echo "aarch64-apple-darwin" ;;
-        darwin-x64) echo "x86_64-apple-darwin" ;;
-        linux-x64) echo "x86_64-unknown-linux-gnu" ;;
-        linux-arm64) echo "aarch64-unknown-linux-gnu" ;;
-        *)
-            echo "Unknown platform: $1" >&2
-            exit 1
-            ;;
-    esac
-}
-
 # Publish platform packages first
 for platform in $PLATFORMS; do
     pkg_dir="npm/ovm-${platform}"
     target=$(target_for_platform "$platform")
-    artifact="artifacts/ovm-${target}/ovm-${target}.tar.gz"
-
-    if [ ! -f "$artifact" ]; then
-        echo "  Skipping $platform (no artifact at $artifact)"
-        continue
-    fi
+    artifact="$ARTIFACT_DIR/ovm-${target}/ovm-${target}.tar.gz"
 
     if ! validate_archive_entries "$artifact" "$BUNDLE_MANIFEST"; then
         echo "ERROR: $artifact contents differ from its bundle manifest" >&2

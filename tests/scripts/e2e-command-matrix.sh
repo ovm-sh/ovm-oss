@@ -17,7 +17,18 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+cleanup() {
+  # Every ovm invocation may leave a detached background-refresh child behind,
+  # and that child writes into $HOME/.ovm. If one lands mid-delete, `rm -rf`
+  # reports "Directory not empty" and, as the trap's last command under
+  # `set -e`, turns an already-passing run red. Retry once, then give up
+  # quietly: a leftover temp directory is not a test result.
+  rm -rf "$TMP" 2>/dev/null && return 0
+  sleep 1
+  rm -rf "$TMP" 2>/dev/null || true
+  return 0
+}
+trap cleanup EXIT
 
 fail() { echo "E2E FAIL: $*" >&2; exit 1; }
 pass() { echo "  ✓ $*"; }
@@ -38,6 +49,19 @@ fail_with_log() {
 # OVM-level rejection strings — if any appears, dispatch fell through to the
 # top-level ovm CLI instead of reaching the intended command/plugin.
 OVM_LEVEL='unexpected argument|unrecognized subcommand|open version manager'
+
+# Every assertion below CAPTURES output first and matches the captured string
+# (`grep … <<<"$out"`). Never `some_command | grep -q …` here.
+#
+# Why: this file runs under `set -o pipefail`. `grep -q` exits the instant it
+# matches, which closes the pipe while the producer is still writing. Rust
+# ignores SIGPIPE, so ovm's next `println!` fails with EPIPE and panics — exit
+# 101 — and pipefail then reports the whole pipeline as failed. The assertion
+# fails BECAUSE it matched, and reports "not found". That is exactly how
+# `ovm ls codex | grep -q rust-v0.144.0` produced "adopted version not listed"
+# on ubuntu CI (2026-08-01) while the version was listed and matched; the race
+# is won or lost on scheduling, so the same commit passed and failed.
+# A here-string has no producer process, so there is nothing to kill.
 
 # When OVM_E2E_BUNDLE_DIR points at an extracted release bundle (the manifest
 # plus its prebuilt ovm/ovm-* binaries), consume those binaries directly and
@@ -65,8 +89,21 @@ fi
 # never touched or read.
 export HOME="$TMP/home"
 mkdir -p "$HOME"
-export PATH="$HOME/.ovm/bin:$PATH"
+# Deliberately NOT adding ~/.ovm/bin to PATH yet. Every test here used to do
+# that on line one — quietly performing the step the installer was supposed to
+# perform, and then verifying the result. That is how we shipped an installer
+# that left `ovm: command not found` for a real user: the suite handed itself
+# the missing piece and confirmed the piece it handed itself. The installer is
+# now made to prove it wires PATH on its own, below, before we touch PATH here.
+# Strip any ovm bin directory the maintainer already has, or the "fresh" shell
+# below would resolve THEIR installed ovm and pass regardless of what the
+# installer under test did.
+CLEAN_PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '\.ovm/bin$' | paste -sd: -)
 unset OVM_INSTALL_DIR OVM_SELF_MANAGED_CHILD 2>/dev/null || true
+# This matrix asserts command dispatch, so the background refresh adds nothing
+# but a detached child that touches the network and races teardown. Suppress it
+# at the source rather than tolerating the race downstream.
+export OVM_BACKGROUND_REFRESH=suppressed
 
 if [ -n "$BUNDLE_DIR" ]; then
   echo "→ installing a prebuilt bundle into an isolated HOME"
@@ -77,19 +114,31 @@ if [ -n "$BUNDLE_DIR" ]; then
   OVM_LOCAL_ARTIFACT_DIR="$BUNDLE_DIR" \
   OVM_LOCAL_MANIFEST="$BUNDLE_MANIFEST" \
   OVM_LOCAL_VERSION="${OVM_E2E_BUNDLE_VERSION:-e2e-prebuilt}" \
+  SHELL=/bin/bash \
     sh "$ROOT/install.sh" >"$install_log" 2>&1 \
     || fail_with_log "install prebuilt bundle into isolated HOME" "$install_log"
+  # The whole point: a user who runs the documented one-liner and opens a new
+  # terminal must be able to type `ovm`. This shell is NOT given PATH by us.
+  echo "→ the installer makes ovm findable without help from this test"
+  env PATH="$CLEAN_PATH" bash -lc 'command -v ovm >/dev/null 2>&1' \
+    || fail_with_log "install.sh left ovm off PATH for a fresh login shell" "$install_log"
+  pass "fresh login shell resolves ovm"
 else
   echo "→ installing a real snapshot into an isolated HOME"
   install_log="$TMP/dev-install.log"
   OVM_REFRESH_CONTROL=1 "$ROOT/scripts/dev-install.sh" >"$install_log" 2>&1 \
     || fail_with_log "dev-install.sh into isolated HOME" "$install_log"
 fi
+# The installer's own PATH wiring is proven above for the real-installer path.
+# The dev-install path is a developer flow that does not run install.sh, so put
+# the bin dir on PATH here for the remaining dispatch assertions.
+export PATH="$HOME/.ovm/bin:$PATH"
 command -v ovm >/dev/null || fail "ovm not on PATH after install ($HOME/.ovm/bin)"
 
 # ---------------------------------------------------------------------------
 echo "→ core self-management"
-ovm --version 2>&1 | grep -qiE '^ovm [0-9]' || fail "ovm --version"
+version_out=$(ovm --version 2>&1) || fail "ovm --version exited non-zero. Got: $version_out"
+grep -qiE '^ovm [0-9]' <<<"$version_out" || fail "ovm --version. Got: $version_out"
 pass "ovm --version"
 current=$(ovm self current 2>&1) || fail "ovm self current failed"
 [ -n "$current" ] || fail "ovm self current empty"
@@ -105,9 +154,9 @@ echo "→ claudex launch shims dispatch to the plugin (the ccxy regression class
 # network) — a clean positive check that dispatch traversed the full chain.
 for alias in ccx ccxy; do
   out=$(ovm "$alias" help 2>&1) || true
-  echo "$out" | grep -qi 'claudex' \
+  grep -qi 'claudex' <<<"$out" \
     || fail "ovm $alias help did not reach claudex plugin. Got: $out"
-  echo "$out" | grep -qiE "$OVM_LEVEL" \
+  grep -qiE "$OVM_LEVEL" <<<"$out" \
     && fail "ovm $alias fell through to the ovm CLI parser. Got: $out"
   pass "ovm $alias → claudex"
 done
@@ -123,7 +172,7 @@ done
 printf '#!/bin/sh\nexec ovm ccxy "$@"\n' > "$TMP/ccxy"
 chmod +x "$TMP/ccxy"
 bare_out=$("$TMP/ccxy" help 2>&1) || true
-echo "$bare_out" | grep -qi 'claudex' \
+grep -qi 'claudex' <<<"$bare_out" \
   || fail "bare ccxy shim did not reach claudex. resolved ovm: $(command -v ovm). output: $bare_out"
 pass "bare ccxy shim → claudex"
 
@@ -133,7 +182,7 @@ echo "→ claudex session hook survives the self-managed child marker"
 # marker; it must dispatch to the plugin, not error at the ovm CLI.
 hook_out=$(printf '{"session_id":"e2e","source":"startup"}' \
   | OVM_SELF_MANAGED_CHILD=1 ovm claudex __session-start 2>&1) || fail "session hook exited non-zero"
-echo "$hook_out" | grep -qiE "$OVM_LEVEL" \
+grep -qiE "$OVM_LEVEL" <<<"$hook_out" \
   && fail "claudex __session-start fell through to the ovm CLI. Got: $hook_out"
 pass "ovm claudex __session-start (marker set)"
 
@@ -159,12 +208,19 @@ printf '#!/bin/sh\necho "codex-cli 0.144.0 (rust-v0.144.0)"\n' > "$TMP/foreign-c
 chmod +x "$TMP/foreign-codex"
 
 adopt_out=$(ovm adopt codex "$TMP/foreign-codex" 2>&1) || fail "ovm adopt codex. Got: $adopt_out"
-echo "$adopt_out" | grep -qiE "$OVM_LEVEL" \
+grep -qiE "$OVM_LEVEL" <<<"$adopt_out" \
   && fail "ovm adopt fell through to the ovm CLI parser. Got: $adopt_out"
 [ -x "$TMP/foreign-codex" ] || fail "adopt deleted the original foreign binary"
-ovm ls codex 2>&1 | grep -q "$ADOPT_TAG" || fail "adopted version not listed by ovm ls codex"
-ovm which codex 2>&1 | grep -q "$ADOPT_TAG" || fail "adopted codex not resolvable via ovm which"
-ovm current codex 2>&1 | grep -q "$ADOPT_TAG" || fail "adopted codex not active via ovm current"
+
+ls_out=$(ovm ls codex 2>&1) || fail "ovm ls codex exited non-zero. Got: $ls_out"
+grep -Fq "$ADOPT_TAG" <<<"$ls_out" \
+  || fail "adopted version not listed by ovm ls codex. Got: $ls_out"
+which_out=$(ovm which codex 2>&1) || fail "ovm which codex exited non-zero. Got: $which_out"
+grep -Fq "$ADOPT_TAG" <<<"$which_out" \
+  || fail "adopted codex not resolvable via ovm which. Got: $which_out"
+current_out=$(ovm current codex 2>&1) || fail "ovm current codex exited non-zero. Got: $current_out"
+grep -Fq "$ADOPT_TAG" <<<"$current_out" \
+  || fail "adopted codex not active via ovm current. Got: $current_out"
 pass "ovm adopt codex (original preserved, listed + usable)"
 
 echo "e2e-command-matrix: ok"

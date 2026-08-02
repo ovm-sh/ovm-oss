@@ -68,6 +68,7 @@ fn registry_latest_version() -> Option<String> {
         .user_agent(concat!("ovm-claudex/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
+        .redirect(registry_redirect_policy())
         .build()
         .ok()?;
     let value: serde_json::Value = client
@@ -87,6 +88,59 @@ fn registry_latest_version() -> Option<String> {
         .as_str()?;
     let normalized = normalize_version(latest);
     validate_version(&normalized).ok()
+}
+
+/// Redirect rule for the OVM registry fetch: HTTPS only, and never off the host
+/// we asked.
+///
+/// Deliberately NOT [`redirect_policy`], which allowlists GitHub's release-asset
+/// hosts — pointing that at ovm.sh would let a registry response bounce the
+/// fetch onto github.com and answer as the registry. This mirrors the semantics
+/// of ovm core's `https_only_redirect_policy` (see
+/// `crates/ovm/src/sources/registry.rs`), which the core registry client uses
+/// for the same fetch: metadata must not cross hosts on redirect, because a
+/// compromised or misconfigured host could otherwise hand us a forged `latest`.
+fn registry_redirect_permitted(
+    previous_host: Option<&str>,
+    url: &reqwest::Url,
+) -> std::result::Result<(), String> {
+    if url.scheme() != "https" {
+        return Err(format!(
+            "refusing to follow a non-HTTPS registry redirect (scheme `{}`)",
+            url.scheme()
+        ));
+    }
+    let same_host = previous_host
+        .zip(url.host_str())
+        .is_some_and(|(previous, next)| {
+            previous
+                .trim_end_matches('.')
+                .eq_ignore_ascii_case(next.trim_end_matches('.'))
+        });
+    if !same_host {
+        return Err(format!(
+            "refusing to follow a cross-host registry redirect (to `{}`)",
+            url.host_str().unwrap_or("<no host>")
+        ));
+    }
+    Ok(())
+}
+
+fn registry_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("too many redirects");
+        }
+        let previous = attempt
+            .previous()
+            .last()
+            .and_then(reqwest::Url::host_str)
+            .map(str::to_owned);
+        match registry_redirect_permitted(previous.as_deref(), attempt.url()) {
+            Ok(()) => attempt.follow(),
+            Err(message) => attempt.error(message),
+        }
+    })
 }
 
 fn github_download_base() -> Result<String> {
@@ -527,8 +581,30 @@ pub fn install(dirs: &ClaudexDirs, version: &str) -> Result<PathBuf> {
     let checksums = String::from_utf8(checksums).map_err(|error| {
         ClaudexError::Message(format!("checksums download is not valid UTF-8: {error}"))
     })?;
-    let expected = checksum_for(&checksums, &asset)
-        .ok_or_else(|| ClaudexError::Message(format!("checksums.txt has no entry for {asset}")))?;
+    let expected = match checksum_for(&checksums, &asset) {
+        ChecksumEntry::Digest(digest) => digest,
+        ChecksumEntry::NotListed => {
+            return Err(ClaudexError::Message(format!(
+                "checksums.txt has no entry for {asset}"
+            )))
+        }
+        // Not "the digest disagrees" — we never got a digest. Saying so keeps
+        // an unreadable manifest from reading as a tampered archive.
+        ChecksumEntry::NotAManifest => {
+            return Err(ClaudexError::Message(format!(
+                "the checksums.txt served for cliproxyapi {version} contains no sha256 digest \
+                 lines (truncated, or not a manifest) — refusing to install {asset}"
+            )))
+        }
+        // Neither digest may be acted on: the manifest contradicts itself
+        // about this asset, so it cannot say what the archive should be.
+        ChecksumEntry::Conflicting(first, second) => {
+            return Err(ClaudexError::Message(format!(
+                "the checksums.txt served for cliproxyapi {version} records two different digests \
+                 for {asset} ({first} and {second}) — refusing to install"
+            )))
+        }
+    };
     let actual = hex(&sha2::Sha256::digest(&archive));
     if actual != expected {
         return Err(ClaudexError::Message(format!(
@@ -636,21 +712,109 @@ fn platform_asset(version: &str) -> Option<String> {
         _ => return None,
     };
     let arch = match std::env::consts::ARCH {
-        "aarch64" => "aarch64",
+        // Upstream RENAMED the 64-bit ARM asset at 7.0.0: releases up to and
+        // including 6.9.0 ship `arm64`, 7.0.0 and later ship `aarch64`. Pinning
+        // either spelling alone 404s half the catalogue — and the download error
+        // then reads as the release being broken rather than us asking for a
+        // name that was never published.
+        "aarch64" => arm64_asset_token(version),
         "x86_64" => "amd64",
         _ => return None,
     };
     Some(format!("CLIProxyAPI_{version}_{os}_{arch}.tar.gz"))
 }
 
+/// The 64-bit ARM token upstream published for this version.
+///
+/// CLIProxyAPI switched from goreleaser's `arm64` to `aarch64` at 7.0.0.
+/// Anything unparseable is treated as new, since releases only move forward.
+fn arm64_asset_token(version: &str) -> &'static str {
+    let major: u32 = version
+        .split('.')
+        .next()
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(u32::MAX);
+    if major >= 7 {
+        "aarch64"
+    } else {
+        "arm64"
+    }
+}
+
+/// What a fetched `checksums.txt` says about one asset.
+///
+/// Three states, because two cannot hold them. With `Option<String>`, a body
+/// that is not a manifest at all — a truncated transfer, a proxy error page
+/// served with a 200 (a genuine 5xx is already refused by `error_for_status`) —
+/// arrived as the same `None` as "this manifest simply lists other assets".
+/// Worse, the old parser accepted *any* first token as a digest, so
+/// `<html>  CLIProxyAPI_….tar.gz` would have been compared as a checksum and
+/// reported as a mismatch: our own blindness rendered as a tampering verdict.
+#[derive(Debug, PartialEq, Eq)]
+enum ChecksumEntry {
+    /// A well-formed `<64 hex>  <name>` line for this asset.
+    Digest(String),
+    /// The body is a digest manifest, and it lists no line for this asset.
+    NotListed,
+    /// The body holds no well-formed digest line at all, so it is not a
+    /// manifest we understood. Must never be treated as a checksum.
+    NotAManifest,
+    /// Two well-formed lines record *different* digests for this asset. The
+    /// manifest cannot be used for it: taking the first would let one appended
+    /// line decide which digest the archive is held to.
+    Conflicting(String, String),
+}
+
+fn is_sha256_hex(token: &str) -> bool {
+    token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Split a manifest line into `(digest-token, asset-name)`, stripping the `*`
+/// that `sha256sum`'s binary mode prefixes the name with.
+fn digest_line(line: &str) -> Option<(&str, &str)> {
+    let mut parts = line.split_whitespace();
+    let digest = parts.next()?;
+    let name = parts.next()?.trim_start_matches('*');
+    Some((digest, name))
+}
+
 /// goreleaser checksums.txt: `<sha256-hex>  <asset-name>` per line.
-fn checksum_for(checksums: &str, asset: &str) -> Option<String> {
-    checksums.lines().find_map(|line| {
-        let mut parts = line.split_whitespace();
-        let hash = parts.next()?;
-        let name = parts.next()?;
-        (name == asset).then(|| hash.to_ascii_lowercase())
-    })
+///
+/// The digest shape is checked, not assumed, and duplicate lines are read to
+/// the end rather than stopping at the first match — mirroring the `SHA256SUMS`
+/// parsing in ovm core's Pi source. Duplicates that agree collapse into one
+/// digest (the same statement twice); duplicates that disagree make the
+/// manifest unusable for this asset.
+fn checksum_for(checksums: &str, asset: &str) -> ChecksumEntry {
+    let mut any_digest_line = false;
+    let mut ours: Option<String> = None;
+
+    for line in checksums.lines() {
+        let Some((digest, name)) = digest_line(line) else {
+            continue;
+        };
+        if !is_sha256_hex(digest) {
+            continue;
+        }
+        any_digest_line = true;
+        if name != asset {
+            continue;
+        }
+        let digest = digest.to_ascii_lowercase();
+        match &ours {
+            Some(first) if *first != digest => {
+                return ChecksumEntry::Conflicting(first.clone(), digest);
+            }
+            Some(_) => {}
+            None => ours = Some(digest),
+        }
+    }
+
+    match ours {
+        Some(digest) => ChecksumEntry::Digest(digest),
+        None if any_digest_line => ChecksumEntry::NotListed,
+        None => ChecksumEntry::NotAManifest,
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -725,18 +889,154 @@ mod tests {
         assert!(asset.starts_with("CLIProxyAPI_7.2.72_"));
         assert!(asset.ends_with(".tar.gz"));
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        // 7.x uses aarch64; see arm64_asset_token_follows_the_upstream_rename_at_7_0_0.
         assert_eq!(asset, "CLIProxyAPI_7.2.72_darwin_aarch64.tar.gz");
+    }
+
+    /// The asset name must match what upstream actually publishes, at the
+    /// version being installed.
+    ///
+    /// Two separate traps here. The original test asserted our own spelling
+    /// back to us, so a wrong name passed review and CI. Then I "fixed" it to
+    /// `arm64` after checking only 5.x and 6.x releases — which broke every
+    /// current release, because upstream renamed the token to `aarch64` at
+    /// 7.0.0. Pin both sides of that boundary against real published names.
+    #[test]
+    fn arm64_asset_token_follows_the_upstream_rename_at_7_0_0() {
+        // Verified against real releases: 6.9.0 and 6.6.44 publish `arm64`,
+        // 7.0.0, 7.2.72 and 7.2.113 publish `aarch64`.
+        for version in ["5.0.0", "6.6.44", "6.9.0"] {
+            assert_eq!(arm64_asset_token(version), "arm64", "{version}");
+        }
+        for version in ["7.0.0", "7.2.72", "7.2.113", "8.0.0"] {
+            assert_eq!(arm64_asset_token(version), "aarch64", "{version}");
+        }
+        // Releases only move forward, so an unreadable version is treated as
+        // new rather than silently falling back to the retired spelling.
+        assert_eq!(arm64_asset_token("not-a-version"), "aarch64");
+    }
+
+    #[test]
+    fn asset_names_use_a_published_arch_token() {
+        for version in ["6.6.44", "7.2.113"] {
+            let asset = platform_asset(version).expect("supported platform");
+            assert!(
+                asset.ends_with("_arm64.tar.gz")
+                    || asset.ends_with("_aarch64.tar.gz")
+                    || asset.ends_with("_amd64.tar.gz"),
+                "unexpected arch token: {asset}"
+            );
+            assert!(
+                asset.contains("_darwin_") || asset.contains("_linux_"),
+                "unexpected OS token: {asset}"
+            );
+        }
     }
 
     #[test]
     fn checksum_parsing_finds_the_right_line() {
-        let text = "abc123  CLIProxyAPI_7.2.72_linux_amd64.tar.gz\n\
-                    DEF456  CLIProxyAPI_7.2.72_darwin_aarch64.tar.gz\n";
-        assert_eq!(
-            checksum_for(text, "CLIProxyAPI_7.2.72_darwin_aarch64.tar.gz"),
-            Some("def456".into())
+        let linux = "a".repeat(64);
+        let darwin = "B".repeat(64);
+        let text = format!(
+            "{linux}  CLIProxyAPI_7.2.72_linux_amd64.tar.gz\n\
+             {darwin}  CLIProxyAPI_7.2.72_darwin_aarch64.tar.gz\n"
         );
-        assert_eq!(checksum_for(text, "missing.tar.gz"), None);
+        assert_eq!(
+            checksum_for(&text, "CLIProxyAPI_7.2.72_darwin_aarch64.tar.gz"),
+            ChecksumEntry::Digest("b".repeat(64))
+        );
+        // A manifest that parsed fine and simply covers other assets.
+        assert_eq!(
+            checksum_for(&text, "missing.tar.gz"),
+            ChecksumEntry::NotListed
+        );
+    }
+
+    /// The digest's shape is checked, not assumed. The old parser took any
+    /// first token on a matching line, so a 200-served error page or a
+    /// truncated transfer became a "checksum" — compared, and then reported as
+    /// a mismatch, i.e. as tampering. `sha256sum`'s binary-mode `*name` must
+    /// still resolve to the same asset.
+    #[test]
+    fn a_body_that_is_not_a_manifest_is_not_a_checksum() {
+        let asset = "CLIProxyAPI_7.2.72_darwin_aarch64.tar.gz";
+        let digest = "c".repeat(64);
+
+        assert_eq!(
+            checksum_for(&format!("<html>  {asset}\n"), asset),
+            ChecksumEntry::NotAManifest
+        );
+        assert_eq!(
+            checksum_for("<html><body>503 Service Unavailable</body></html>", asset),
+            ChecksumEntry::NotAManifest
+        );
+        assert_eq!(checksum_for("", asset), ChecksumEntry::NotAManifest);
+        // Truncated mid-digest: not a digest line, so not a manifest.
+        assert_eq!(
+            checksum_for(&format!("{}  {asset}", "c".repeat(40)), asset),
+            ChecksumEntry::NotAManifest
+        );
+        // Binary mode (`*name`) names the same asset.
+        assert_eq!(
+            checksum_for(&format!("{digest} *{asset}\n"), asset),
+            ChecksumEntry::Digest(digest.clone())
+        );
+        // A well-formed manifest with one malformed line still parses; the
+        // malformed line just isn't a digest for its asset. (Unlike ovm core's
+        // Pi source, where "no digest for our asset" means installing on length
+        // checks alone, `NotListed` is already a refusal here — see
+        // `download_release` — so this asset still cannot install.)
+        let mixed = format!("{digest}  other.tar.gz\nnot-a-digest  {asset}\n");
+        assert_eq!(checksum_for(&mixed, asset), ChecksumEntry::NotListed);
+    }
+
+    /// Two valid lines that disagree about the same asset. The parser used to
+    /// stop at the first match, so an appended line — or a manifest built from
+    /// two concatenated releases — decided which digest the archive was held
+    /// to. A self-contradicting manifest cannot verify anything, so it must
+    /// refuse; duplicates that agree are merely redundant and still resolve.
+    #[test]
+    fn conflicting_duplicate_lines_cannot_verify_an_archive() {
+        let asset = "CLIProxyAPI_7.2.72_darwin_aarch64.tar.gz";
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+
+        assert_eq!(
+            checksum_for(&format!("{first}  {asset}\n{second}  {asset}\n"), asset),
+            ChecksumEntry::Conflicting(first.clone(), second)
+        );
+        // Identical duplicates (case-insensitively — digests are compared
+        // lowercased) say the same thing twice.
+        assert_eq!(
+            checksum_for(
+                &format!(
+                    "{first}  {asset}\n{}  *{asset}\n",
+                    first.to_ascii_uppercase()
+                ),
+                asset
+            ),
+            ChecksumEntry::Digest(first)
+        );
+    }
+
+    #[test]
+    fn registry_redirects_stay_on_https_and_on_the_same_host() {
+        let check = |previous: Option<&str>, url: &str| {
+            registry_redirect_permitted(previous, &reqwest::Url::parse(url).unwrap())
+        };
+
+        assert!(check(Some("ovm.sh"), "https://ovm.sh/api/registry.json").is_ok());
+        // A downgrade off HTTPS, even back to the same host.
+        assert!(check(Some("ovm.sh"), "http://ovm.sh/api/registry.json").is_err());
+        // The GitHub asset hosts `redirect_policy` allows are NOT the registry's
+        // allowed set — that was the reason for a policy of its own.
+        assert!(check(Some("ovm.sh"), "https://github.com/x").is_err());
+        assert!(check(Some("ovm.sh"), "https://objects.githubusercontent.com/x").is_err());
+        assert!(check(Some("ovm.sh"), "https://evil.example/registry.json").is_err());
+        // Suffix confusion must not read as the same host.
+        assert!(check(Some("ovm.sh"), "https://ovm.sh.evil.example/x").is_err());
+        // No previous hop to compare against: refuse rather than guess.
+        assert!(check(None, "https://ovm.sh/api/registry.json").is_err());
     }
 
     #[test]

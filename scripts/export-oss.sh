@@ -95,6 +95,8 @@ PUBLIC_PATHS=(
   tests/scripts/bundle-manifest.sh
   tests/scripts/canary-missing-version.sh
   tests/scripts/codex-migration-manifest.sh
+  tests/scripts/first-run-acceptance.sh
+  tests/scripts/install-path-wiring.sh
   tests/scripts/codex-schema-workflow.sh
   tests/scripts/e2e-command-matrix.sh
   tests/scripts/export-oss.sh

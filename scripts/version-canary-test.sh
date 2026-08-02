@@ -79,7 +79,11 @@ json_test() {
     local name="$1" result="$2" duration="$3" detail="${4:-}"
     local detail_json="null"
     if [ -n "$detail" ]; then
-        detail_json="\"$(echo "$detail" | sed 's/"/\\"/g' | tr '\n' ' ' | head -c 200)\""
+        # `| head -c 200` would close the pipe mid-stream and pipefail would
+        # report this substitution as failed; truncate in the shell instead.
+        local flat
+        flat=$(sed 's/"/\\"/g' <<<"$detail" | tr '\n' ' ')
+        detail_json="\"${flat[1,200]}\""
     fi
     echo "    {\"name\": \"$name\", \"status\": \"$result\", \"duration_ms\": $duration, \"detail\": $detail_json}"
 }
@@ -89,6 +93,27 @@ json_test() {
 TESTS=()
 PASS_COUNT=0
 FAIL_COUNT=0
+SKIP_COUNT=0
+
+# "Nothing failed" is not the same as "everything ran": a canary whose
+# behavioural test never executed (no expect, no binary) must not be reported
+# as a clean pass. Kept as a function so the rule itself is testable via
+# `version-canary-test.sh --verdict <passed> <failed> <skipped>`.
+overall_verdict() {
+    local passed="$1" failed="$2" skipped="$3"
+    if [ "$failed" -gt 0 ]; then
+        echo "fail"
+    elif [ "$skipped" -gt 0 ] || [ "$passed" -eq 0 ]; then
+        echo "incomplete"
+    else
+        echo "pass"
+    fi
+}
+
+if [ "$VERSION" = "--verdict" ]; then
+    overall_verdict "${2:-0}" "${3:-0}" "${4:-0}"
+    exit 0
+fi
 
 run_test() {
     local name="$1"
@@ -112,7 +137,8 @@ run_test() {
         PASS_COUNT=$((PASS_COUNT + 1))
         echo "  ✓ $name" >&2
     elif [ "$TEST_RESULT" = "skip" ]; then
-        echo "  - $name (skipped: $TEST_DETAIL)" >&2
+        SKIP_COUNT=$((SKIP_COUNT + 1))
+        echo "  - $name (NOT RUN: $TEST_DETAIL)" >&2
     else
         FAIL_COUNT=$((FAIL_COUNT + 1))
         echo "  ✗ $name ($TEST_DETAIL)" >&2
@@ -146,11 +172,15 @@ test_version_output() {
     local output
     output=$("$claude_path" --version 2>&1) || true
 
-    if echo "$output" | grep -qE "[0-9]+\.[0-9]+\.[0-9]+"; then
-        local detected
-        detected=$(echo "$output" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+    # Here-strings, never `echo "$output" | grep -q`: this script runs under
+    # `set -o pipefail`, grep -q exits on its first match, and the producer's
+    # next write dies with EPIPE — so the pipeline reports failure BECAUSE it
+    # matched and the canary records the opposite verdict.
+    local detected
+    detected=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" <<<"$output" || true)
+    if [ -n "$detected" ]; then
         TEST_RESULT="pass"
-        TEST_DETAIL="$detected"
+        TEST_DETAIL="${detected%%$'\n'*}"
     else
         TEST_RESULT="fail"
         TEST_DETAIL="no version string in output"
@@ -171,7 +201,7 @@ test_help_output() {
     output=$("$claude_path" --help 2>&1) || true
     exit_code=$?
 
-    if echo "$output" | grep -qi "usage\|options\|commands\|claude"; then
+    if grep -qi "usage\|options\|commands\|claude" <<<"$output"; then
         TEST_RESULT="pass"
         TEST_DETAIL=""
     else
@@ -251,13 +281,13 @@ test_buddy_command() {
     rm -f "$response_file"
 
     # Explicit fail signals (order matters — check fail first to avoid false positives)
-    if echo "$response" | grep -qi "Unknown skill.*buddy\|unknown.*buddy\|Available commands\|not a valid"; then
+    if grep -qi "Unknown skill.*buddy\|unknown.*buddy\|Available commands\|not a valid" <<<"$response"; then
         TEST_RESULT="fail"
         TEST_DETAIL="command not recognized"
-    elif echo "$response" | grep -qi "Quelpaw"; then
+    elif grep -qi "Quelpaw" <<<"$response"; then
         TEST_RESULT="pass"
         TEST_DETAIL="Quelpaw found"
-    elif echo "$response" | grep -qi "STARTUP_TIMEOUT"; then
+    elif grep -qi "STARTUP_TIMEOUT" <<<"$response"; then
         TEST_RESULT="error"
         TEST_DETAIL="startup timeout"
     elif [ -z "$response" ]; then
@@ -280,13 +310,10 @@ run_test help_output
 run_test buddy_command
 
 # Overall
-overall="pass"
-if [ "$FAIL_COUNT" -gt 0 ]; then
-    overall="fail"
-fi
+overall="$(overall_verdict "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT")"
 
 echo "" >&2
-echo "$PASS_COUNT passed, $FAIL_COUNT failed" >&2
+echo "$PASS_COUNT passed, $FAIL_COUNT failed, $SKIP_COUNT not run (overall: $overall)" >&2
 
 # Output JSON to stdout
 tests_json=$(printf '%s\n' "${TESTS[@]}" | paste -sd',' -)
@@ -299,6 +326,9 @@ cat <<EOF
   "tests": [
 $tests_json
   ],
+  "passed": $PASS_COUNT,
+  "failed": $FAIL_COUNT,
+  "skipped": $SKIP_COUNT,
   "overall": "$overall"
 }
 EOF

@@ -35,8 +35,13 @@ pub(crate) const GITHUB_DOWNLOAD_HOSTS: &[&str] = &[
     "release-assets.githubusercontent.com",
 ];
 
-/// Verify a freshly downloaded product binary against the publisher's expected
-/// Apple code-signing identity.
+/// Verify a product binary against the publisher's expected Apple code-signing
+/// identity, before it is published into the version store.
+///
+/// Every binary that becomes a managed install goes through here, however it
+/// arrived: freshly downloaded, or copied off the machine by `ovm adopt` (see
+/// [`crate::version_manager`]) — an import that skipped this would be a
+/// managed install with weaker provenance than its downloaded twin.
 ///
 /// Anthropic and OpenAI ship Developer ID-signed, notarized macOS binaries, so
 /// on macOS we confirm the signature is intact and the signing team matches the
@@ -98,18 +103,28 @@ fn verify_macos_signature(
         Some(found) if found == expected_team_id => Ok(()),
         Some(found) => Err(OvmError::Message(format!(
             "unexpected code-signing team for {}: found `{found}`, expected `{expected_team_id}`. \
-             The downloaded binary may have been tampered with; try again or report this at \
+             This binary may have been tampered with; try again or report this at \
              https://github.com/ovm-sh/ovm-oss/issues.",
             binary.display()
         ))),
         None => Err(OvmError::Message(format!(
             "{} is not code-signed (no TeamIdentifier). \
-             The downloaded binary may have been tampered with; try again or report this at \
+             This binary may have been tampered with; try again or report this at \
              https://github.com/ovm-sh/ovm-oss/issues.",
             binary.display()
         ))),
     }
 }
+
+/// Serializes the tests that toggle `OVM_SKIP_SIGNATURE_VERIFY`.
+///
+/// The variable is process-wide, so without this a test that switches
+/// verification off can decide the outcome of a test running in parallel —
+/// including the ones whose whole point is that an unsigned binary IS rejected.
+/// Shared with `crate::version_manager`, whose import tests bypass verification
+/// for unsigned fixtures.
+#[cfg(test)]
+pub(crate) static SIGNATURE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(not(target_os = "macos"))]
 fn verify_macos_signature(
@@ -275,6 +290,98 @@ fn normalize_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
 
+/// Reject a download whose byte count doesn't match a length the server or the
+/// release metadata declared.
+///
+/// Without this, a connection that closes early is indistinguishable from a
+/// complete download: the digest we compute is simply the digest of whatever
+/// arrived. The truncation then resurfaces at extraction as "no binary in the
+/// archive", blaming the publisher for our own short read.
+///
+/// Both declarations are checked when present. `Content-Length` catches a
+/// dropped connection; a metadata `size` comes from a *different* response, so
+/// it also catches a CDN that serves a short body with a matching (equally
+/// short) `Content-Length`.
+pub(crate) fn validate_downloaded_size(
+    url: &str,
+    downloaded: u64,
+    content_length: Option<u64>,
+    metadata_size: Option<u64>,
+) -> crate::error::Result<()> {
+    for (source, declared) in [
+        ("the Content-Length header", content_length),
+        ("the release metadata", metadata_size),
+    ] {
+        let Some(declared) = declared else { continue };
+        if downloaded != declared {
+            return Err(crate::error::OvmError::DownloadFailed {
+                url: url.to_string(),
+                message: format!(
+                    "incomplete download: {source} declared {declared} bytes but {downloaded} arrived. \
+                     The connection was likely interrupted — retry the install."
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Stream `response` into `dest`, returning `(sha256, bytes_written)`.
+///
+/// Every release-asset download shares this loop — Codex's and Pi's used to be
+/// hand-copied twins, and a hardening applied to one (the `create_new_file`
+/// destination guard) is a hardening the other silently missed. `what` names
+/// the thing being downloaded in error messages ("release asset", "npm
+/// tarball"), and `extra_digest` collects a second digest for callers that
+/// verify SRI alongside the sha256.
+pub(crate) fn stream_to_file(
+    response: &mut reqwest::blocking::Response,
+    dest: &std::path::Path,
+    url: &str,
+    what: &str,
+    mut extra_digest: Option<&mut sha2::Sha512>,
+) -> crate::error::Result<(String, u64)> {
+    use crate::error::OvmError;
+    use sha2::Digest as _;
+    use std::io::Read as _;
+
+    let mut file = crate::util::create_new_file(dest)?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = [0u8; 8192];
+    let mut downloaded = 0_u64;
+
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|error| OvmError::DownloadFailed {
+                url: url.to_string(),
+                message: format!("failed to read {what} body: {error}"),
+            })?;
+        if read == 0 {
+            break;
+        }
+
+        std::io::Write::write_all(&mut file, &buffer[..read]).map_err(|error| {
+            OvmError::DownloadFailed {
+                url: url.to_string(),
+                message: format!("failed to write {what} to {}: {error}", dest.display()),
+            }
+        })?;
+        hasher.update(&buffer[..read]);
+        if let Some(digest) = extra_digest.as_mut() {
+            digest.update(&buffer[..read]);
+        }
+        downloaded += read as u64;
+    }
+
+    let sha256 = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((sha256, downloaded))
+}
+
 /// Upper bound on the declared size of a single archive entry we will extract.
 ///
 /// A hostile or corrupt archive can declare an enormous entry to exhaust disk
@@ -339,11 +446,37 @@ pub(crate) fn validate_tar_entry_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_download_url, validate_tar_entry_path, GITHUB_DOWNLOAD_HOSTS};
+    use super::{
+        validate_download_url, validate_downloaded_size, validate_tar_entry_path,
+        GITHUB_DOWNLOAD_HOSTS,
+    };
     use std::path::Path;
 
     #[cfg(target_os = "macos")]
-    static SIGNATURE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use super::SIGNATURE_ENV_LOCK;
+
+    /// Every download path routes its byte count through here, so this is the
+    /// one place the "a short body is not a complete one" rule is stated.
+    #[test]
+    fn downloaded_size_must_match_every_declaration() {
+        assert!(validate_downloaded_size("u", 100, Some(100), Some(100)).is_ok());
+        // Nothing declared: nothing to check (the residual gap this closes
+        // only where a declaration exists).
+        assert!(validate_downloaded_size("u", 100, None, None).is_ok());
+
+        let short = validate_downloaded_size("u", 40, Some(100), None)
+            .expect_err("short body vs Content-Length");
+        assert!(short.to_string().contains("incomplete download"), "{short}");
+        // The releases API `size` is a second, independent declaration: it
+        // catches a short body that arrived with a matching short
+        // Content-Length.
+        let metadata = validate_downloaded_size("u", 40, Some(40), Some(100))
+            .expect_err("short body vs release metadata");
+        assert!(
+            metadata.to_string().contains("the release metadata"),
+            "{metadata}"
+        );
+    }
 
     #[test]
     fn download_url_rejects_non_https() {

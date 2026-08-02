@@ -26,7 +26,7 @@ pub fn run(purge: bool) -> Result<()> {
         eprintln!("  {} Nothing to purge.", style("—").dim());
         return Ok(());
     }
-    if !confirm_purge(&display(&dirs.base))? {
+    if !confirm_purge(&display(&dirs.base), interactive_shell())? {
         eprintln!("  {} Purge cancelled — data kept.", style("✗").dim());
         return Ok(());
     }
@@ -64,12 +64,26 @@ fn remove_owned_shims() -> Result<()> {
     Ok(())
 }
 
+/// Whether BOTH ends of the confirmation are a terminal.
+///
+/// The prompt goes to stderr but the answer is read from stdin, so checking
+/// stderr alone lets `echo y | ovm claudex uninstall --purge` (run from a real
+/// terminal) sail through: stderr is a tty, and the piped `y` is consumed as
+/// consent. Core's `ovm cleanup` checks both; so does this.
+fn interactive_shell() -> bool {
+    use std::io::IsTerminal;
+    console::Term::stderr().is_term() && std::io::stdin().is_terminal()
+}
+
 /// Purging deletes credentials and history — never do it without an explicit
 /// interactive yes. Non-interactive runs must keep their hands off.
-fn confirm_purge(target: &str) -> Result<bool> {
-    if !console::Term::stderr().is_term() {
+fn confirm_purge(target: &str, interactive: bool) -> Result<bool> {
+    if !interactive {
         return Err(ClaudexError::Message(
-            "--purge needs an interactive terminal to confirm deletion.".into(),
+            "--purge needs an interactive terminal to confirm deletion: this shell is not \
+             interactive (a pipe or redirect can never consent). Re-run `ovm claudex uninstall \
+             --purge` in a terminal."
+                .into(),
         ));
     }
     eprint!(

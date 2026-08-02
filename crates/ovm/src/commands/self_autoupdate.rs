@@ -41,6 +41,21 @@ struct PendingSelfUpdate {
     version: String,
 }
 
+/// Base wait before retrying a failed staging attempt, doubled per consecutive
+/// failure up to [`BACKOFF_MAX_SHIFT`] and capped at the check interval.
+const BACKOFF_BASE_SECS: u64 = 5 * 60;
+/// Bounds the doubling so the shift can never overflow.
+const BACKOFF_MAX_SHIFT: u32 = 16;
+
+/// The last failed staging attempt, so a release that can never be staged is
+/// retried on a decaying schedule instead of on every invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StagingAttempt {
+    version: String,
+    last_attempt_at: u64,
+    failures: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SelfLatestCache {
     version: String,
@@ -50,6 +65,10 @@ struct SelfLatestCache {
 
 fn pending_path(base: &Path) -> PathBuf {
     base.join("self").join("pending-update.json")
+}
+
+fn staging_attempt_path(base: &Path) -> PathBuf {
+    base.join("self").join("staging-attempt.json")
 }
 
 fn latest_cache_path(base: &Path) -> PathBuf {
@@ -143,13 +162,25 @@ fn try_activate_pending(dirs: &OvmDirs) -> Result<()> {
     // Clear the marker regardless: a success is applied, and a failure already
     // rolled back — retrying it every launch would just delay them.
     let _ = clear_pending(&path);
-    if result.is_ok() {
-        eprintln!(
-            "{} OVM {} (was {})",
-            style("↑").green(),
-            pending.version,
-            old
-        );
+    match result {
+        Ok(()) => {
+            clear_staging_failure(&dirs.base);
+            eprintln!(
+                "{} OVM {} (was {})",
+                style("↑").green(),
+                pending.version,
+                old
+            );
+        }
+        Err(_) => {
+            // A release can install cleanly and still fail its activation
+            // probe. Clearing the marker alone would leave nothing staged, so
+            // the next invocation restages and re-activates the same broken
+            // release — repeating a foreground activate-and-roll-back plus a
+            // download on every command. Count it as a failed attempt so the
+            // same backoff applies.
+            let _ = record_staging_attempt(&dirs.base, &pending.version);
+        }
     }
     Ok(())
 }
@@ -194,21 +225,114 @@ fn staging_outstanding(base: &Path, config: &OvmConfig, cached_latest: &str) -> 
     if is_dev_snapshot(&current) || !semver_newer(cached_latest, &current) {
         return false;
     }
-    match read_pending(&pending_path(base)) {
-        Ok(Some(pending)) => pending.version != cached_latest,
-        Ok(None) => true,
-        Err(_) => true,
+    let staged_matches = match read_pending(&pending_path(base)) {
+        Ok(Some(pending)) => pending.version == cached_latest,
+        Ok(None) | Err(_) => false,
+    };
+    if staged_matches {
+        return false;
     }
+    // Outstanding work, but a release can be *permanently* unstageable — a
+    // missing platform asset, an archive that never verifies. Without a
+    // backoff every invocation would spawn another child to fail the same way,
+    // and since the refresh is now armed from every command that is unbounded
+    // churn, not a retry.
+    staging_retry_due(base, cached_latest, config.update_check_interval)
+}
+
+/// Whether enough time has passed to retry staging `version`.
+///
+/// The first retry is immediate — that is the transient case this exists for,
+/// a download killed mid-flight. Each consecutive failure then doubles the
+/// wait, capped at the normal check interval, so a release that can never be
+/// staged costs no more than the ordinary polling cadence.
+fn staging_retry_due(base: &Path, version: &str, interval_hours: u64) -> bool {
+    let Some(attempt) = read_staging_attempt(base) else {
+        return true;
+    };
+    if attempt.version != version {
+        return true;
+    }
+    let now = now_secs();
+    if attempt.last_attempt_at > now {
+        // The clock moved backwards (or the record was written under a skewed
+        // clock). A future timestamp would otherwise suppress every retry until
+        // real time caught up — days, potentially. Treat it as due; the next
+        // attempt re-stamps it under the current clock.
+        return true;
+    }
+    let cap = interval_hours.saturating_mul(3600).max(BACKOFF_BASE_SECS);
+    let backoff = BACKOFF_BASE_SECS
+        .saturating_mul(1u64 << attempt.failures.min(BACKOFF_MAX_SHIFT))
+        .min(cap);
+    now.saturating_sub(attempt.last_attempt_at) >= backoff
+}
+
+/// Record that `version` was attempted, returning whether the record persisted.
+///
+/// Written *before* the attempt runs, so every way it can fail — a failed
+/// download, a marker that cannot be written, a killed process, a release that
+/// installs but never activates — leaves evidence. Recording only on a
+/// specific error path means the paths it does not cover retry forever.
+///
+/// The caller must not proceed when this returns `false`: an attempt that
+/// cannot be recorded is one the backoff cannot see, and an unrecorded
+/// permanent failure is retried by every subsequent invocation.
+#[must_use]
+fn record_staging_attempt(base: &Path, version: &str) -> bool {
+    let failures = match read_staging_attempt(base) {
+        Some(previous) if previous.version == version => previous.failures.saturating_add(1),
+        _ => 0,
+    };
+    let attempt = StagingAttempt {
+        version: version.to_string(),
+        last_attempt_at: now_secs(),
+        failures,
+    };
+    let path = staging_attempt_path(base);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(serialized) = serde_json::to_string(&attempt) else {
+        return false;
+    };
+    std::fs::write(&path, serialized).is_ok()
+}
+
+/// Clear the attempt record.
+///
+/// Called only when a release actually *activates*. Clearing on a successful
+/// staging instead would reset the counter for a release that stages fine and
+/// then fails its activation probe every time: it would restage, clear, fail,
+/// re-record at zero, and never reach a meaningful backoff. Activation is the
+/// only outcome that proves the candidate is good.
+pub(crate) fn clear_staging_failure(base: &Path) {
+    let _ = std::fs::remove_file(staging_attempt_path(base));
+}
+
+fn read_staging_attempt(base: &Path) -> Option<StagingAttempt> {
+    let raw = std::fs::read_to_string(staging_attempt_path(base)).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// Background entry point (runs in the detached `__refresh-cache` child):
 /// refresh the cached latest self version and, under policy `on`, stage a newer
 /// release for the next invocation to activate. Fail-open.
 pub fn refresh_self_if_due(dirs: &OvmDirs, config: &OvmConfig) {
-    let _ = try_refresh_self(dirs, config);
+    let _ = try_refresh_self(dirs, config, |manager, channel| {
+        self_update::stage_latest(manager, channel.into())
+    });
 }
 
-fn try_refresh_self(dirs: &OvmDirs, config: &OvmConfig) -> Result<()> {
+/// The staging step is injected so tests can reach the code after a *successful*
+/// stage. The real stager downloads a release, so without this seam the only
+/// reachable paths were the early returns, and the rule this function exists to
+/// enforce — that a successful stage must NOT clear the attempt record — was
+/// untestable and could be silently reverted.
+fn try_refresh_self<S>(dirs: &OvmDirs, config: &OvmConfig, stage: S) -> Result<()>
+where
+    S: FnOnce(&SelfManager, SelfChannel) -> Result<Option<String>>,
+{
     let policy = config.self_.auto_update;
     if policy == AutoUpdatePolicy::Off {
         return Ok(());
@@ -234,14 +358,39 @@ fn try_refresh_self(dirs: &OvmDirs, config: &OvmConfig) -> Result<()> {
 
     // Skip the download when the newer release is already staged.
     let path = pending_path(&dirs.base);
-    if let Some(pending) = read_pending(&path)? {
-        if pending.version == latest {
+    match read_pending(&path) {
+        Ok(Some(pending)) if pending.version == latest => return Ok(()),
+        Ok(_) => {}
+        Err(_) => {
+            // An unreadable marker (corrupt, or a directory) would otherwise
+            // return early on every invocation without leaving a record, so
+            // every command would keep spawning a child to fail here again.
+            let _ = record_staging_attempt(&dirs.base, &latest);
             return Ok(());
         }
     }
-    if let Some(staged) = self_update::stage_latest(&manager, channel.into())? {
+    // Back off here, not only in `self_check_due`: a short or zero
+    // `updateCheckInterval` keeps the version cache permanently stale, so the
+    // check is always due and would otherwise reach this staging path on every
+    // invocation regardless of how often it has already failed.
+    if !staging_retry_due(&dirs.base, &latest, config.update_check_interval) {
+        return Ok(());
+    }
+    // Stamp the attempt first so that every failure below — the download, the
+    // marker write, or the process being killed mid-flight — leaves a record
+    // to back off from. If the stamp itself cannot be persisted, do not stage:
+    // the backoff would be blind to the outcome and a permanent failure would
+    // be retried by every invocation.
+    if !record_staging_attempt(&dirs.base, &latest) {
+        return Ok(());
+    }
+    if let Some(staged) = stage(&manager, channel)? {
         write_pending(&path, &staged)?;
     }
+    // Deliberately NOT cleared here. Staging succeeding says nothing about
+    // whether the release can actually run; only activation does, and that is
+    // where the record is cleared. Clearing on a successful stage is what let a
+    // probe-failing release reset its counter every cycle.
     Ok(())
 }
 
@@ -271,6 +420,13 @@ pub fn maybe_notify_self_on_launch(dirs: &OvmDirs, config: &OvmConfig) {
 }
 
 fn try_notify_self(dirs: &OvmDirs, config: &OvmConfig) -> Result<()> {
+    // `checkForUpdates: false` turns off update checking, and the cached self
+    // latest is the product of one. It outlives the setting being turned off,
+    // so without this a launch would still announce (and offer to install) a
+    // newer OVM to someone who asked for no update checks.
+    if !config.check_for_updates {
+        return Ok(());
+    }
     // `on` is handled by background staging + startup activation; `off` is
     // silent. Only `notify` announces on the foreground.
     if config.self_.auto_update != AutoUpdatePolicy::Notify {
@@ -525,5 +681,264 @@ mod tests {
         // A stale pending from a superseded candidate re-arms it again.
         write_pending(&pending_path(dir.path()), "0.0.3-alpha.1").unwrap();
         assert!(self_check_due(dir.path(), &config));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanently_unstageable_release_backs_off_instead_of_retrying_forever() {
+        let dir = tempdir().unwrap();
+        let dirs = OvmDirs::at(dir.path().to_path_buf());
+        let config = OvmConfig::default();
+
+        let self_dirs = crate::self_manager::SelfDirs::at(&dirs.base);
+        let version_dir = self_dirs.versions.join("0.0.3");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::os::unix::fs::symlink(&version_dir, &self_dirs.current).unwrap();
+        write_latest_cache(dir.path(), SelfChannel::Stable, "0.0.4");
+
+        // Nothing staged and no prior attempt: retry immediately. That is the
+        // transient case — a download killed mid-flight.
+        assert!(self_check_due(dir.path(), &config));
+
+        // After a failure the check goes quiet rather than spawning a child on
+        // every invocation, which is the churn this guards against.
+        assert!(record_staging_attempt(&dirs.base, "0.0.4"));
+        assert!(!self_check_due(dir.path(), &config));
+
+        // Consecutive failures widen the wait.
+        let first = read_staging_attempt(&dirs.base).unwrap();
+        assert!(record_staging_attempt(&dirs.base, "0.0.4"));
+        let second = read_staging_attempt(&dirs.base).unwrap();
+        assert_eq!(first.failures, 0);
+        assert_eq!(second.failures, 1);
+
+        // Once the backoff elapses the retry is allowed again.
+        let elapsed = StagingAttempt {
+            version: "0.0.4".into(),
+            last_attempt_at: now_secs().saturating_sub(24 * 60 * 60),
+            failures: 3,
+        };
+        std::fs::write(
+            staging_attempt_path(&dirs.base),
+            serde_json::to_string(&elapsed).unwrap(),
+        )
+        .unwrap();
+        assert!(self_check_due(dir.path(), &config));
+
+        // A newer candidate is never held back by an older version's failures.
+        assert!(record_staging_attempt(&dirs.base, "0.0.4"));
+        assert!(!self_check_due(dir.path(), &config));
+        write_latest_cache(dir.path(), SelfChannel::Stable, "0.0.5");
+        assert!(self_check_due(dir.path(), &config));
+
+        // A success clears the record.
+        assert!(record_staging_attempt(&dirs.base, "0.0.5"));
+        assert!(!self_check_due(dir.path(), &config));
+        clear_staging_failure(&dirs.base);
+        assert!(self_check_due(dir.path(), &config));
+    }
+
+    #[test]
+    fn staging_backoff_holds_when_the_check_interval_cannot_gate_it() {
+        // `updateCheckInterval: 0` keeps the version cache permanently stale, so
+        // the due check always fires. The staging path must still back off, or
+        // that supported configuration recreates the retry storm.
+        let dir = tempdir().unwrap();
+        let config = OvmConfig {
+            update_check_interval: 0,
+            ..OvmConfig::default()
+        };
+        assert!(staging_retry_due(
+            dir.path(),
+            "0.0.4",
+            config.update_check_interval
+        ));
+        assert!(record_staging_attempt(dir.path(), "0.0.4"));
+        assert!(!staging_retry_due(
+            dir.path(),
+            "0.0.4",
+            config.update_check_interval
+        ));
+    }
+
+    #[test]
+    fn a_clock_moving_backwards_does_not_suppress_retries() {
+        let dir = tempdir().unwrap();
+        let future = StagingAttempt {
+            version: "0.0.4".into(),
+            last_attempt_at: now_secs().saturating_add(7 * 24 * 60 * 60),
+            failures: 2,
+        };
+        std::fs::create_dir_all(staging_attempt_path(dir.path()).parent().unwrap()).unwrap();
+        std::fs::write(
+            staging_attempt_path(dir.path()),
+            serde_json::to_string(&future).unwrap(),
+        )
+        .unwrap();
+        // Without the guard this stays suppressed until real time catches up.
+        assert!(staging_retry_due(dir.path(), "0.0.4", 4));
+    }
+
+    #[test]
+    fn every_staging_failure_path_is_recorded_not_just_the_download() {
+        // The attempt is stamped before staging runs, so a failure after a
+        // successful download — a marker that cannot be written, a killed
+        // process — backs off exactly like a failed download.
+        let dir = tempdir().unwrap();
+        assert!(read_staging_attempt(dir.path()).is_none());
+
+        assert!(record_staging_attempt(dir.path(), "0.0.4"));
+        let recorded = read_staging_attempt(dir.path()).expect("attempt stamped before staging");
+        assert_eq!(recorded.version, "0.0.4");
+        assert!(!staging_retry_due(dir.path(), "0.0.4", 4));
+
+        // Only a completed staging clears it.
+        clear_staging_failure(dir.path());
+        assert!(read_staging_attempt(dir.path()).is_none());
+        assert!(staging_retry_due(dir.path(), "0.0.4", 4));
+    }
+
+    #[test]
+    fn attempt_counts_accumulate_across_repeated_stage_and_activate_cycles() {
+        // Bookkeeping only: proves the counter accumulates across the
+        // stage-then-failed-activation cycle rather than resetting, which is
+        // what makes the backoff widen for a release that stages fine but
+        // never activates.
+        //
+        // This exercises the record functions directly; the production staging
+        // path is covered by
+        // `successful_staging_does_not_clear_the_attempt_record`.
+        let dir = tempdir().unwrap();
+
+        for cycle in 0..4 {
+            // Staging succeeds — which must NOT clear the record. Each cycle
+            // stamps twice (stage, then the failed activation), so the count
+            // entering cycle N is 2N.
+            assert!(record_staging_attempt(dir.path(), "0.0.4"));
+            let after_stage = read_staging_attempt(dir.path()).expect("record kept");
+            assert_eq!(after_stage.failures, cycle * 2);
+
+            // Activation then fails and records another attempt.
+            assert!(record_staging_attempt(dir.path(), "0.0.4"));
+        }
+
+        let record = read_staging_attempt(dir.path()).expect("record kept");
+        assert!(
+            record.failures >= 4,
+            "failures must accumulate across stage/activate cycles, got {}",
+            record.failures
+        );
+    }
+
+    /// Build a tempdir that looks enough like a direct install for
+    /// `try_refresh_self` to run past its early returns: a `self/current`
+    /// pointer so `current_version` is `Some`, and a fresh latest-version cache
+    /// so resolving the latest release needs no network.
+    fn staged_install(current: &str, latest: &str) -> (tempfile::TempDir, OvmDirs) {
+        let dir = tempdir().unwrap();
+        let dirs = OvmDirs::at(dir.path().join(".ovm"));
+        let version_dir = dirs.base.join("self").join("versions").join(current);
+        std::fs::create_dir_all(&version_dir).unwrap();
+        crate::symlink::switch_symlink(&dirs.base.join("self").join("current"), &version_dir)
+            .unwrap();
+        write_latest_cache(&dirs.base, SelfChannel::Stable, latest);
+        (dir, dirs)
+    }
+
+    #[test]
+    fn successful_staging_does_not_clear_the_attempt_record() {
+        // The livelock this guards: a release that stages fine but cannot run
+        // will fail activation forever. If staging clears the attempt record,
+        // the counter resets every cycle, the backoff never widens, and every
+        // ovm invocation re-downloads it. Only activation proves the candidate
+        // is good, so only activation may clear.
+        //
+        // Injecting the stager is what makes this reachable — the real one
+        // downloads a release.
+        let (_dir, dirs) = staged_install("0.0.1", "9.9.9");
+        let mut config = OvmConfig::default();
+        config.self_.auto_update = AutoUpdatePolicy::On;
+
+        let mut staged_calls = 0;
+        try_refresh_self(&dirs, &config, |_, _| {
+            staged_calls += 1;
+            Ok(Some("9.9.9".to_string()))
+        })
+        .unwrap();
+
+        assert_eq!(staged_calls, 1, "the staging path must have been reached");
+        assert_eq!(
+            read_pending(&pending_path(&dirs.base))
+                .unwrap()
+                .expect("staged marker written")
+                .version,
+            "9.9.9"
+        );
+        let record = read_staging_attempt(&dirs.base).expect(
+            "a successful stage must leave the attempt record in place; \
+             clearing here is the livelock bug",
+        );
+        assert_eq!(record.version, "9.9.9");
+    }
+
+    #[test]
+    fn an_already_staged_release_is_not_downloaded_again() {
+        let (_dir, dirs) = staged_install("0.0.1", "9.9.9");
+        let mut config = OvmConfig::default();
+        config.self_.auto_update = AutoUpdatePolicy::On;
+        write_pending(&pending_path(&dirs.base), "9.9.9").unwrap();
+
+        let mut staged_calls = 0;
+        try_refresh_self(&dirs, &config, |_, _| {
+            staged_calls += 1;
+            Ok(Some("9.9.9".to_string()))
+        })
+        .unwrap();
+
+        assert_eq!(staged_calls, 0, "the pending marker must short-circuit");
+    }
+
+    #[test]
+    fn staging_backs_off_instead_of_retrying_every_invocation() {
+        // Second call in the same window must not reach the network again.
+        let (_dir, dirs) = staged_install("0.0.1", "9.9.9");
+        let mut config = OvmConfig::default();
+        config.self_.auto_update = AutoUpdatePolicy::On;
+
+        let mut staged_calls = 0;
+        for _ in 0..3 {
+            try_refresh_self(&dirs, &config, |_, _| {
+                staged_calls += 1;
+                // Staging fails, so no pending marker is written and the next
+                // invocation would otherwise take this path again.
+                Ok(None)
+            })
+            .unwrap();
+        }
+
+        assert_eq!(
+            staged_calls, 1,
+            "only the first attempt is due; the rest must be held by the backoff"
+        );
+    }
+
+    #[test]
+    fn an_unwritable_attempt_record_is_reported_so_staging_can_be_skipped() {
+        let dir = tempdir().unwrap();
+        // A directory where the record file belongs: the write cannot succeed.
+        std::fs::create_dir_all(staging_attempt_path(dir.path())).unwrap();
+        assert!(
+            !record_staging_attempt(dir.path(), "0.0.4"),
+            "an unpersisted attempt must be reported, not silently ignored"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_attempt_record_retries_rather_than_wedging() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(staging_attempt_path(dir.path()).parent().unwrap()).unwrap();
+        std::fs::write(staging_attempt_path(dir.path()), b"{ not json").unwrap();
+        assert!(read_staging_attempt(dir.path()).is_none());
+        assert!(staging_retry_due(dir.path(), "0.0.4", 4));
     }
 }

@@ -1,9 +1,10 @@
-use crate::config::{AutoUpdatePolicy, OvmConfig, OvmDirs};
+use crate::config::{AutoUpdatePolicy, OvmConfig};
 use crate::dev_metadata::DevInstallMetadata;
 use crate::error::{OvmError, Result};
 use crate::product::Product;
 use crate::version_manager::{InstallRequest, VersionManager};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Launch a managed product with the active or overridden version.
@@ -16,11 +17,20 @@ pub fn run(product: Product, args: &[String]) -> Result<()> {
     if let Some(version) = &requested_version {
         vm.reject_version_traversal(version)?;
     }
-    let product_args = apply_yolo(product, product_args)?;
+    let product_args = apply_yolo(product, product_args, &vm.config);
 
     let version = match &requested_version {
         Some(version) => product.normalize_version(version),
-        None => vm.current_version()?.ok_or(OvmError::NoActiveVersion)?,
+        None => match vm.current_version()? {
+            Some(version) => version,
+            None => match bootstrap_first_launch(&vm)? {
+                Bootstrap::Managed(version) => version,
+                // Nothing managed could be installed, but the machine already
+                // has a working install. They asked to launch the product —
+                // launch it.
+                Bootstrap::Foreign(binary) => return exec_foreign(product, &binary, &product_args),
+            },
+        },
     };
     let version = if requested_version.is_none() {
         maybe_auto_update(&vm, &version)?
@@ -38,11 +48,11 @@ pub fn run(product: Product, args: &[String]) -> Result<()> {
     if requested_version.is_none() {
         // The background refresh is spawned once per invocation from the
         // pre-dispatch hook in `main`, which covers pinned launches too.
-        super::cleanup::prune_all_products(&vm.config);
+        super::cleanup::prune_all_products(&vm.dirs, &vm.config);
         // Under `notify` the prompt/notice replaces the generic nudge, so only
         // emit the banner for the other policies.
         if vm.config.auto_update.policy_for(product) != AutoUpdatePolicy::Notify {
-            maybe_emit_update_banner(product, &version, &vm.dirs.base);
+            maybe_emit_update_banner(product, &version, &vm.dirs.base, &vm.config);
         }
         super::self_autoupdate::maybe_notify_self_on_launch(&vm.dirs, &vm.config);
     }
@@ -71,17 +81,10 @@ pub fn run(product: Product, args: &[String]) -> Result<()> {
         }
         version
     } else if !vm.install_is_complete(&version) {
-        // Auto-install if not present
-        eprintln!(
-            "  {} {} {version} not found, installing...",
-            console::style("→").dim(),
-            product.display_name()
-        );
-        let request = InstallRequest::Standard {
-            use_npm: false,
-            version: version.clone(),
-        };
-        let installed_version = vm.install(request)?;
+        // Auto-install if not present. `version` is already concrete here (it
+        // came from `current`, the bootstrap, or a normalized override), so the
+        // helper installs without resolving anything on the network.
+        let installed_version = ensure_requested_version_installed(&vm, &version)?;
         vm.use_version(&installed_version)?;
         installed_version
     } else {
@@ -172,22 +175,172 @@ fn make_latest_default(vm: &VersionManager, version: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_requested_version_installed(vm: &VersionManager, version: &str) -> Result<String> {
-    if vm.install_is_complete(version) {
-        return Ok(version.to_string());
+/// What the first-launch bootstrap resolved to.
+enum Bootstrap {
+    /// A managed version is installed and selected — launch it as usual.
+    Managed(String),
+    /// Nothing could be installed (offline, upstream down, unsupported
+    /// platform), but the machine has a working unmanaged install. Run that
+    /// instead of failing the launch.
+    Foreign(PathBuf),
+}
+
+/// Make a launch work on a machine that has never used OVM.
+///
+/// Asking someone to run `ovm use <product> <version>` here was a dead end:
+/// nothing was installed, so that command could not succeed either, and it
+/// needed a version number they had no way to know. Meanwhile a perfectly good
+/// install of the product often already existed on the machine, unmanaged and
+/// ignored. They asked to launch the product — so launch it.
+///
+/// Preference order, cheapest and least surprising first:
+///   1. something already installed under OVM but not selected — just select it;
+///   2. an existing unmanaged install on PATH — adopt it, so their current
+///      version is preserved (a self-contained binary is imported from disk with
+///      no download; a wrapper script or bundle falls back to fetching that same
+///      version — see [`super::adopt::run`]);
+///   3. otherwise install the latest release;
+///   4. and if even that fails while an unmanaged install exists, exec that
+///      binary — an offline machine with a working `claude` on PATH must not be
+///      left unable to launch it.
+fn bootstrap_first_launch(vm: &VersionManager) -> Result<Bootstrap> {
+    let product = vm.product();
+
+    // Installed but nothing selected: choosing for them beats an error.
+    if let Some(newest) = vm.list_installed()?.into_iter().next_back() {
+        eprintln!(
+            "  {} No active {} version — selecting {}",
+            console::style("→").dim(),
+            product.display_name(),
+            console::style(&newest).green().bold()
+        );
+        super::use_version::run(vm, &newest)?;
+        vm.clear_pin();
+        return Ok(Bootstrap::Managed(newest));
     }
 
-    if version != "latest" {
+    // Adopt what the machine already has, rather than downloading over it.
+    let foreign = super::adopt::foreign_binary_on_path(&vm.dirs, product);
+    if let Some(binary) = &foreign {
         eprintln!(
-            "  {} {} {version} not found, installing...",
+            "  {} First {} launch under OVM — adopting the install already on this machine",
+            console::style("→").dim(),
+            product.display_name()
+        );
+        match super::adopt::run(vm, Some(binary.clone())) {
+            Ok(()) => {
+                if let Some(active) = vm.current_version()? {
+                    return Ok(Bootstrap::Managed(active));
+                }
+            }
+            Err(error) => {
+                // Adoption is an optimisation, not the goal. If their existing
+                // binary cannot be read or parsed, fall through and install.
+                eprintln!(
+                    "  {} Could not adopt the existing {}: {error}",
+                    console::style("!").yellow(),
+                    product.display_name()
+                );
+            }
+        }
+    }
+
+    eprintln!(
+        "  {} No {} installed yet — installing the latest release",
+        console::style("→").dim(),
+        product.display_name()
+    );
+    match install_latest_and_select(vm) {
+        Ok(version) => Ok(Bootstrap::Managed(version)),
+        // Erroring out here used to strand a machine that had a perfectly good
+        // binary on PATH: adopt could not reach the network, the latest install
+        // could not either, and the launch died — with the tool they asked for
+        // sitting right there. Nothing is adopted or activated, so the next
+        // launch retries the managed path once the network is back.
+        Err(error) => match foreign {
+            Some(binary) => {
+                eprintln!(
+                    "  {} Could not install a managed {}: {error}",
+                    console::style("!").yellow(),
+                    product.display_name()
+                );
+                Ok(Bootstrap::Foreign(binary))
+            }
+            None => Err(error),
+        },
+    }
+}
+
+fn install_latest_and_select(vm: &VersionManager) -> Result<String> {
+    let version = ensure_requested_version_installed(vm, "latest")?;
+    super::use_version::run(vm, &version)?;
+    // Follow latest rather than pinning: the user asked to launch, not to pin.
+    vm.clear_pin();
+    Ok(version)
+}
+
+/// Last-resort launch of the unmanaged binary already on PATH.
+///
+/// Deliberately runs it *unmanaged*: no `OVM_VERSION`/`OVM_PRODUCT` in the
+/// environment and no companions, because OVM did not install this binary and
+/// cannot say which version it is. The warning names the path so the launch is
+/// never silently un-managed.
+fn exec_foreign(product: Product, binary: &Path, args: &[String]) -> Result<()> {
+    eprintln!(
+        "  {} Launching the existing unmanaged {} at {}",
+        console::style("!").yellow(),
+        product.display_name(),
+        console::style(binary.display()).dim()
+    );
+
+    let mut command = Command::new(binary);
+    command
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if product == Product::Claude {
+        command.env_remove("CLAUDECODE");
+    }
+    let status = command.status()?;
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Install (if needed) a version the caller asked for by name, and return the
+/// concrete version string.
+///
+/// `latest` is resolved here, on the network. That is the one version check a
+/// launch may block on, because it is the one the user asked for by name
+/// (`ovm cc latest`, or a first-launch bootstrap that has nothing to run) —
+/// unlike the auto-update policy check, which reads the local cache
+/// ([`cached_upgrade_target`]). Resolving before installing also means an
+/// already-installed newest release costs nothing further.
+fn ensure_requested_version_installed(vm: &VersionManager, version: &str) -> Result<String> {
+    let version = if version == "latest" {
+        eprintln!(
+            "  {} Resolving latest {} version...",
             console::style("→").dim(),
             vm.product().display_name()
         );
+        vm.product()
+            .normalize_version(&vm.latest_available_version()?)
+    } else {
+        version.to_string()
+    };
+
+    if vm.install_is_complete(&version) {
+        return Ok(version);
     }
+
+    eprintln!(
+        "  {} {} {version} not found, installing...",
+        console::style("→").dim(),
+        vm.product().display_name()
+    );
 
     let request = InstallRequest::Standard {
         use_npm: false,
-        version: version.to_string(),
+        version,
     };
     vm.install(request)
 }
@@ -211,23 +364,9 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
         }
     }
 
-    let latest = match vm.latest_available_version() {
-        Ok(latest) => latest,
-        Err(error) => {
-            eprintln!(
-                "  {} Could not check for {} updates; launching active {} ({})",
-                console::style("!").yellow(),
-                vm.product().display_name(),
-                active_version,
-                console::style(format!("error: {error}")).dim()
-            );
-            return Ok(active_version.to_string());
-        }
-    };
-    let latest = vm.product().normalize_version(&latest);
-    if !vm.product().is_newer(&latest, active_version) {
+    let Some(latest) = cached_upgrade_target(vm, active_version) else {
         return Ok(active_version.to_string());
-    }
+    };
 
     crate::mochi::say(
         crate::mochi::WORKING,
@@ -256,13 +395,89 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
     }
 }
 
+/// The version an auto-updating (`on`) launch should move to, decided from
+/// local state only — the launch hot path must never fetch.
+///
+/// Reads the same cache the `notify` path and the update banner read, kept warm
+/// by the detached `__refresh-cache` child that every invocation arms *before*
+/// dispatch (`main::spawn_background_refresh_if_due` → [`super::refresh_cache`]).
+///
+/// A cold or stale cache deliberately means "launch what is active now, upgrade
+/// on the next launch" rather than "fetch now":
+///   - fetching here is what made a plain `claude` block on the update service
+///     on *every* launch — 15s on Claude's CDN timeout, up to ~50s on Codex's
+///     npm → registry → GitHub chain — whenever the network was wedged or behind
+///     a captive portal;
+///   - the refresh armed by this same invocation warms the cache within seconds,
+///     so `on` still converges on latest; the upgrade is deferred by one launch,
+///     never skipped. This is the shape OVM's own self-update already uses:
+///     stage in the background, apply at the start of the next invocation
+///     ([`super::self_autoupdate`]).
+///
+/// Stale (older than the cache TTL) counts as cold on purpose: auto-*installing*
+/// off a day-old index can resurrect a version that has since been pulled, which
+/// is why `notify` reads fresh-only too.
+///
+/// The second candidate is a newer release **already in the version store**:
+/// switching to it is a symlink flip, so it needs neither network nor download,
+/// and it keeps `on` moving on a machine whose cache has gone cold.
+///
+/// One interaction worth knowing: `checkForUpdates: false` means no update
+/// checks at all, so the cached latest is not consulted here (see
+/// [`checked_latest`]) and an `on` policy will only advance as far as what is
+/// already installed — a symlink flip, never a download.
+fn cached_upgrade_target(vm: &VersionManager, active_version: &str) -> Option<String> {
+    let product = vm.product();
+    let cached = checked_latest(&vm.config, &vm.dirs.base, product)
+        .map(|latest| product.normalize_version(&latest));
+
+    [cached, newest_installed_release(vm)]
+        .into_iter()
+        .flatten()
+        .filter(|candidate| product.is_newer(candidate, active_version))
+        .max_by(|left, right| product.compare_version_strings(left, right))
+}
+
+/// The cached upstream latest, or `None` when the user turned update checks
+/// off.
+///
+/// Every launch-time update surface — auto-update, `notify`, the banner —
+/// reads the cache through here, so `checkForUpdates: false` silences all of
+/// them together. Gating only the background refresh was not enough: the cache
+/// is also written by explicit commands (`ovm ls --remote`, `ovm <product>
+/// latest`, the picker) and survives the setting being turned off, so an `on`
+/// policy could still find a fresh entry and *download* a new version on a
+/// plain launch — the one thing "do not check for updates" most obviously
+/// promises not to do.
+///
+/// This gate is about *checking*: a version the user explicitly asks for by
+/// name still resolves and installs, and a newer release already in the store
+/// is still selectable, because neither consults the update service.
+fn checked_latest(config: &OvmConfig, base: &std::path::Path, product: Product) -> Option<String> {
+    if !config.check_for_updates {
+        return None;
+    }
+    crate::update_cache::fresh_latest(base, product)
+}
+
+/// The newest complete, non-prerelease version already installed under OVM.
+fn newest_installed_release(vm: &VersionManager) -> Option<String> {
+    let product = vm.product();
+    // `list_installed` sorts ascending, so the last match is the newest.
+    vm.list_installed().ok()?.into_iter().rev().find(|version| {
+        product.is_official_remote_version(version)
+            && product.is_release_version(version)
+            && vm.install_is_complete(version)
+    })
+}
+
 /// Launch-time `notify` for a product: read the cached latest (no network on
 /// the hot path) and, when it is newer, prompt the user (interactive) or print
 /// one deduplicated notice. Install-now applies immediately before exec, exactly
 /// like the `on` policy. Fail-open: any hiccup just launches the active version.
 fn maybe_notify_product(vm: &VersionManager, active_version: &str) -> Result<String> {
     let product = vm.product();
-    let latest = match crate::update_cache::fresh_latest(&vm.dirs.base, product) {
+    let latest = match checked_latest(&vm.config, &vm.dirs.base, product) {
         Some(latest) => product.normalize_version(&latest),
         None => return Ok(active_version.to_string()),
     };
@@ -291,7 +506,11 @@ fn maybe_notify_product(vm: &VersionManager, active_version: &str) -> Result<Str
     Ok(active_version.to_string())
 }
 
-fn install_and_use_latest(vm: &VersionManager, latest: &str) -> Result<String> {
+/// Install `latest` if needed, activate it, and resume latest-tracking.
+///
+/// Shared by the launch-time `on`/`notify` paths and the imperative
+/// [`super::update`] command so both converge on identical on-disk state.
+pub(super) fn install_and_use_latest(vm: &VersionManager, latest: &str) -> Result<String> {
     if !vm.standard_install_is_complete(latest) {
         // The auto-update cat (printed by the caller) already announced the
         // version bump; the download then shows its own progress bar.
@@ -310,29 +529,18 @@ fn install_and_use_latest(vm: &VersionManager, latest: &str) -> Result<String> {
 
 /// Resolve `--yolo` / `--no-yolo` flags and the per-product config default.
 ///
-/// Returns the final argument list with the product's dangerous-mode flag injected
-/// when yolo is active, or with `--yolo` / `--no-yolo` stripped otherwise.
-fn apply_yolo(product: Product, args: Vec<&String>) -> Result<Vec<String>> {
-    // Pi has no permission system — it's always unrestricted.
-    // Strip --yolo/--no-yolo but don't inject any flag.
-    if product == Product::Pi {
-        return Ok(args
-            .into_iter()
-            .filter(|a| a.as_str() != "--yolo" && a.as_str() != "--no-yolo")
-            .cloned()
-            .collect());
-    }
-
+/// Returns the final argument list with the product's dangerous-mode flag
+/// injected when yolo is active, or with `--yolo` / `--no-yolo` stripped
+/// otherwise. Pi needs no special case: it has no permission system, so
+/// [`yolo_passthrough_flag`] has nothing to inject and the flags are simply
+/// stripped.
+///
+/// Takes the config the launch already loaded — re-resolving `OvmDirs` and
+/// re-parsing `config.json` here made every launch read the file twice.
+fn apply_yolo(product: Product, args: Vec<&String>, config: &OvmConfig) -> Vec<String> {
     let has_yolo = args.iter().any(|a| a.as_str() == "--yolo");
     let has_no_yolo = args.iter().any(|a| a.as_str() == "--no-yolo");
-
-    let config_default = OvmDirs::new()
-        .and_then(|dirs| OvmConfig::load(&dirs.config_file))
-        .unwrap_or_default()
-        .yolo
-        .is_default(product);
-
-    let yolo_active = (has_yolo || config_default) && !has_no_yolo;
+    let yolo_active = (has_yolo || config.yolo.is_default(product)) && !has_no_yolo;
 
     let mut result: Vec<String> = args
         .into_iter()
@@ -346,7 +554,7 @@ fn apply_yolo(product: Product, args: Vec<&String>) -> Result<Vec<String>> {
         }
     }
 
-    Ok(result)
+    result
 }
 
 fn yolo_passthrough_flag(product: Product) -> Option<&'static str> {
@@ -438,8 +646,14 @@ fn launch_environment(
 
 /// If a fresh cache entry says a newer upstream version exists than what's active,
 /// print a one-line nudge to stderr. Suppressed when stderr isn't a tty, when
-/// `OVM_QUIET=1`, or when a dev launch is in progress.
-fn maybe_emit_update_banner(product: Product, active_version: &str, base: &std::path::Path) {
+/// `OVM_QUIET=1`, when a dev launch is in progress, or when the user turned
+/// update checks off.
+fn maybe_emit_update_banner(
+    product: Product,
+    active_version: &str,
+    base: &std::path::Path,
+    config: &OvmConfig,
+) {
     let force = std::env::var("OVM_FORCE_BANNER").is_ok_and(|v| !v.is_empty() && v != "0");
     if !force && !console::Term::stderr().is_term() {
         return;
@@ -448,7 +662,7 @@ fn maybe_emit_update_banner(product: Product, active_version: &str, base: &std::
         return;
     }
 
-    let latest = crate::update_cache::fresh_latest(base, product);
+    let latest = checked_latest(config, base, product);
     if let Some(text) = banner_text(product, active_version, latest.as_deref()) {
         eprintln!("{text}");
     }
@@ -492,13 +706,15 @@ fn format_dev_build_banner(version: &str, metadata: &DevInstallMetadata) -> Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_yolo, banner_text, extract_ovm_version, format_dev_build_banner,
-        is_passthrough_metadata_request, is_version_request, launch_environment,
-        make_latest_default, maybe_auto_update, yolo_passthrough_flag,
+        apply_yolo, banner_text, cached_upgrade_target, checked_latest, extract_ovm_version,
+        format_dev_build_banner, is_passthrough_metadata_request, is_version_request,
+        launch_environment, make_latest_default, maybe_auto_update, maybe_notify_product,
+        yolo_passthrough_flag,
     };
     use crate::config::{AutoUpdateConfig, AutoUpdatePolicy, OvmConfig, OvmDirs};
     use crate::dev_metadata::{DevInstallMetadata, DevInstallMode};
     use crate::product::Product;
+    use crate::update_cache::{save_version_index, VersionIndex};
     use crate::version_manager::VersionManager;
     use std::path::PathBuf;
 
@@ -507,8 +723,33 @@ mod tests {
     }
 
     fn apply(product: Product, values: &[&str]) -> Vec<String> {
+        apply_with(product, values, &OvmConfig::default())
+    }
+
+    fn apply_with(product: Product, values: &[&str], config: &OvmConfig) -> Vec<String> {
         let args = args(values);
-        apply_yolo(product, args.iter().collect()).expect("apply yolo")
+        apply_yolo(product, args.iter().collect(), config)
+    }
+
+    #[test]
+    fn the_config_default_injects_yolo_without_a_flag() {
+        // The default now comes from the config the launch already loaded, so
+        // it is finally testable without touching the real `~/.ovm`.
+        let mut config = OvmConfig::default();
+        config.yolo.claude = true;
+
+        assert_eq!(
+            apply_with(Product::Claude, &["hello"], &config),
+            vec![
+                "--dangerously-skip-permissions".to_string(),
+                "hello".to_string(),
+            ]
+        );
+        // `--no-yolo` still beats the config default.
+        assert_eq!(
+            apply_with(Product::Claude, &["--no-yolo", "hello"], &config),
+            vec!["hello".to_string()]
+        );
     }
 
     #[test]
@@ -779,6 +1020,154 @@ mod tests {
         assert_eq!(
             vm.current_version().expect("current"),
             Some("2.1.170".into())
+        );
+    }
+
+    /// Write a version index for `product` whose entries are `versions`, aged
+    /// `age_secs` seconds. Age is what separates a usable cache from a stale one.
+    fn seed_version_index(base: &std::path::Path, product: Product, versions: &[&str], age: u64) {
+        let index = VersionIndex {
+            versions: versions.iter().map(|value| value.to_string()).collect(),
+            dates: std::collections::HashMap::new(),
+            fetched_at: crate::update_cache::now_secs().saturating_sub(age),
+        };
+        save_version_index(base, product, &index).expect("seed version index");
+    }
+
+    #[test]
+    fn upgrade_target_comes_from_the_fresh_cache() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        seed_version_index(
+            temp.path(),
+            Product::Claude,
+            &["2.1.159", "2.1.170"],
+            60 * 60,
+        );
+
+        assert_eq!(
+            cached_upgrade_target(&vm, "2.1.159").as_deref(),
+            Some("2.1.170")
+        );
+    }
+
+    #[test]
+    fn upgrade_target_is_none_when_the_cache_is_cold() {
+        // A machine that has never refreshed, with nothing newer on disk. The
+        // launch must NOT fetch to fill the gap: the detached refresh armed by
+        // this same invocation warms the cache, and the upgrade lands on the
+        // next launch.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+
+        assert_eq!(cached_upgrade_target(&vm, "2.1.159"), None);
+    }
+
+    #[test]
+    fn upgrade_target_ignores_a_stale_cache() {
+        // Older than the index TTL. Auto-*installing* off a day-old index can
+        // resurrect a pulled release, so stale counts as cold — same rule the
+        // notify path follows.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        seed_version_index(
+            temp.path(),
+            Product::Claude,
+            &["2.1.159", "2.1.170"],
+            48 * 60 * 60,
+        );
+
+        assert_eq!(cached_upgrade_target(&vm, "2.1.159"), None);
+    }
+
+    #[test]
+    fn upgrade_target_uses_a_newer_release_that_is_already_installed() {
+        // No cache at all, but the store already holds a newer release: that
+        // upgrade is a symlink flip, so `on` takes it without any network.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159", "2.1.170"]);
+
+        assert_eq!(
+            cached_upgrade_target(&vm, "2.1.159").as_deref(),
+            Some("2.1.170")
+        );
+    }
+
+    #[test]
+    fn upgrade_target_is_none_when_active_is_already_newest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        seed_version_index(temp.path(), Product::Claude, &["2.1.159"], 60 * 60);
+
+        assert_eq!(cached_upgrade_target(&vm, "2.1.159"), None);
+        assert_eq!(cached_upgrade_target(&vm, "2.1.170"), None);
+    }
+
+    /// `checkForUpdates: false` must mean no update checks *anywhere*, not
+    /// just no background refresh. A cache warmed before the setting was
+    /// turned off (or by an explicit `ovm ls --remote`) previously let a plain
+    /// launch under `on` download a version the user never asked for.
+    #[test]
+    fn update_checks_off_hides_the_cached_latest_from_every_surface() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        seed_version_index(
+            temp.path(),
+            Product::Claude,
+            &["2.1.159", "2.1.170"],
+            60 * 60,
+        );
+
+        // With checks on, the fresh cache is visible — the control.
+        assert_eq!(
+            checked_latest(&vm.config, &vm.dirs.base, Product::Claude).as_deref(),
+            Some("2.1.170")
+        );
+
+        vm.config.check_for_updates = false;
+        assert_eq!(
+            checked_latest(&vm.config, &vm.dirs.base, Product::Claude),
+            None
+        );
+        assert_eq!(
+            cached_upgrade_target(&vm, "2.1.159"),
+            None,
+            "an `on` launch must not download off a cache the user asked us not to fill"
+        );
+        assert_eq!(
+            maybe_notify_product(&vm, "2.1.159").expect("notify"),
+            "2.1.159",
+            "`notify` must not advertise an update either"
+        );
+    }
+
+    /// The gate is about *checking*, not about pinning the machine: a newer
+    /// release already in the store is a symlink flip with no network, so `on`
+    /// still takes it with update checks off.
+    #[test]
+    fn update_checks_off_still_selects_a_newer_installed_release() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut vm = seeded_claude_vm(temp.path(), &["2.1.159", "2.1.170"]);
+        vm.config.check_for_updates = false;
+
+        assert_eq!(
+            cached_upgrade_target(&vm, "2.1.159").as_deref(),
+            Some("2.1.170")
+        );
+    }
+
+    #[test]
+    fn auto_update_on_with_a_cold_cache_launches_the_active_version() {
+        // The default policy (`on`) against a machine with no cached index and
+        // nothing newer installed: the active version is returned untouched,
+        // without a network round trip.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        vm.use_version("2.1.159").expect("seed current");
+
+        assert_eq!(
+            maybe_auto_update(&vm, "2.1.159").expect("auto update"),
+            "2.1.159"
         );
     }
 

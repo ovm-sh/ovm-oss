@@ -14,7 +14,8 @@ use crate::error::{OvmError, Result};
 use console::style;
 use std::path::{Path, PathBuf};
 
-/// (command name, `ovm` subcommand it execs, human description)
+/// (command name, human description). Each shim execs `ovm <command name>`, so
+/// the subcommand is the name itself and is not repeated here.
 const SHORTCUTS: [(&str, &str); 9] = [
     ("ccy", "claude --yolo"),
     ("cxy", "codex --yolo"),

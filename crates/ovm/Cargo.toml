@@ -1,6 +1,6 @@
 [package]
 name = "ovm"
-version = "0.0.3-alpha.7"
+version = "0.0.3-alpha.8"
 edition = "2021"
 description = "Open Version Manager for AI coding tools"
 license = "MIT"

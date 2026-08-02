@@ -1,10 +1,10 @@
 use crate::error::{OvmError, Result};
 use crate::product::Product;
 use crate::release_metadata::ReleaseInstallMetadata;
+use console::style;
 use serde::Deserialize;
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha512};
 use std::collections::HashMap;
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_RELEASES_API_BASE: &str = "https://api.github.com/repos/openai/codex/releases";
@@ -42,6 +42,17 @@ pub struct Release {
 pub struct ReleaseAsset {
     pub name: String,
     pub browser_download_url: String,
+    /// Byte size the releases API records for this asset. It is a second,
+    /// independently-fetched declaration of how long the body must be, so a
+    /// download that ends early is caught even if the CDN sends no
+    /// `Content-Length`.
+    ///
+    /// Optional here so that *listing* releases survives a payload we don't
+    /// fully understand; the download path insists on it via
+    /// [`declared_asset_size`], because there a missing size silently reduces
+    /// verification rather than failing.
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -163,20 +174,56 @@ fn latest_release_version(versions: Vec<String>) -> Option<String> {
 }
 
 pub fn download_release(version: &str, dest: &Path) -> Result<ReleaseInstallMetadata> {
-    match download_github_release(version, dest) {
-        Ok(metadata) => Ok(metadata),
-        Err(github_error) => match download_npm_release(version, dest) {
-            Ok(metadata) => Ok(metadata),
-            Err(npm_error) => Err(OvmError::Message(format!(
-                "Could not download Codex {version} from GitHub releases ({github_error}) or npm ({npm_error})"
-            ))),
-        },
+    // Fetched once and used twice: the GitHub path needs the asset list, and
+    // the npm fallback needs to know whether this version publishes sidecars at
+    // all. Fetching it separately per path would let the two disagree about the
+    // same release.
+    let fetched = fetch_release(version);
+    let requirement = match &fetched {
+        Ok(release) => SidecarRequirement::from_release(release),
+        Err(error) => SidecarRequirement::Unknown(error.to_string()),
+    };
+
+    let github_error = match fetched {
+        Ok(release) => {
+            // Before anything is downloaded, and OUTSIDE the fallback chain: a
+            // release that publishes the sidecar family for other platforms and
+            // not for ours is known-broken here. No other registry can
+            // republish an asset that was never built, so falling through to
+            // npm would only route around this refusal — which is exactly how
+            // the 0.144.0 shape would reach a user again.
+            refuse_incomplete_sidecar_family(&release, version)?;
+            match install_github_release(&release, version, dest) {
+                Ok(metadata) => return complete_install(metadata, &requirement, version, dest),
+                Err(error) => error,
+            }
+        }
+        Err(error) => error,
+    };
+
+    match download_npm_release(version, dest) {
+        Ok(metadata) => complete_install(metadata, &requirement, version, dest),
+        Err(npm_error) => Err(OvmError::Message(format!(
+            "Could not download Codex {version} from GitHub releases ({github_error}) or npm ({npm_error})"
+        ))),
     }
 }
 
+/// The GitHub path alone, with no npm fallback wrapped around it. Only tests
+/// use it: they need a GitHub-path failure to surface as itself rather than as
+/// the combined "GitHub … or npm …" message.
+#[cfg(test)]
 fn download_github_release(version: &str, dest: &Path) -> Result<ReleaseInstallMetadata> {
     let release = fetch_release(version)?;
-    let asset = select_release_asset(&release).ok_or_else(|| OvmError::DownloadFailed {
+    install_github_release(&release, version, dest)
+}
+
+fn install_github_release(
+    release: &Release,
+    version: &str,
+    dest: &Path,
+) -> Result<ReleaseInstallMetadata> {
+    let asset = select_release_asset(release).ok_or_else(|| OvmError::DownloadFailed {
         url: format!("{}/tags/{version}", releases_api_base()),
         message: format!(
             "No supported asset found for any of: {}",
@@ -189,15 +236,17 @@ fn download_github_release(version: &str, dest: &Path) -> Result<ReleaseInstallM
     let archive_path = dest.with_extension("tar.gz");
     let asset_name = asset.name.clone();
     let asset_url = asset.browser_download_url.clone();
-    let archive_sha256 = download_and_extract_single_binary(&asset_url, &archive_path, dest)?;
+    let asset_size = declared_asset_size(asset)?;
+    let archive_sha256 =
+        download_and_extract_single_binary(&asset_url, &archive_path, dest, Some(asset_size))?;
     if let Err(error) = super::verify_product_binary(Product::Codex, dest) {
         let _ = std::fs::remove_file(dest);
         return Err(error);
     }
-    install_github_sidecars(&release, dest)?;
+    install_github_sidecars(release, version, dest)?;
     Ok(ReleaseInstallMetadata::new(
         version,
-        release.tag_name,
+        release.tag_name.clone(),
         asset_name,
         asset_url,
         archive_sha256,
@@ -340,13 +389,31 @@ fn expected_asset_names() -> &'static [&'static str] {
     }
 }
 
+/// The byte size the releases API records for an asset we are about to
+/// download. Required, not optional: GitHub declares a size for every asset,
+/// so a missing one means the metadata is not the shape we believe it is —
+/// and quietly dropping to a `Content-Length`-only check would render that
+/// unknown as a normal install. The [`ReleaseAsset::size`] field stays
+/// optional because *listing* releases must survive a payload surprise; only
+/// the download path, where the number is load-bearing, insists on it.
+pub(crate) fn declared_asset_size(asset: &ReleaseAsset) -> Result<u64> {
+    asset.size.ok_or_else(|| OvmError::DownloadFailed {
+        url: asset.browser_download_url.clone(),
+        message: format!(
+            "the release metadata declares no size for {}, so the downloaded length cannot be \
+             checked against a second source",
+            asset.name
+        ),
+    })
+}
+
 fn select_release_asset(release: &Release) -> Option<&ReleaseAsset> {
     expected_asset_names()
         .iter()
         .find_map(|expected| release.assets.iter().find(|asset| asset.name == *expected))
 }
 
-fn download_asset(url: &str, dest: &Path) -> Result<String> {
+fn download_asset(url: &str, dest: &Path, metadata_size: Option<u64>) -> Result<String> {
     // Loopback is only legitimate when the Codex releases test override points at
     // a local mock; production release metadata must never resolve to loopback.
     let allow_loopback = super::test_override_active("OVM_CODEX_RELEASES_URL");
@@ -365,39 +432,20 @@ fn download_asset(url: &str, dest: &Path) -> Result<String> {
         });
     }
 
-    let mut file = std::fs::File::create(dest)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
-
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|error| OvmError::DownloadFailed {
-                url: url.to_string(),
-                message: format!("failed to read release asset body: {}", error),
-            })?;
-        if read == 0 {
-            break;
-        }
-
-        io::Write::write_all(&mut file, &buffer[..read]).map_err(|error| {
-            OvmError::DownloadFailed {
-                url: url.to_string(),
-                message: format!(
-                    "failed to write release asset to {}: {}",
-                    dest.display(),
-                    error
-                ),
-            }
-        })?;
-        hasher.update(&buffer[..read]);
+    // Read before the body is consumed. No transparent decompression is
+    // enabled on the client, so this is the exact number of bytes to expect.
+    let content_length = response.content_length();
+    let result = super::stream_to_file(&mut response, dest, url, "release asset", None).and_then(
+        |(sha256, downloaded)| {
+            super::validate_downloaded_size(url, downloaded, content_length, metadata_size)?;
+            Ok(sha256)
+        },
+    );
+    if result.is_err() {
+        // Never leave a short archive on disk to be mistaken for a good one.
+        let _ = std::fs::remove_file(dest);
     }
-
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    result
 }
 
 fn download_npm_tarball(url: &str, integrity: Option<&str>, dest: &Path) -> Result<String> {
@@ -416,46 +464,20 @@ fn download_npm_tarball(url: &str, integrity: Option<&str>, dest: &Path) -> Resu
         });
     }
 
-    let mut file = std::fs::File::create(dest)?;
-    let mut sha256 = Sha256::new();
+    let content_length = response.content_length();
     let mut sha512 = Sha512::new();
-    let mut buffer = [0u8; 8192];
-
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|error| OvmError::DownloadFailed {
-                url: url.to_string(),
-                message: format!("failed to read npm tarball body: {error}"),
-            })?;
-        if read == 0 {
-            break;
-        }
-
-        io::Write::write_all(&mut file, &buffer[..read]).map_err(|error| {
-            OvmError::DownloadFailed {
-                url: url.to_string(),
-                message: format!("failed to write npm tarball to {}: {error}", dest.display()),
+    let result = super::stream_to_file(&mut response, dest, url, "npm tarball", Some(&mut sha512))
+        .and_then(|(sha256, downloaded)| {
+            super::validate_downloaded_size(url, downloaded, content_length, None)?;
+            if let Some(integrity) = integrity {
+                crate::sources::npm::verify_sha512_integrity(integrity, &sha512.finalize())?;
             }
-        })?;
-        sha256.update(&buffer[..read]);
-        sha512.update(&buffer[..read]);
+            Ok(sha256)
+        });
+    if result.is_err() {
+        let _ = std::fs::remove_file(dest);
     }
-
-    if let Some(integrity) = integrity {
-        if let Err(error) =
-            crate::sources::npm::verify_sha512_integrity(integrity, &sha512.finalize())
-        {
-            let _ = std::fs::remove_file(dest);
-            return Err(error);
-        }
-    }
-
-    Ok(sha256
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    result
 }
 
 /// Download a single-binary release asset and extract it to `dest`, removing
@@ -465,23 +487,155 @@ fn download_and_extract_single_binary(
     url: &str,
     archive_path: &Path,
     dest: &Path,
+    metadata_size: Option<u64>,
 ) -> Result<String> {
-    let download_result = download_asset(url, archive_path);
+    let download_result = download_asset(url, archive_path, metadata_size);
     let result = download_result
         .and_then(|sha256| extract_release_archive(archive_path, dest).map(|_| sha256));
     let _ = std::fs::remove_file(archive_path);
     result
 }
 
+/// Whether `release` publishes `sidecar` for *some* platform — i.e. its asset
+/// list holds at least one member of that sidecar's family
+/// (`codex-code-mode-host-<triple>.tar.gz`, and any signature/checksum files
+/// beside it). The main binary's assets (`codex-<triple>.tar.gz`) never match,
+/// because the prefix tested is the full sidecar name plus `-`.
+fn release_publishes_sidecar_family(release: &Release, sidecar: &str) -> bool {
+    let prefix = format!("{sidecar}-");
+    release
+        .assets
+        .iter()
+        .any(|asset| asset.name.starts_with(&prefix))
+}
+
+/// Which runtime sidecars a version is known to require.
+///
+/// The only honest signal OVM has is the GitHub release's own asset list: if a
+/// release publishes `codex-code-mode-host-<triple>.tar.gz` for any platform,
+/// that version's Codex spawns the sidecar, and an install without it cannot
+/// run a shell command. This is the same evidence the `--strict-sidecars`
+/// release-radar probe uses (the release asset manifest). npm publishes no
+/// per-file listing we could ask instead, so the knowledge is derived once from
+/// the release and carried into whichever source ends up producing the tree.
+enum SidecarRequirement {
+    /// The release listing was read. These sidecars are published for at least
+    /// one platform; empty means a release from before the sidecar existed.
+    Published(Vec<&'static str>),
+    /// The release listing could not be read at all, so requirement is
+    /// undecidable. Mirrors the probe's `inconclusive` sidecar status, which
+    /// passes by default: refusing every install whenever the releases API is
+    /// rate-limited would disable the npm fallback exactly when it is needed.
+    /// It is said out loud rather than assumed away (see
+    /// [`complete_install`]).
+    Unknown(String),
+}
+
+impl SidecarRequirement {
+    fn from_release(release: &Release) -> Self {
+        Self::Published(
+            SIDECAR_BINARIES
+                .iter()
+                .copied()
+                .filter(|sidecar| release_publishes_sidecar_family(release, sidecar))
+                .collect(),
+        )
+    }
+}
+
+/// The guarantee, checked where it is finally made: whatever source produced
+/// the tree — GitHub asset, npm platform package — a version whose release
+/// publishes a sidecar family must have that sidecar on disk before the install
+/// is handed back as good.
+///
+/// The GitHub path enforces this asset-by-asset already; the npm path could
+/// not, because its extractor only sees whatever the package happens to
+/// contain. Checking here means the promise holds across the whole install
+/// rather than on one path.
+fn complete_install(
+    metadata: ReleaseInstallMetadata,
+    requirement: &SidecarRequirement,
+    version: &str,
+    dest: &Path,
+) -> Result<ReleaseInstallMetadata> {
+    let Some(bin_dir) = dest.parent() else {
+        return Ok(metadata);
+    };
+    for sidecar in SIDECAR_BINARIES {
+        if bin_dir.join(sidecar).exists() {
+            continue;
+        }
+        match requirement {
+            SidecarRequirement::Published(published) if published.contains(sidecar) => {
+                for installed in installed_binary_paths(dest) {
+                    let _ = std::fs::remove_file(installed);
+                }
+                return Err(OvmError::DownloadFailed {
+                    url: format!("{}/tags/{version}", releases_api_base()),
+                    message: format!(
+                        "Codex {version} ships the {sidecar} sidecar, but the package installed \
+                         here contains no {sidecar} beside the Codex binary. Installing it would \
+                         leave a Codex that cannot run shell commands, so nothing was installed. \
+                         Try another version, or report this at \
+                         https://github.com/ovm-sh/ovm-oss/issues."
+                    ),
+                });
+            }
+            SidecarRequirement::Published(_) => {}
+            SidecarRequirement::Unknown(reason) => eprintln!(
+                "  {} Installed Codex {version} without {sidecar}, and could not read the release \
+                 metadata to tell whether this version needs it ({reason}). If shell commands \
+                 fail to spawn, reinstall once the GitHub releases API is reachable.",
+                style("!").yellow()
+            ),
+        }
+    }
+    Ok(metadata)
+}
+
+/// Refuse a release that publishes a sidecar family for other platforms but not
+/// for ours — the 0.144.0 shape, where a Codex installs looking healthy and
+/// then cannot spawn a single shell command.
+///
+/// Releases from before the sidecar existed publish none at all, and those keep
+/// installing. This is the one condition both the pre-download refusal in
+/// [`download_release`] and [`install_github_sidecars`] consult, so the two can
+/// never drift into disagreeing about the same release.
+fn refuse_incomplete_sidecar_family(release: &Release, version: &str) -> Result<()> {
+    for sidecar in SIDECAR_BINARIES {
+        let asset_name = format!("{sidecar}-{}.tar.gz", release_target_triple());
+        if release.assets.iter().any(|asset| asset.name == asset_name) {
+            continue;
+        }
+        if !release_publishes_sidecar_family(release, sidecar) {
+            continue;
+        }
+        return Err(OvmError::DownloadFailed {
+            url: format!("{}/tags/{version}", releases_api_base()),
+            message: format!(
+                "Codex {} publishes {sidecar} for other platforms but not {asset_name}. \
+                 Installing it would leave a Codex that cannot run shell commands, so \
+                 nothing was installed. Try another version, or report this at \
+                 https://github.com/ovm-sh/ovm-oss/issues.",
+                release.tag_name
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Install the [`SIDECAR_BINARIES`] that this release publishes as separate
 /// assets (e.g. `codex-code-mode-host-aarch64-apple-darwin.tar.gz`) next to
-/// the main binary at `dest`. Releases that don't publish a sidecar asset are
-/// left as-is; a sidecar that exists but fails to install is an error, since
-/// the CLI cannot run commands without it.
-fn install_github_sidecars(release: &Release, dest: &Path) -> Result<()> {
+/// the main binary at `dest`. A sidecar that exists and fails to install is an
+/// error, for the same reason one that is missing for our platform alone is.
+fn install_github_sidecars(release: &Release, version: &str, dest: &Path) -> Result<()> {
     let Some(bin_dir) = dest.parent() else {
         return Ok(());
     };
+    if let Err(error) = refuse_incomplete_sidecar_family(release, version) {
+        let _ = std::fs::remove_file(dest);
+        return Err(error);
+    }
     for sidecar in SIDECAR_BINARIES {
         let asset_name = format!("{sidecar}-{}.tar.gz", release_target_triple());
         let Some(asset) = release.assets.iter().find(|asset| asset.name == asset_name) else {
@@ -489,12 +643,16 @@ fn install_github_sidecars(release: &Release, dest: &Path) -> Result<()> {
         };
         let sidecar_dest = bin_dir.join(sidecar);
         let archive_path = sidecar_dest.with_extension("tar.gz");
-        let install_result = download_and_extract_single_binary(
-            &asset.browser_download_url,
-            &archive_path,
-            &sidecar_dest,
-        )
-        .and_then(|_| super::verify_product_binary(Product::Codex, &sidecar_dest));
+        let install_result = declared_asset_size(asset)
+            .and_then(|size| {
+                download_and_extract_single_binary(
+                    &asset.browser_download_url,
+                    &archive_path,
+                    &sidecar_dest,
+                    Some(size),
+                )
+            })
+            .and_then(|_| super::verify_product_binary(Product::Codex, &sidecar_dest));
         if let Err(error) = install_result {
             let _ = std::fs::remove_file(&sidecar_dest);
             let _ = std::fs::remove_file(dest);
@@ -555,14 +713,15 @@ fn extract_npm_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     let mut staged: Vec<(String, PathBuf)> = Vec::new();
 
     for entry in archive.entries()? {
-        let mut entry = entry.map_err(|error| OvmError::ExtractionFailed(error.to_string()))?;
+        let mut entry =
+            entry.map_err(|error| archive_read_error(error, "unreadable archive entry"))?;
         if !entry.header().entry_type().is_file() {
             continue;
         }
 
         let entry_path = entry
             .path()
-            .map_err(|error| OvmError::ExtractionFailed(error.to_string()))?;
+            .map_err(|error| archive_read_error(error, "unreadable archive entry path"))?;
         let Some(file_name) = entry_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -584,14 +743,14 @@ fn extract_npm_archive(archive_path: &Path, dest: &Path) -> Result<()> {
         let staged_path = temp_dir.path().join(&file_name);
         entry
             .unpack(&staged_path)
-            .map_err(|error| OvmError::ExtractionFailed(error.to_string()))?;
+            .map_err(|error| archive_read_error(error, &format!("failed to unpack {file_name}")))?;
         crate::util::make_executable(&staged_path)?;
         staged.push((file_name, staged_path));
     }
 
     if !staged.iter().any(|(file_name, _)| file_name == "codex") {
         return Err(OvmError::ExtractionFailed(
-            "Could not find Codex binary in npm package".into(),
+            "the npm package unpacked completely but contains no Codex binary".into(),
         ));
     }
 
@@ -618,6 +777,21 @@ fn extract_npm_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Classify an error raised while reading a downloaded archive.
+///
+/// A short read (`UnexpectedEof` from the gzip/tar layer) means the bytes on
+/// disk are not a whole archive — a truncated download, not a bad release. The
+/// two cases used to produce the same message, so an interrupted transfer read
+/// as "the publisher shipped a broken archive".
+pub(crate) fn archive_read_error(error: std::io::Error, context: &str) -> OvmError {
+    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+        return OvmError::ExtractionFailed(format!(
+            "archive incomplete or truncated (interrupted download?): {error}. Retry the install."
+        ));
+    }
+    OvmError::ExtractionFailed(format!("{context}: {error}"))
+}
+
 fn extract_release_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     let file = std::fs::File::open(archive_path)?;
     let gz = flate2::read::GzDecoder::new(file);
@@ -632,42 +806,53 @@ fn extract_release_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     let mut extracted = false;
 
     for entry in archive.entries()? {
-        let mut entry = entry.map_err(|error| OvmError::ExtractionFailed(error.to_string()))?;
+        let mut entry =
+            entry.map_err(|error| archive_read_error(error, "unreadable archive entry"))?;
         if !entry.header().entry_type().is_file() {
             continue;
         }
 
         let entry_path = entry
             .path()
-            .map_err(|error| OvmError::ExtractionFailed(error.to_string()))?;
-        let Some(file_name) = entry_path.file_name().and_then(|name| name.to_str()) else {
+            .map_err(|error| archive_read_error(error, "unreadable archive entry path"))?;
+        let Some(file_name) = entry_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+        else {
             continue;
         };
 
-        if !is_codex_binary_name(file_name) {
+        if !is_codex_binary_name(&file_name) {
             continue;
         }
 
         // Effective (PAX-aware) size, not the raw header size (see above).
         let declared_size = entry.size();
-        crate::sources::validate_tar_entry_size(declared_size, std::path::Path::new(file_name))?;
+        crate::sources::validate_tar_entry_size(declared_size, std::path::Path::new(&file_name))?;
 
-        let extracted_path = temp_dir.path().join(file_name);
+        let extracted_path = temp_dir.path().join(&file_name);
         entry
             .unpack(&extracted_path)
-            .map_err(|error| OvmError::ExtractionFailed(error.to_string()))?;
+            .map_err(|error| archive_read_error(error, &format!("failed to unpack {file_name}")))?;
+        // Permissions go on the staged file, before it is published. Chmod'ing
+        // the published path afterwards left a window where `dest` existed
+        // non-executable (a concurrent `ovm run` would see a "cannot execute"
+        // binary), and chmod-by-path follows links. The npm extractor above
+        // already stages-then-publishes this way.
+        crate::util::make_executable(&extracted_path)?;
         std::fs::rename(&extracted_path, dest)?;
         extracted = true;
         break;
     }
 
     if !extracted {
+        // The archive read to completion (a truncated one fails above with the
+        // incomplete-archive error), so this really is a release-shape problem.
         return Err(OvmError::ExtractionFailed(
-            "Could not find Codex binary in release archive".into(),
+            "the release archive unpacked completely but contains no Codex binary".into(),
         ));
     }
-
-    crate::util::make_executable(dest)?;
 
     Ok(())
 }
@@ -679,15 +864,27 @@ fn is_codex_binary_name(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_npm_platform_version, expected_asset_names, extract_npm_archive,
-        extract_release_archive, get_latest_npm_release_version_at, latest_release_version,
-        list_remote_versions_at, select_release_asset, Release, ReleaseAsset,
+        codex_npm_platform_version, declared_asset_size, download_and_extract_single_binary,
+        download_github_release, download_release, expected_asset_names, extract_npm_archive,
+        extract_release_archive, get_latest_npm_release_version_at, install_github_sidecars,
+        latest_release_version, list_remote_versions_at, release_target_triple,
+        select_release_asset, Release, ReleaseAsset,
     };
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use mockito::Server;
     use tar::Builder;
     use tempfile::tempdir;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn asset(name: &str, url: &str) -> ReleaseAsset {
+        ReleaseAsset {
+            name: name.to_string(),
+            browser_download_url: url.to_string(),
+            size: None,
+        }
+    }
 
     #[test]
     fn list_remote_versions_paginates() {
@@ -785,17 +982,11 @@ mod tests {
         let mut assets: Vec<ReleaseAsset> = expected
             .iter()
             .rev()
-            .map(|name| ReleaseAsset {
-                name: (*name).to_string(),
-                browser_download_url: format!("https://example.com/{name}"),
-            })
+            .map(|name| asset(name, &format!("https://example.com/{name}")))
             .collect();
         assets.insert(
             0,
-            ReleaseAsset {
-                name: "other-platform.tar.gz".into(),
-                browser_download_url: "https://example.com/other".into(),
-            },
+            asset("other-platform.tar.gz", "https://example.com/other"),
         );
         let release = Release {
             tag_name: "rust-v0.120.0".into(),
@@ -847,6 +1038,168 @@ mod tests {
 
         let encoder = builder.into_inner().expect("finish tar");
         encoder.finish().expect("finish gzip");
+    }
+
+    /// A gzipped tar holding a single entry whose name, mode and entry type are
+    /// all attacker-chosen. The safe-archive tests below need to build shapes a
+    /// legitimate release never produces.
+    fn create_hostile_archive(
+        path: &std::path::Path,
+        entry_name: &str,
+        mode: u32,
+        entry_type: tar::EntryType,
+        link_target: Option<&str>,
+        contents: &[u8],
+    ) {
+        let file = std::fs::File::create(path).expect("create archive");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = Builder::new(encoder);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(mode);
+        header.set_entry_type(entry_type);
+        match link_target {
+            Some(target) => {
+                header.set_size(0);
+                builder
+                    .append_link(&mut header, entry_name, target)
+                    .expect("append link entry");
+            }
+            None => {
+                header.set_size(contents.len() as u64);
+                // The name goes straight into the header field rather than
+                // through `set_path`/`append_data`, both of which refuse to
+                // WRITE a `..` component. A hostile publisher has no such
+                // scruples, and the point of these tests is what OVM does when
+                // it READS one.
+                {
+                    let name_field = &mut header.as_old_mut().name;
+                    let bytes = entry_name.as_bytes();
+                    assert!(
+                        bytes.len() < name_field.len(),
+                        "entry name too long for a v7 header"
+                    );
+                    name_field[..bytes.len()].copy_from_slice(bytes);
+                }
+                header.set_cksum();
+                builder
+                    .append(&header, contents)
+                    .expect("append archive entry");
+            }
+        }
+
+        let encoder = builder.into_inner().expect("finish tar");
+        encoder.finish().expect("finish gzip");
+    }
+
+    #[test]
+    fn release_archive_entry_escaping_its_directory_cannot_write_outside_the_destination() {
+        // A release asset is fetched over the network from a third party. If a
+        // `../` in an entry name were honoured, unpacking would write anywhere
+        // the user can write — the classic tar-slip. Extraction must use only
+        // the entry's final path component, so the payload lands at `dest` and
+        // the traversal has no effect at all.
+        let dir = tempdir().expect("tempdir");
+        let archive_path = dir.path().join("slip.tar.gz");
+        let sandbox = dir.path().join("sandbox");
+        let dest = sandbox.join("release").join("bin").join("codex");
+
+        // A pre-existing file exactly where the traversal aims. Asserting only
+        // "nothing new appeared there" is not enough: extraction unpacks to a
+        // scratch path and then renames, so an escaped write would be moved
+        // away again and leave no trace. A victim file that must survive
+        // untouched catches both the write and the move.
+        let escape_target = dir.path().join("codex");
+        std::fs::write(
+            &escape_target,
+            b"pre-existing file the archive must not touch",
+        )
+        .expect("seed the traversal victim");
+
+        create_hostile_archive(
+            &archive_path,
+            "../../../../codex",
+            0o755,
+            tar::EntryType::Regular,
+            None,
+            b"payload",
+        );
+
+        extract_release_archive(&archive_path, &dest).expect("traversal is neutralised, not fatal");
+
+        assert_eq!(
+            std::fs::read(&dest).expect("read extracted binary"),
+            b"payload"
+        );
+        assert_eq!(
+            std::fs::read(&escape_target).expect("the traversal victim must still exist"),
+            b"pre-existing file the archive must not touch",
+            "a `../` entry name wrote outside the destination directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_archive_symlink_named_like_the_binary_is_not_installed() {
+        // A symlink entry called `codex` pointing at a file the user can read
+        // would turn `ovm run codex` into "execute whatever that path is", and
+        // would let a later write through the link clobber an arbitrary file.
+        // Only regular files may become the installed binary.
+        let dir = tempdir().expect("tempdir");
+        let archive_path = dir.path().join("symlink.tar.gz");
+        let dest = dir.path().join("release").join("bin").join("codex");
+
+        create_hostile_archive(
+            &archive_path,
+            "codex",
+            0o777,
+            tar::EntryType::Symlink,
+            Some("/etc/passwd"),
+            b"",
+        );
+
+        let error = extract_release_archive(&archive_path, &dest)
+            .expect_err("a symlink must not satisfy the binary entry");
+        assert!(error.to_string().contains("no Codex binary"), "{error}");
+        assert!(
+            !dest.exists() && std::fs::symlink_metadata(&dest).is_err(),
+            "a symlink entry was installed as the Codex binary"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_archive_setuid_bits_are_stripped_from_the_installed_binary() {
+        // tar preserves header modes, so a setuid-root archive entry would be
+        // written setuid. The installed binary must end up exactly 0o755 —
+        // asserting `mode & 0o755 == 0o755` (the shape this suite used to use)
+        // passes for 0o4777 and proves nothing.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let archive_path = dir.path().join("setuid.tar.gz");
+        let dest = dir.path().join("release").join("bin").join("codex");
+
+        create_hostile_archive(
+            &archive_path,
+            "codex",
+            0o4777,
+            tar::EntryType::Regular,
+            None,
+            b"payload",
+        );
+
+        extract_release_archive(&archive_path, &dest).expect("extract archive");
+
+        let mode = std::fs::metadata(&dest)
+            .expect("stat extracted binary")
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_eq!(
+            mode, 0o755,
+            "installed binary mode is {mode:o}, expected exactly 755 (setuid/setgid/world-write must not survive)"
+        );
     }
 
     #[test]
@@ -1021,6 +1374,540 @@ mod tests {
                 .exists(),
             "sidecar must not be committed"
         );
+    }
+
+    // ── Download integrity ───────────────────────────────────────────
+
+    /// Serve `body` with NO `Content-Length`, then close. This is the framing
+    /// where an interrupted transfer is invisible: the client sees a clean EOF
+    /// and cannot tell a short body from a complete one. (With a
+    /// `Content-Length` present, hyper itself rejects a short body.)
+    fn serve_close_delimited(body: Vec<u8>) -> u16 {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n");
+                let _ = stream.write_all(&body);
+            }
+        });
+        port
+    }
+
+    /// The regression this guards: a download cut short used to be stored and
+    /// hashed as if complete, and the failure only surfaced at extraction as
+    /// "no Codex binary in the release archive" — blaming the publisher for
+    /// our own short read.
+    #[test]
+    fn a_truncated_download_is_reported_as_incomplete_not_as_a_bad_release() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let dir = tempdir().expect("tempdir");
+        let archive_path = dir.path().join("codex.tar.gz");
+        let dest = dir.path().join("bin").join("codex");
+        create_archive(&archive_path, "codex", b"fake-codex-binary");
+        let complete = std::fs::read(&archive_path).expect("read archive");
+        std::fs::remove_file(&archive_path).expect("remove staged archive");
+
+        let port = serve_close_delimited(complete[..complete.len() / 2].to_vec());
+        std::env::set_var("OVM_CODEX_RELEASES_URL", format!("http://127.0.0.1:{port}"));
+        let error = download_and_extract_single_binary(
+            &format!("http://127.0.0.1:{port}/codex.tar.gz"),
+            &archive_path,
+            &dest,
+            Some(complete.len() as u64),
+        )
+        .expect_err("a truncated download must fail");
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+        let message = error.to_string();
+        assert!(message.contains("incomplete download"), "{message}");
+        assert!(
+            !message.contains("no Codex binary"),
+            "a short read must not be blamed on the release: {message}"
+        );
+        assert!(!dest.exists());
+        assert!(
+            !archive_path.exists(),
+            "a short archive must not be left on disk"
+        );
+    }
+
+    /// Serve a Codex release whose single platform asset carries `size_field`
+    /// verbatim (e.g. `,"size":123` or ``). Returns (server, archive bytes).
+    fn codex_release_server(
+        size_field: &str,
+        body: Vec<u8>,
+    ) -> (mockito::ServerGuard, Vec<mockito::Mock>) {
+        let mut server = Server::new();
+        let asset_name = expected_asset_names()[0];
+        let base = server.url();
+        let release_json = format!(
+            r#"{{"tag_name":"rust-v0.130.0","assets":[{{"name":"{asset_name}","browser_download_url":"{base}/assets/{asset_name}"{size_field}}}]}}"#
+        );
+        let mocks = vec![
+            server
+                .mock("GET", "/tags/rust-v0.130.0")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(release_json)
+                .create(),
+            server
+                .mock("GET", format!("/assets/{asset_name}").as_str())
+                .with_status(200)
+                .with_header("content-type", "application/octet-stream")
+                .with_body(body)
+                .create(),
+        ];
+        (server, mocks)
+    }
+
+    fn codex_archive_bytes(dir: &std::path::Path) -> Vec<u8> {
+        let archive_path = dir.join("staged.tar.gz");
+        create_archive(&archive_path, "codex", b"#!/bin/sh\nexit 0\n");
+        let bytes = std::fs::read(&archive_path).expect("read archive");
+        std::fs::remove_file(&archive_path).expect("remove staged archive");
+        bytes
+    }
+
+    /// GitHub declares a size for every release asset, and on the GitHub path
+    /// that number is one of only two integrity signals we have. Metadata that
+    /// carries none is metadata we do not understand — it must fail loudly
+    /// rather than quietly reduce verification to `Content-Length` alone.
+    #[test]
+    fn an_asset_without_a_declared_size_fails_the_github_download() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = tempdir().expect("tempdir");
+        let (server, _mocks) = codex_release_server("", codex_archive_bytes(dir.path()));
+
+        std::env::set_var("OVM_CODEX_RELEASES_URL", server.url());
+        let dest = dir.path().join("bin").join("codex");
+        let result = download_github_release("rust-v0.130.0", &dest);
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+        let error = result.expect_err("an undeclared asset size must not install");
+        assert!(error.to_string().contains("declares no size"), "{error}");
+        assert!(!dest.exists());
+    }
+
+    /// The same release with the size GitHub actually publishes gets past the
+    /// gate, so the check above is a distinction and not a blanket refusal.
+    /// (An unsigned fake binary is then rejected by the signature check on
+    /// macOS — that is a later, different gate.)
+    #[test]
+    fn an_asset_with_a_declared_size_passes_the_size_gate() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = tempdir().expect("tempdir");
+        let body = codex_archive_bytes(dir.path());
+        let (server, _mocks) = codex_release_server(&format!(r#","size":{}"#, body.len()), body);
+
+        std::env::set_var("OVM_CODEX_RELEASES_URL", server.url());
+        let dest = dir.path().join("bin").join("codex");
+        let result = download_github_release("rust-v0.130.0", &dest);
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+        if let Err(error) = result {
+            assert!(
+                !error.to_string().contains("declares no size"),
+                "a sized asset must clear the declared-size gate: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_asset_size_reports_absence_as_a_metadata_failure() {
+        let sized = ReleaseAsset {
+            size: Some(42),
+            ..asset("codex.tar.gz", "https://example.com/codex.tar.gz")
+        };
+        assert_eq!(declared_asset_size(&sized).expect("declared size"), 42);
+
+        let error = declared_asset_size(&asset("codex.tar.gz", "https://example.com/codex.tar.gz"))
+            .expect_err("no declared size");
+        assert!(error.to_string().contains("declares no size"), "{error}");
+    }
+
+    /// An archive that arrived whole but genuinely has no `codex` entry keeps
+    /// blaming the release — the two causes must stay distinguishable.
+    #[test]
+    fn a_complete_archive_without_the_binary_still_blames_the_release() {
+        let dir = tempdir().expect("tempdir");
+        let archive_path = dir.path().join("codex.tar.gz");
+        let dest = dir.path().join("bin").join("codex");
+        create_archive(&archive_path, "README.md", b"no binary here");
+
+        let error = extract_release_archive(&archive_path, &dest).expect_err("no binary");
+        let message = error.to_string();
+        assert!(message.contains("no Codex binary"), "{message}");
+        assert!(!message.contains("truncated"), "{message}");
+    }
+
+    /// A truncated archive on disk reads as truncated, not as a release that
+    /// forgot to ship its binary.
+    #[test]
+    fn a_truncated_archive_reads_as_truncated() {
+        let dir = tempdir().expect("tempdir");
+        let archive_path = dir.path().join("codex.tar.gz");
+        let dest = dir.path().join("bin").join("codex");
+        create_archive(&archive_path, "codex", &vec![0xAB; 64 * 1024]);
+        let bytes = std::fs::read(&archive_path).expect("read archive");
+        std::fs::write(&archive_path, &bytes[..bytes.len() / 2]).expect("truncate");
+
+        let error = extract_release_archive(&archive_path, &dest).expect_err("truncated");
+        let message = error.to_string();
+        assert!(
+            message.contains("incomplete or truncated"),
+            "a truncated archive must say so: {message}"
+        );
+        assert!(!message.contains("no Codex binary"), "{message}");
+    }
+
+    // ── Sidecar completeness ─────────────────────────────────────────
+
+    /// A release that ships the sidecar for other platforms but not for ours is
+    /// the 0.144.0 shape: the install used to `continue` past it and publish a
+    /// Codex whose shell commands cannot spawn. It must fail, naming the asset.
+    #[test]
+    fn a_release_missing_only_our_sidecar_fails_the_install() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        std::fs::create_dir_all(dest.parent().expect("bin dir")).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+
+        // Every platform's sidecar except this one's.
+        let ours = format!(
+            "codex-code-mode-host-{}.tar.gz",
+            super::release_target_triple()
+        );
+        let assets = [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-musl",
+            "x86_64-unknown-linux-musl",
+        ]
+        .iter()
+        .map(|triple| format!("codex-code-mode-host-{triple}.tar.gz"))
+        .filter(|name| *name != ours)
+        .map(|name| asset(&name, &format!("https://example.com/{name}")))
+        .collect();
+        let release = Release {
+            tag_name: "rust-v0.144.0".into(),
+            assets,
+        };
+
+        let error = install_github_sidecars(&release, "rust-v0.144.0", &dest)
+            .expect_err("a platform-missing sidecar must fail the install");
+        let message = error.to_string();
+        assert!(
+            message.contains(&ours),
+            "the missing asset must be named: {message}"
+        );
+        assert!(
+            message.contains("cannot run shell commands"),
+            "the consequence must be stated: {message}"
+        );
+        assert!(!dest.exists(), "no half-installed Codex may be left behind");
+    }
+
+    /// The other direction: releases from before the sidecar existed publish no
+    /// sidecar asset for any platform, and must keep installing.
+    #[test]
+    fn a_release_without_any_sidecar_still_installs() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        std::fs::create_dir_all(dest.parent().expect("bin dir")).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+
+        let release = Release {
+            tag_name: "rust-v0.130.0".into(),
+            assets: expected_asset_names()
+                .iter()
+                .map(|name| asset(name, &format!("https://example.com/{name}")))
+                .collect(),
+        };
+
+        install_github_sidecars(&release, "rust-v0.130.0", &dest)
+            .expect("a sidecar-free release still installs");
+        assert!(dest.exists(), "the main binary must survive");
+    }
+
+    // ── Sidecar completeness across BOTH sources ─────────────────────
+
+    const ALL_TRIPLES: &[&str] = &[
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-unknown-linux-musl",
+        "x86_64-unknown-linux-musl",
+    ];
+
+    /// Every triple except the one we are running on.
+    fn other_triples() -> Vec<&'static str> {
+        ALL_TRIPLES
+            .iter()
+            .copied()
+            .filter(|triple| *triple != release_target_triple())
+            .collect()
+    }
+
+    fn tarball_bytes(dir: &std::path::Path, name: &str, entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let path = dir.join(name);
+        create_multi_archive(&path, entries);
+        let bytes = std::fs::read(&path).expect("read archive");
+        std::fs::remove_file(&path).expect("remove staged archive");
+        bytes
+    }
+
+    struct MockSources {
+        server: mockito::ServerGuard,
+        mocks: Vec<mockito::Mock>,
+        npm_metadata: mockito::Mock,
+    }
+
+    /// One mock server standing in for BOTH Codex sources: the GitHub releases
+    /// API and the npm registry. That pairing is the point — these tests are
+    /// about what the *whole install* does when the two disagree about what a
+    /// version ships.
+    ///
+    /// `sidecar_triples` are the platforms whose sidecar asset the release
+    /// publishes; `main_asset_ok` false makes the platform tarball 500 so the
+    /// install falls through to npm; `npm_has_sidecar` says whether the npm
+    /// platform package carries the sidecar binary.
+    fn mock_sources(
+        dir: &std::path::Path,
+        version: &str,
+        sidecar_triples: &[&str],
+        main_asset_ok: bool,
+        npm_has_sidecar: bool,
+        npm_expected_hits: usize,
+    ) -> MockSources {
+        let mut server = Server::new();
+        let base = server.url();
+        let main_asset = expected_asset_names()[0];
+        let main_body = tarball_bytes(dir, "main.tar.gz", &[("codex", b"fake-codex-binary")]);
+        let sidecar_body = tarball_bytes(
+            dir,
+            "sidecar.tar.gz",
+            &[("codex-code-mode-host", b"fake-host-binary")],
+        );
+
+        let mut assets = vec![format!(
+            r#"{{"name":"{main_asset}","browser_download_url":"{base}/assets/{main_asset}","size":{}}}"#,
+            main_body.len()
+        )];
+        let mut mocks = vec![server
+            .mock("GET", format!("/assets/{main_asset}").as_str())
+            .with_status(if main_asset_ok { 200 } else { 500 })
+            .with_header("content-type", "application/octet-stream")
+            .with_body(if main_asset_ok {
+                main_body.clone()
+            } else {
+                Vec::new()
+            })
+            .create()];
+        for triple in sidecar_triples {
+            let name = format!("codex-code-mode-host-{triple}.tar.gz");
+            assets.push(format!(
+                r#"{{"name":"{name}","browser_download_url":"{base}/assets/{name}","size":{}}}"#,
+                sidecar_body.len()
+            ));
+            mocks.push(
+                server
+                    .mock("GET", format!("/assets/{name}").as_str())
+                    .with_status(200)
+                    .with_header("content-type", "application/octet-stream")
+                    .with_body(sidecar_body.clone())
+                    .create(),
+            );
+        }
+        mocks.push(
+            server
+                .mock("GET", format!("/tags/{version}").as_str())
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(format!(
+                    r#"{{"tag_name":"{version}","assets":[{}]}}"#,
+                    assets.join(",")
+                ))
+                .create(),
+        );
+
+        let mut npm_entries: Vec<(&str, &[u8])> =
+            vec![("package/vendor/bin/codex", b"fake-codex-binary")];
+        if npm_has_sidecar {
+            npm_entries.push((
+                "package/vendor/bin/codex-code-mode-host",
+                b"fake-host-binary",
+            ));
+        }
+        let npm_body = tarball_bytes(dir, "npm.tgz", &npm_entries);
+        mocks.push(
+            server
+                .mock("GET", "/npm/package.tgz")
+                .with_status(200)
+                .with_header("content-type", "application/octet-stream")
+                .with_body(npm_body)
+                .create(),
+        );
+        let npm_version = codex_npm_platform_version(version).expect("npm platform version");
+        let npm_metadata = server
+            .mock("GET", format!("/{npm_version}").as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(format!(
+                r#"{{"dist":{{"tarball":"{base}/npm/package.tgz"}}}}"#
+            ))
+            .expect(npm_expected_hits)
+            .create();
+
+        MockSources {
+            server,
+            mocks,
+            npm_metadata,
+        }
+    }
+
+    /// Point both source overrides at `base` and switch signature verification
+    /// off (the fixtures are unsigned), restoring the environment afterwards.
+    fn with_mock_sources<T>(base: &str, body: impl FnOnce() -> T) -> T {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _signature = crate::sources::SIGNATURE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        std::env::set_var("OVM_CODEX_RELEASES_URL", base);
+        std::env::set_var("OVM_CODEX_NPM_REGISTRY_URL", base);
+        std::env::set_var("OVM_SKIP_SIGNATURE_VERIFY", "1");
+        let result = body();
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+        std::env::remove_var("OVM_CODEX_NPM_REGISTRY_URL");
+        std::env::remove_var("OVM_SKIP_SIGNATURE_VERIFY");
+        result
+    }
+
+    /// The bypass this finding is about: the GitHub path correctly refuses a
+    /// release that ships the sidecar family for other platforms and not for
+    /// ours — and then the npm fallback used to be tried anyway. npm here would
+    /// happily serve a package, so only a refusal that skips the fallback
+    /// entirely can keep 0.144.0 from reaching a user through the back door.
+    #[test]
+    fn a_release_missing_our_sidecar_never_falls_back_to_npm() {
+        let dir = tempdir().expect("tempdir");
+        let sources = mock_sources(dir.path(), "rust-v0.144.0", &other_triples(), true, true, 0);
+        let dest = dir.path().join("bin").join("codex");
+
+        let result = with_mock_sources(&sources.server.url(), || {
+            download_release("rust-v0.144.0", &dest)
+        });
+
+        let error = result.expect_err("a platform-missing sidecar must fail the whole install");
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!(
+                "codex-code-mode-host-{}.tar.gz",
+                release_target_triple()
+            )),
+            "the missing asset must be named: {message}"
+        );
+        assert!(
+            message.contains("cannot run shell commands"),
+            "the consequence must be stated: {message}"
+        );
+        assert!(
+            !message.contains("Could not download Codex"),
+            "the refusal must not be reported as a two-source download failure: {message}"
+        );
+        assert!(!dest.exists(), "nothing may be installed");
+        assert!(
+            !dest.parent().expect("bin dir").join("codex").exists(),
+            "nothing may be installed"
+        );
+        // The npm registry must not have been consulted at all.
+        sources.npm_metadata.assert();
+        drop(sources.mocks);
+    }
+
+    /// The npm fallback held to the same standard: this version's release
+    /// publishes the sidecar family, so a platform package that carries only
+    /// the main binary produces exactly the broken install the GitHub check
+    /// exists to prevent.
+    #[test]
+    fn an_npm_package_missing_a_required_sidecar_is_refused() {
+        let dir = tempdir().expect("tempdir");
+        let sources = mock_sources(dir.path(), "rust-v0.144.0", ALL_TRIPLES, false, false, 1);
+        let dest = dir.path().join("bin").join("codex");
+
+        let result = with_mock_sources(&sources.server.url(), || {
+            download_release("rust-v0.144.0", &dest)
+        });
+
+        let error = result.expect_err("an npm package without a required sidecar must not install");
+        let message = error.to_string();
+        assert!(
+            message.contains("codex-code-mode-host"),
+            "the missing sidecar must be named: {message}"
+        );
+        assert!(
+            message.contains("cannot run shell commands"),
+            "the consequence must be stated: {message}"
+        );
+        assert!(!dest.exists(), "no half-installed Codex may be left behind");
+        sources.npm_metadata.assert();
+        drop(sources.mocks);
+    }
+
+    /// The other direction on the npm path: the same version, from a package
+    /// that does carry the sidecar, installs both binaries.
+    #[test]
+    fn an_npm_package_with_the_required_sidecar_installs() {
+        let dir = tempdir().expect("tempdir");
+        let sources = mock_sources(dir.path(), "rust-v0.144.0", ALL_TRIPLES, false, true, 1);
+        let dest = dir.path().join("bin").join("codex");
+
+        let result = with_mock_sources(&sources.server.url(), || {
+            download_release("rust-v0.144.0", &dest)
+        });
+
+        result.expect("a complete npm package installs");
+        assert_eq!(
+            std::fs::read(&dest).expect("read main binary"),
+            b"fake-codex-binary"
+        );
+        assert_eq!(
+            std::fs::read(dest.parent().expect("bin dir").join("codex-code-mode-host"))
+                .expect("read sidecar"),
+            b"fake-host-binary"
+        );
+        drop(sources.mocks);
+    }
+
+    /// And the other direction for the requirement itself: a release from
+    /// before the sidecar existed publishes none for any platform, so an npm
+    /// package without one is complete and must keep installing.
+    #[test]
+    fn an_npm_package_without_a_sidecar_installs_when_the_release_ships_none() {
+        let dir = tempdir().expect("tempdir");
+        let sources = mock_sources(dir.path(), "rust-v0.130.0", &[], false, false, 1);
+        let dest = dir.path().join("bin").join("codex");
+
+        let result = with_mock_sources(&sources.server.url(), || {
+            download_release("rust-v0.130.0", &dest)
+        });
+
+        result.expect("a sidecar-free release still installs from npm");
+        assert_eq!(
+            std::fs::read(&dest).expect("read main binary"),
+            b"fake-codex-binary"
+        );
+        assert!(!dest
+            .parent()
+            .expect("bin dir")
+            .join("codex-code-mode-host")
+            .exists());
+        drop(sources.mocks);
     }
 
     #[test]

@@ -11,6 +11,16 @@ if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
 REPO="ovm-sh/ovm-oss"
 BINARY="ovm"
 MANIFEST_NAME="ovm-bundle-v1.tsv"
+# Download endpoints. These default to the real GitHub hosts; they are
+# overridable ONLY so the download branch can be exercised hermetically by
+# tests/scripts/install-download-branch.sh. Before the seam existed, every
+# automated test supplied OVM_LOCAL_ARTIFACT_DIR and took the local branch, so
+# the path a real `curl … | sh` user takes had zero coverage until a release
+# was already public. Do not use these to point installs at a mirror: the
+# checksum sidecar is fetched from the same host as the archive, so it proves
+# integrity, not provenance.
+API_BASE="${OVM_INSTALL_API_BASE:-https://api.github.com}"
+ASSET_BASE="${OVM_INSTALL_ASSET_BASE:-https://github.com}"
 INSTALL_DIR="${OVM_INSTALL_DIR:-$HOME/.ovm/bin}"
 SELF_ROOT="$HOME/.ovm/self"
 VERSIONS_DIR="$SELF_ROOT/versions"
@@ -110,6 +120,158 @@ fail() {
     mochi sad "Error: $*"
     exit 1
 }
+
+# Download with retries.
+#
+# A bare `curl -fsSL` fails the whole install on one transient blip — a real run
+# died on `HTTP/2 stream 1 was not closed cleanly: PROTOCOL_ERROR` partway
+# through, which is a CDN hiccup, not a broken release. Retry transient
+# failures; a genuinely missing asset still fails fast because 404 is not
+# retried without --retry-all-errors.
+#
+# --retry-all-errors is curl 7.71+, so probe once rather than assuming: older
+# curl treats an unknown flag as a hard usage error.
+CURL_RETRY_FLAGS=
+detect_curl_retry_flags() {
+    [ -z "$CURL_RETRY_FLAGS" ] || return 0
+    CURL_RETRY_FLAGS="--retry 3 --retry-delay 1 --retry-connrefused"
+    # No pipe: `curl --help all | grep -q` is the inverted-pipeline shape —
+    # grep exits at the match, curl takes SIGPIPE, and under pipefail the probe
+    # reports "unsupported" precisely when the flag IS supported. POSIX sh has
+    # no here-strings, so capture and pattern-match instead.
+    curl_help=$(curl --help all 2>/dev/null || true)
+    case "$curl_help" in
+        *--retry-all-errors*)
+            CURL_RETRY_FLAGS="$CURL_RETRY_FLAGS --retry-all-errors"
+            ;;
+    esac
+}
+
+fetch() {
+    detect_curl_retry_flags
+    # Word-splitting is intended: CURL_RETRY_FLAGS is a flag list we built.
+    # shellcheck disable=SC2086
+    curl -fsSL $CURL_RETRY_FLAGS "$@"
+}
+
+# --- PATH wiring -----------------------------------------------------------
+# Printing "add this to your PATH if needed" and doing nothing left a working
+# install that the shell could not find, which reads as a failed install. Wire
+# it up, idempotently, and say exactly what changed.
+
+OVM_PATH_BEGIN='# >>> ovm >>>'
+OVM_PATH_END='# <<< ovm <<<'
+
+path_already_has() {
+    # Exact element match, so /opt/ovm/bin does not count as $HOME/.ovm/bin.
+    case ":$PATH:" in
+        *":$1:"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Append the block to one rc file unless our marker is already there. Echoes
+# the path when it writes, so the caller can report what it touched.
+write_path_block() {
+    file=$1
+    line=$2
+    [ -n "$file" ] || return 0
+    if [ -f "$file" ] && grep -Fq "$OVM_PATH_BEGIN" "$file" 2>/dev/null; then
+        return 0
+    fi
+    parent=$(dirname "$file")
+    mkdir -p "$parent" 2>/dev/null || return 0
+    # A read-only rc file, or one in a directory we cannot write, is the user's
+    # business — but check BOTH, or the append leaks a raw "Permission denied"
+    # from the redirect before any handling can run.
+    if [ -e "$file" ]; then
+        [ -w "$file" ] || return 0
+    else
+        [ -w "$parent" ] || return 0
+    fi
+    {
+        printf '\n%s\n' "$OVM_PATH_BEGIN"
+        printf '%s\n' "$line"
+        printf '%s\n' "$OVM_PATH_END"
+    } >> "$file" 2>/dev/null || return 0
+    printf '%s\n' "$file"
+}
+
+configure_path() {
+    install_dir=$1
+    # Write $HOME symbolically so the rc line survives a moved home directory.
+    case "$install_dir" in
+        "$HOME"/*) path_line_dir="\$HOME/${install_dir#"$HOME"/}" ;;
+        *) path_line_dir=$install_dir ;;
+    esac
+
+    if path_already_has "$install_dir"; then
+        echo "OVM is on your PATH already."
+        echo ""
+        return 0
+    fi
+
+    if [ -n "${OVM_NO_MODIFY_PATH:-}" ]; then
+        echo "OVM_NO_MODIFY_PATH is set, so your shell config was left alone."
+        echo "Add this yourself:"
+        echo "  export PATH=\"$path_line_dir:\$PATH\""
+        echo ""
+        return 0
+    fi
+
+    shell_name=$(basename "${SHELL:-sh}")
+    written=""
+    case "$shell_name" in
+        zsh)
+            # .zshrc covers interactive shells, .zprofile covers login shells —
+            # `zsh -lc` reads only the latter, and a PATH that works in one but
+            # not the other is its own confusing bug report.
+            for rc in "${ZDOTDIR:-$HOME}/.zshrc" "${ZDOTDIR:-$HOME}/.zprofile"; do
+                got=$(write_path_block "$rc" "export PATH=\"$path_line_dir:\$PATH\"") || true
+                [ -n "$got" ] && written="$written $got"
+            done
+            ;;
+        bash)
+            for rc in "$HOME/.bashrc" "$HOME/.bash_profile"; do
+                got=$(write_path_block "$rc" "export PATH=\"$path_line_dir:\$PATH\"") || true
+                [ -n "$got" ] && written="$written $got"
+            done
+            ;;
+        fish)
+            got=$(write_path_block "$HOME/.config/fish/conf.d/ovm.fish" \
+                "fish_add_path $install_dir") || true
+            [ -n "$got" ] && written="$written $got"
+            ;;
+        *)
+            got=$(write_path_block "$HOME/.profile" \
+                "export PATH=\"$path_line_dir:\$PATH\"") || true
+            [ -n "$got" ] && written="$written $got"
+            ;;
+    esac
+
+    if [ -z "$written" ]; then
+        # Do not let this read as a clean install. OVM is on disk but the shell
+        # cannot find it, which is precisely the state a user reports as
+        # "the install failed".
+        echo "WARNING: OVM is installed but NOT on your PATH."
+        echo ""
+        echo "Your shell config could not be written, so you must add this line"
+        echo "yourself or ovm will not be found in a new terminal:"
+        echo "  export PATH=\"$path_line_dir:\$PATH\""
+        echo ""
+        return 0
+    fi
+
+    echo "Added OVM to your PATH in:"
+    for file in $written; do
+        echo "  $file"
+    done
+    echo ""
+    echo "Open a new terminal, or run this once in this one:"
+    echo "  export PATH=\"$path_line_dir:\$PATH\""
+    echo ""
+}
+# --- end PATH wiring -------------------------------------------------------
 
 acquire_operation_lock() {
     helper=$1
@@ -655,13 +817,26 @@ EOF
         false
     fi
 
+    # Capture the manifest's side names once and match against the captured
+    # text. `manifest_side_binaries "$manifest" | grep -Fxq "$binary"` inverts:
+    # grep -q exits at the first match, the awk producer's next write dies with
+    # EPIPE, and pipefail reports the pipeline as FAILED exactly when the name
+    # IS in the manifest — so `!` fires and a live side link is deleted as
+    # obsolete. It only bites once the manifest outgrows the pipe buffer, which
+    # is why it survived review. The capture also stops re-running awk once per
+    # installed binary.
+    kept_side_names=$(manifest_side_binaries "$manifest")
     while IFS= read -r binary; do
         [ -n "$binary" ] || continue
-        if ! manifest_side_binaries "$manifest" | grep -Fxq "$binary"; then
-            obsolete="$INSTALL_DIR_ABS/$binary"
-            if managed_side_link "$obsolete"; then
-                rm -f "$obsolete"
-            fi
+        if grep -Fxq "$binary" <<INNER
+$kept_side_names
+INNER
+        then
+            continue
+        fi
+        obsolete="$INSTALL_DIR_ABS/$binary"
+        if managed_side_link "$obsolete"; then
+            rm -f "$obsolete"
         fi
     done <<EOF
 $old_side_names
@@ -753,19 +928,29 @@ else
     esac
 
     mochi working "Installing OVM for $TARGET..."
-    VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+    # Split the fetch from the parse. Folded into one pipeline, a failed curl
+    # aborted the whole script under `set -e` before the `fail` below could
+    # run, so an unreachable API exited silently with curl's status and no
+    # explanation — the user saw nothing at all.
+    release_json=$(fetch "$API_BASE/repos/$REPO/releases/latest") ||
+        fail "could not reach $API_BASE to look up the latest OVM release"
+    VERSION=$(printf '%s\n' "$release_json" | grep '"tag_name"' | cut -d'"' -f4 || true)
     [ -n "$VERSION" ] || fail "could not determine latest stable version"
     VERSION_ID=${VERSION#v}
 
-    URL="https://github.com/$REPO/releases/download/$VERSION/$BINARY-$TARGET.tar.gz"
+    URL="$ASSET_BASE/$REPO/releases/download/$VERSION/$BINARY-$TARGET.tar.gz"
     SHA_URL="$URL.sha256"
     TMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t ovm-install)
     ARCHIVE="$TMP_DIR/$BINARY-$TARGET.tar.gz"
     CHECKSUM="$ARCHIVE.sha256"
     EXTRACT_DIR="$TMP_DIR/extract"
 
-    curl -fsSL "$URL" -o "$ARCHIVE"
-    curl -fsSL "$SHA_URL" -o "$CHECKSUM"
+    # Same reason as the release lookup above: name the asset that is missing
+    # rather than dying on curl's exit status with an empty terminal.
+    fetch "$URL" -o "$ARCHIVE" ||
+        fail "could not download the release archive $URL"
+    fetch "$SHA_URL" -o "$CHECKSUM" ||
+        fail "could not download the release checksum $SHA_URL"
     expected_sha=$(awk 'NF >= 2 { print $1; exit }' "$CHECKSUM")
     expected_name=$(awk 'NF >= 2 { print $2; exit }' "$CHECKSUM")
     expected_name=${expected_name#\*}
@@ -783,9 +968,7 @@ fi
 
 mochi happy "OVM is installed. Happy shipping!"
 echo ""
-echo "Add OVM to PATH if needed:"
-echo "  export PATH=\"\$HOME/.ovm/bin:\$PATH\""
-echo ""
+configure_path "$INSTALL_DIR"
 echo "Verify with:"
 echo "  ovm --version"
 echo "  ovm self current"
