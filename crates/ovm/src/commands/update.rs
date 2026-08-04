@@ -23,7 +23,14 @@ const AUTO_SUBCOMMAND: &str = "auto";
 /// `self` addresses OVM itself rather than a managed product.
 const SELF_SUBJECT: &str = "self";
 
-pub fn run(first: Option<&str>, second: Option<&str>, third: Option<&str>) -> Result<()> {
+pub fn run(
+    first: Option<&str>,
+    second: Option<&str>,
+    third: Option<&str>,
+    yes: bool,
+    check_only: bool,
+) -> Result<()> {
+    let mode = Mode::resolve(yes, check_only);
     match first {
         // `ovm update auto [product|self] [on|off|notify]` — the setting.
         Some(AUTO_SUBCOMMAND) => super::autoupdate::run(second, third),
@@ -58,11 +65,42 @@ pub fn run(first: Option<&str>, second: Option<&str>, third: Option<&str>) -> Re
                 }
             }
             reject_trailing(second, third, "ovm update <product>")?;
-            update_now(&[product], Scope::Named)
+            update_now(&[product], Scope::Named, mode)
         }
 
-        None => update_now(&Product::ALL, Scope::All),
+        None => update_now(&Product::ALL, Scope::All, mode),
     }
+}
+
+/// How the command decides *what* to update once it knows what it could.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Show what would change and touch nothing (`--check`).
+    CheckOnly,
+    /// Take everything found: `--yes`, or no terminal to ask on. A script that
+    /// piped `ovm update` yesterday must not start waiting on a prompt today.
+    All,
+    /// Ask which ones (a terminal, no flags).
+    Ask,
+}
+
+impl Mode {
+    fn resolve(yes: bool, check_only: bool) -> Self {
+        if check_only {
+            Mode::CheckOnly
+        } else if yes || !interactive() {
+            Mode::All
+        } else {
+            Mode::Ask
+        }
+    }
+}
+
+/// Asking requires both halves of a conversation: a terminal to draw the
+/// picker on and one to read the keys from.
+fn interactive() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
 fn reject_trailing(second: Option<&str>, third: Option<&str>, usage: &str) -> Result<()> {
@@ -133,27 +171,109 @@ impl Outcome {
     }
 }
 
-fn update_now(products: &[Product], scope: Scope) -> Result<()> {
+fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
     crate::mochi::say(
         crate::mochi::WORKING,
-        &match products {
-            [only] => format!("Updating {} to the latest release", only.display_name()),
-            _ => "Updating installed products to the latest release".to_string(),
+        &match (products, mode) {
+            ([only], Mode::CheckOnly) => format!("Checking {} for updates", only.display_name()),
+            ([only], _) => format!("Updating {} to the latest release", only.display_name()),
+            (_, Mode::CheckOnly) => "Checking installed products for updates".to_string(),
+            _ => "Checking installed products for updates".to_string(),
         },
     );
     println!();
 
-    let results: Vec<(Product, Outcome)> = products
+    // Phase 1 — look, decide nothing. Resolving every product before touching
+    // any of them is what makes the choice possible: you cannot pick from a
+    // list that is being installed as it is printed.
+    let checks: Vec<(Product, Check)> = products
         .iter()
-        .map(|product| (*product, update_one(*product, scope)))
+        .map(|product| (*product, check_one(*product, scope)))
         .collect();
 
-    for (product, outcome) in &results {
-        print_row(*product, outcome);
+    // Everything that will not change, said once and up front.
+    for (product, check) in &checks {
+        if let Some(outcome) = check.as_settled_outcome() {
+            print_row(*product, &outcome);
+        }
     }
+
+    let available: Vec<(Product, &Available)> = checks
+        .iter()
+        .filter_map(|(product, check)| match check {
+            Check::Available(available) => Some((*product, available)),
+            _ => None,
+        })
+        .collect();
+
+    if available.is_empty() {
+        println!();
+        let settled: Vec<(Product, Outcome)> = checks
+            .iter()
+            .filter_map(|(p, c)| c.as_settled_outcome().map(|o| (*p, o)))
+            .collect();
+        print_summary(&settled);
+        return report_failures(&settled);
+    }
+
+    // Phase 2 — choose. `--check` stops here by definition.
+    if mode == Mode::CheckOnly {
+        println!();
+        println!("  {}", style("available").bold());
+        for (product, update) in &available {
+            print_available(*product, update);
+        }
+        println!();
+        println!(
+            "  {}",
+            style(format!(
+                "{} to install — run `ovm update` to choose, or `ovm update --yes` for all",
+                available.len()
+            ))
+            .dim()
+        );
+        return Ok(());
+    }
+
+    let chosen: Vec<usize> = match mode {
+        Mode::All => (0..available.len()).collect(),
+        Mode::Ask => match super::update_picker::choose(&available)? {
+            Some(indices) => indices,
+            // Cancelling is a valid answer, not an error: nothing was touched.
+            None => {
+                println!();
+                println!("  {}", style("Nothing updated.").dim());
+                return Ok(());
+            }
+        },
+        Mode::CheckOnly => unreachable!("check-only returns above"),
+    };
+
+    if chosen.is_empty() {
+        println!();
+        println!("  {}", style("Nothing selected — nothing updated.").dim());
+        return Ok(());
+    }
+
+    // Phase 3 — apply only what was chosen.
+    println!();
+    let mut results: Vec<(Product, Outcome)> = checks
+        .iter()
+        .filter_map(|(p, c)| c.as_settled_outcome().map(|o| (*p, o)))
+        .collect();
+    for index in chosen {
+        let (product, update) = available[index];
+        let outcome = apply(product, update);
+        print_row(product, &outcome);
+        results.push((product, outcome));
+    }
+
     println!();
     print_summary(&results);
+    report_failures(&results)
+}
 
+fn report_failures(results: &[(Product, Outcome)]) -> Result<()> {
     let failed: Vec<&'static str> = results
         .iter()
         .filter(|(_, outcome)| outcome.is_failure())
@@ -169,10 +289,42 @@ fn update_now(products: &[Product], scope: Scope) -> Result<()> {
     }
 }
 
-fn update_one(product: Product, scope: Scope) -> Outcome {
+/// An update that exists and has not been applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Available {
+    pub(crate) from: String,
+    pub(crate) to: String,
+}
+
+/// The result of *looking* at one product. Separate from [`Outcome`] because
+/// "an update exists" is not yet something that happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Check {
+    Available(Available),
+    AlreadyLatest(String),
+    Skipped { detail: String, hint: String },
+    Failed(String),
+}
+
+impl Check {
+    /// Everything except an available update is already a final outcome.
+    fn as_settled_outcome(&self) -> Option<Outcome> {
+        match self {
+            Check::Available(_) => None,
+            Check::AlreadyLatest(version) => Some(Outcome::AlreadyLatest(version.clone())),
+            Check::Skipped { detail, hint } => Some(Outcome::Skipped {
+                detail: detail.clone(),
+                hint: hint.clone(),
+            }),
+            Check::Failed(error) => Some(Outcome::Failed(error.clone())),
+        }
+    }
+}
+
+fn check_one(product: Product, scope: Scope) -> Check {
     let vm = match VersionManager::new(product) {
         Ok(vm) => vm,
-        Err(error) => return Outcome::Failed(error.to_string()),
+        Err(error) => return Check::Failed(error.to_string()),
     };
 
     // Nothing selected but something installed still counts as installed: the
@@ -183,45 +335,60 @@ fn update_one(product: Product, scope: Scope) -> Outcome {
             .list_installed()
             .ok()
             .and_then(|v| v.into_iter().next_back()),
-        Err(error) => return Outcome::Failed(error.to_string()),
+        Err(error) => return Check::Failed(error.to_string()),
     };
     let pin = vm.read_pin();
 
     match plan_for(baseline.as_deref(), pin.as_deref(), scope) {
-        Plan::NotInstalled => Outcome::Skipped {
+        Plan::NotInstalled => Check::Skipped {
             detail: "not installed".to_string(),
             hint: format!("ovm install {} latest", product.canonical_name()),
         },
-        Plan::DevBuild(version) => Outcome::Skipped {
+        Plan::DevBuild(version) => Check::Skipped {
             detail: format!("{version} (local dev build)"),
             hint: format!("ovm use {} <version>", product.canonical_name()),
         },
-        Plan::PinnedSkip(version) => Outcome::Skipped {
+        Plan::PinnedSkip(version) => Check::Skipped {
             detail: format!("pinned to {version}"),
             hint: format!("ovm update {}", product.canonical_name()),
         },
-        Plan::Resolve(baseline) => resolve_and_apply(&vm, &baseline),
+        Plan::Resolve(baseline) => resolve(&vm, &baseline),
     }
 }
 
-/// Resolve upstream latest and, when it is newer, install + activate it.
+/// Resolve upstream latest and report whether it is newer. Installs nothing.
 ///
 /// The resolver falls back to the newest *installed* release when the update
 /// service is unreachable, printing its own "could not reach update service"
-/// warning first — so an offline `ovm update` reports "already latest" only
-/// directly underneath that warning, never in place of it.
-fn resolve_and_apply(vm: &VersionManager, baseline: &str) -> Outcome {
+/// warning first — so an offline check reports "already latest" only directly
+/// underneath that warning, never in place of it.
+fn resolve(vm: &VersionManager, baseline: &str) -> Check {
     let product = vm.product();
     let latest = match vm.latest_available_version() {
         Ok(latest) => product.normalize_version(&latest),
-        Err(error) => return Outcome::Failed(error.to_string()),
+        Err(error) => return Check::Failed(error.to_string()),
     };
 
     if !product.is_newer(&latest, baseline) {
-        return Outcome::AlreadyLatest(baseline.to_string());
+        return Check::AlreadyLatest(baseline.to_string());
     }
 
-    match super::launch::install_and_use_latest(vm, &latest) {
+    Check::Available(Available {
+        from: baseline.to_string(),
+        to: latest,
+    })
+}
+
+/// Install and activate one already-resolved update.
+fn apply(product: Product, update: &Available) -> Outcome {
+    let vm = match VersionManager::new(product) {
+        Ok(vm) => vm,
+        Err(error) => return Outcome::Failed(error.to_string()),
+    };
+    let vm = &vm;
+    let baseline = update.from.as_str();
+
+    match super::launch::install_and_use_latest(vm, &update.to) {
         Ok(version) => {
             // Same post-switch hygiene `ovm use` performs, minus its banner:
             // keep Claude's launcher owned and let companions warn about a
@@ -241,6 +408,17 @@ fn resolve_and_apply(vm: &VersionManager, baseline: &str) -> Outcome {
         }
         Err(error) => Outcome::Failed(error.to_string()),
     }
+}
+
+/// A row for an update that exists but has not been applied.
+fn print_available(product: Product, update: &Available) {
+    println!(
+        "  {:<12} {} {} {}",
+        product.display_name(),
+        style(&update.from).dim(),
+        style("→").cyan(),
+        style(&update.to).green().bold()
+    );
 }
 
 fn print_row(product: Product, outcome: &Outcome) {
@@ -385,7 +563,8 @@ mod tests {
     #[test]
     fn policy_words_are_rejected_as_products() {
         for policy in ["on", "off", "notify"] {
-            let error = run(Some(policy), None, None).expect_err("policy is not a product");
+            let error =
+                run(Some(policy), None, None, false, false).expect_err("policy is not a product");
             assert!(
                 error.to_string().contains("ovm update auto"),
                 "should point at the setting form: {error}"
@@ -395,7 +574,8 @@ mod tests {
 
     #[test]
     fn the_old_setting_shape_under_the_new_verb_is_redirected() {
-        let error = run(Some("codex"), Some("notify"), None).expect_err("setting shape");
+        let error =
+            run(Some("codex"), Some("notify"), None, false, false).expect_err("setting shape");
         assert!(
             error.to_string().contains("ovm update auto codex notify"),
             "should suggest the auto form: {error}"
@@ -404,7 +584,7 @@ mod tests {
 
     #[test]
     fn unknown_products_name_the_valid_subjects() {
-        let error = run(Some("nope"), None, None).expect_err("unknown product");
+        let error = run(Some("nope"), None, None, false, false).expect_err("unknown product");
         let text = error.to_string();
         assert!(
             text.contains("claude") && text.contains("self") && text.contains("ovm update auto")

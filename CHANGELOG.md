@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
 
+## [0.0.3-alpha.9] - 2026-08-05
+
+### Added
+
+- `ovm version` — OVM's own version plus, for every managed product, the active
+  version, how many are installed, and anything that would stop it moving (a
+  pin, or a local `dev:` build). Local state only, so it answers offline and
+  instantly. `ovm --version` still prints the bare version for scripts.
+- `ovm update` now checks first and asks. It resolves every product before
+  touching any of them, prints what will not change (already latest, pinned,
+  dev build, not installed), then offers the available updates in a picker with
+  everything pre-selected — space to toggle, `a`/`n` for all/none, enter to
+  apply, esc to cancel. `--check` reports and installs nothing.
+- `ovm update --yes` applies every available update without asking. The prompt
+  only appears when both stdin and stdout are terminals, so piped and CI
+  invocations keep sweeping exactly as before.
+
 ## [0.0.3-alpha.8] - 2026-08-03
 
 ### Added

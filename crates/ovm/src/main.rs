@@ -204,6 +204,7 @@ fn run() -> Result<()> {
             };
             commands::list::run(&vm, scope)
         }
+        Commands::Version => commands::version::run(),
         Commands::Current { product } => match product {
             Some(p) => commands::current::run(&vm_for(&p)?),
             None => commands::current::run_all(),
@@ -276,7 +277,15 @@ fn run() -> Result<()> {
             first,
             second,
             third,
-        } => commands::update::run(first.as_deref(), second.as_deref(), third.as_deref()),
+            yes,
+            check,
+        } => commands::update::run(
+            first.as_deref(),
+            second.as_deref(),
+            third.as_deref(),
+            yes,
+            check,
+        ),
         // `autoupdate` is the hidden pre-`ovm update` spelling of
         // `ovm update auto …`; it stays wired to the same handler.
         Commands::AutoUpdate { first, second } => {

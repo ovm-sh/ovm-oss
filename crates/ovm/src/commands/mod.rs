@@ -23,7 +23,9 @@ pub mod shortcuts;
 pub mod stats;
 pub mod uninstall;
 pub mod update;
+pub mod update_picker;
 pub mod use_version;
+pub mod version;
 pub mod which;
 
 /// Keep `~/.local/bin/claude` an OVM-owned launcher so Claude Code's interactive

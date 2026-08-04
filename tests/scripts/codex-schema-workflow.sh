@@ -4,24 +4,20 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 
-if [[ -f "$ROOT/.github/workflows/benchmark-live.yml" ||
-  -f "$ROOT/.github/workflows/benchmark-deep.yml" ]]; then
-  for workflow in benchmark-live.yml benchmark-deep.yml; do
-    path="$ROOT/.github/workflows/$workflow"
-    [[ -f "$path" ]] || {
-      echo "private schema workflow is missing: $path" >&2
-      exit 1
-    }
-    grep -Fq "bash scripts/sync-codex-migration-manifest.sh \"\$new_stable\"" "$path"
-    grep -Fq 'cargo test -p ovm-codex-skew --locked' "$path"
-    grep -Fq 'crates/ovm-codex-skew/src/lib.rs' "$path"
-    # The manifest may only sync when the newest stable strictly ADVANCES: a
-    # gate revocation legitimately regresses the registry max, and syncing to
-    # the older tag would discard known-migration coverage (2026-07-28).
-    grep -Fq 'key(new) > key(old)' "$path"
-    grep -Fq 'if [ "$advanced" = "yes" ]; then' "$path"
-    grep -Fq 'Newest stable regressed' "$path"
-  done
+# Benchmark Deep is the only schema-detecting workflow since the hosted
+# Benchmark Live lane was retired (2026-08-04). The file is absent in the
+# exported public tree, so the contract only applies when it is present.
+path="$ROOT/.github/workflows/benchmark-deep.yml"
+if [[ -f "$path" ]]; then
+  grep -Fq "bash scripts/sync-codex-migration-manifest.sh \"\$new_stable\"" "$path"
+  grep -Fq 'cargo test -p ovm-codex-skew --locked' "$path"
+  grep -Fq 'crates/ovm-codex-skew/src/lib.rs' "$path"
+  # The manifest may only sync when the newest stable strictly ADVANCES: a
+  # gate revocation legitimately regresses the registry max, and syncing to
+  # the older tag would discard known-migration coverage (2026-07-28).
+  grep -Fq 'key(new) > key(old)' "$path"
+  grep -Fq 'if [ "$advanced" = "yes" ]; then' "$path"
+  grep -Fq 'Newest stable regressed' "$path"
 fi
 
 PYTHONDONTWRITEBYTECODE=1 python3 - "$ROOT" <<'PY'

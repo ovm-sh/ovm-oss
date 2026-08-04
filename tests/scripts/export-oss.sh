@@ -46,7 +46,7 @@ for private_path in \
   bench-data \
   site \
   tools/benchmark \
-  .github/workflows/benchmark-live.yml \
+  .github/workflows/benchmark-deep.yml \
   docs/public-release-prep.md \
   tests/scripts/public-ci-exported-tree.sh
 do

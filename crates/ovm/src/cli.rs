@@ -131,6 +131,20 @@ pub enum Commands {
         product: Option<String>,
     },
 
+    /// Show OVM's version and the version of every product it manages
+    #[command(
+        long_about = "Show OVM's own version and, for every managed product, the active \
+        version, how many are installed, and anything that would stop it moving (a pin, or \
+        a local dev build).\n\
+        \n\
+        Reads local state only — no network, so it is always instant and works offline.\n\
+        \n\
+        \x20 ovm --version    just OVM's version, for scripts\n\
+        \x20 ovm current      the active version alone, one line per product\n\
+        \x20 ovm list <p>     every installed version of one product"
+    )]
+    Version,
+
     /// Show the path to the active binary (all products if no product given)
     Which {
         /// Product name or alias (optional — omit for all products)
@@ -252,6 +266,14 @@ pub enum Commands {
 
         /// Policy (`on`, `off`, `notify`) after `auto <product>`
         third: Option<String>,
+
+        /// Update everything found without asking (implied when not a terminal)
+        #[arg(short = 'y', long, conflicts_with = "check")]
+        yes: bool,
+
+        /// Report what would update and change nothing
+        #[arg(long)]
+        check: bool,
     },
 
     /// Configure whether launches auto-update to latest releases
