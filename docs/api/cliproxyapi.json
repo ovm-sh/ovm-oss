@@ -2,7 +2,7 @@
   "product": "cliproxyapi",
   "display_name": "CLIProxyAPI",
   "source": "github:router-for-me/CLIProxyAPI",
-  "updated_at": "2026-08-04T22:49:11Z",
+  "updated_at": "2026-08-05T03:48:03Z",
   "dist_tags": {
     "latest": "7.2.119"
   },
@@ -1049,35 +1049,59 @@
     },
     {
       "version": "6.5.14",
-      "date": "2025-11-24"
+      "date": "2025-11-24",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.15",
-      "date": "2025-11-24"
+      "date": "2025-11-24",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.16",
-      "date": "2025-11-25"
+      "date": "2025-11-25",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.17",
-      "date": "2025-11-25"
+      "date": "2025-11-25",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.18",
-      "date": "2025-11-25"
+      "date": "2025-11-25",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.19",
-      "date": "2025-11-25"
+      "date": "2025-11-25",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.20",
-      "date": "2025-11-25"
+      "date": "2025-11-25",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.21",
-      "date": "2025-11-26"
+      "date": "2025-11-26",
+      "verified": {
+        "macos-auth": true
+      }
     },
     {
       "version": "6.5.22",
@@ -1195,6 +1219,7 @@
       "version": "6.5.38",
       "date": "2025-12-03",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1202,6 +1227,7 @@
       "version": "6.5.39",
       "date": "2025-12-04",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1209,6 +1235,7 @@
       "version": "6.5.40",
       "date": "2025-12-04",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1216,6 +1243,7 @@
       "version": "6.5.41",
       "date": "2025-12-04",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1223,6 +1251,7 @@
       "version": "6.5.42",
       "date": "2025-12-05",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1230,6 +1259,7 @@
       "version": "6.5.43",
       "date": "2025-12-05",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1237,6 +1267,7 @@
       "version": "6.5.44",
       "date": "2025-12-05",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1244,6 +1275,7 @@
       "version": "6.5.45",
       "date": "2025-12-05",
       "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     },

@@ -10,7 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
 
-## [0.0.3-alpha.10] - 2026-08-05
+## [0.0.3-alpha.11] - 2026-08-06
+
+_v0.0.3-alpha.10 was qualified privately but its public build was blocked by
+a test-isolation bug (see Fixed below); alpha.11 is the same feature set plus
+that fix and was the first of the pair to publish._
 
 ### Added
 
@@ -25,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   product and for OVM itself. Space or ←/→ cycles `off / on / notify`; one
   enter applies the ticked updates and saves any policy changes, esc
   abandons both.
+
+### Fixed
+
+- The `update_flow` test suite mocked only the GitHub releases API while
+  Codex latest-resolution consults npm and the OVM registry first, so tests
+  reached the real network and began failing (and downloading real releases)
+  the day upstream shipped a newer Codex. Both fast paths now dead-end at a
+  connection-refused port in tests, making the suite hermetic.
 
 ## [0.0.3-alpha.9] - 2026-08-05
 

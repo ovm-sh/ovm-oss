@@ -147,11 +147,19 @@ fn setup_two_version_mock() -> (ServerGuard, String) {
     (server, base)
 }
 
+/// A port that refuses instantly, so the npm and OVM-registry fast paths
+/// fail fast and "latest" is decided by the mocked releases API alone. If a
+/// fast path could reach the real network, the expected NEW version would go
+/// stale the day upstream ships a newer release (it did: rust-v0.146.1).
+const DEAD_URL: &str = "http://127.0.0.1:9";
+
 fn ovm(home: &Path, releases_url: &str) -> Command {
     let mut cmd = Command::cargo_bin("ovm").expect("binary built");
     cmd.env("HOME", home)
         .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_CODEX_RELEASES_URL", releases_url)
+        .env("OVM_CODEX_NPM_REGISTRY_URL", DEAD_URL)
+        .env("OVM_REGISTRY_BASE_URL", DEAD_URL)
         .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
         .env_remove("OVM_VERSION")
         .env_remove("OVM_PRODUCT");
@@ -315,6 +323,7 @@ fn the_picker_can_decline_and_leave_the_machine_alone() {
     let mut session = rexpect::spawn(
         &format!(
             "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_CODEX_NPM_REGISTRY_URL={DEAD_URL} OVM_REGISTRY_BASE_URL={DEAD_URL} \
              OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update codex",
             home = home.path().display(),
             url = releases_url,
@@ -360,6 +369,7 @@ fn the_picker_accepts_the_default_selection_with_one_keypress() {
     let mut session = rexpect::spawn(
         &format!(
             "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_CODEX_NPM_REGISTRY_URL={DEAD_URL} OVM_REGISTRY_BASE_URL={DEAD_URL} \
              OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update codex",
             home = home.path().display(),
             url = releases_url,
@@ -429,6 +439,7 @@ fn the_sweep_picker_offers_a_pinned_update_unticked() {
     let mut session = rexpect::spawn(
         &format!(
             "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_CODEX_NPM_REGISTRY_URL={DEAD_URL} OVM_REGISTRY_BASE_URL={DEAD_URL} \
              OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update",
             home = home.path().display(),
             url = releases_url,
@@ -471,6 +482,7 @@ fn the_sweep_picker_saves_a_policy_change() {
     let mut session = rexpect::spawn(
         &format!(
             "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_CODEX_NPM_REGISTRY_URL={DEAD_URL} OVM_REGISTRY_BASE_URL={DEAD_URL} \
              OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update",
             home = home.path().display(),
             url = releases_url,
@@ -519,6 +531,7 @@ fn a_corrupt_config_reports_failure_instead_of_aborting_or_succeeding() {
     let mut session = rexpect::spawn(
         &format!(
             "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_CODEX_NPM_REGISTRY_URL={DEAD_URL} OVM_REGISTRY_BASE_URL={DEAD_URL} \
              OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update",
             home = home.path().display(),
             url = releases_url,

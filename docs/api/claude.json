@@ -2,7 +2,7 @@
   "product": "claude",
   "display_name": "Claude Code",
   "source": "npm:@anthropic-ai/claude-code",
-  "updated_at": "2026-08-04T22:49:11Z",
+  "updated_at": "2026-08-05T03:48:03Z",
   "dist_tags": {
     "stable": "2.1.220",
     "latest": "2.1.222",
