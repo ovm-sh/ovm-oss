@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
 
+## [0.0.3-alpha.10] - 2026-08-05
+
+### Added
+
+- The `ovm update` picker now offers pinned products instead of hiding them:
+  a pinned update appears as an unticked `(pinned)` row, so taking it is a
+  deliberate keypress rather than a side effect of "yes, all of them".
+  Ticking it updates and resumes latest-tracking, exactly like
+  `ovm update <product>`. `--check` lists pinned updates too; `--yes` and
+  piped sweeps still skip pins entirely.
+- The picker doubles as the auto-update settings screen: below the update
+  rows, `ovm update` shows the launch-time auto-update policy for each
+  product and for OVM itself. Space or ←/→ cycles `off / on / notify`; one
+  enter applies the ticked updates and saves any policy changes, esc
+  abandons both.
+
 ## [0.0.3-alpha.9] - 2026-08-05
 
 ### Added

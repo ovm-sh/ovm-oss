@@ -393,6 +393,155 @@ fn the_picker_accepts_the_default_selection_with_one_keypress() {
     );
 }
 
+/// A pin hides nothing from `--check`: the update is reported, labelled as
+/// pinned, and still not installed.
+#[test]
+fn a_bare_check_shows_the_pinned_update_instead_of_hiding_it() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let (_server, releases_url) = setup_two_version_mock();
+    install_old(home.path(), &releases_url); // `ovm use` pins OLD
+
+    let output = ovm(home.path(), &releases_url)
+        .args(["update", "--check"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&output);
+
+    assert!(
+        text.contains(NEW) && text.contains("(pinned)"),
+        "the pinned update is visible and labelled: {text}"
+    );
+    assert_eq!(active_version(home.path()), OLD);
+}
+
+/// The bare sweep's picker offers a pinned update unticked: plain Enter must
+/// leave the pin alone, so moving it always takes a deliberate keypress.
+#[test]
+fn the_sweep_picker_offers_a_pinned_update_unticked() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let (_server, releases_url) = setup_two_version_mock();
+    install_old(home.path(), &releases_url); // `ovm use` pins OLD
+
+    let binary = assert_cmd::cargo::cargo_bin("ovm");
+    let mut session = rexpect::spawn(
+        &format!(
+            "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update",
+            home = home.path().display(),
+            url = releases_url,
+            binary = binary.display(),
+        ),
+        Some(120_000),
+    )
+    .expect("spawn under a pty");
+
+    session
+        .exp_string("update(s) available")
+        .expect("picker frame");
+    session.exp_string("(pinned)").expect("labels the pin");
+    session
+        .exp_string("auto-update on launch")
+        .expect("the settings section rides along");
+    // The pinned row starts unticked and no setting moved, so Enter is a
+    // no-op confirm.
+    session.send_line("").expect("confirm");
+    session
+        .exp_string("Nothing selected")
+        .expect("says it changed nothing");
+
+    assert_eq!(
+        active_version(home.path()),
+        OLD,
+        "confirming the defaults must not move a pin"
+    );
+}
+
+/// Moving a policy row and confirming persists the change — the sweep screen
+/// is also the settings screen.
+#[test]
+fn the_sweep_picker_saves_a_policy_change() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let (_server, releases_url) = setup_two_version_mock();
+    install_old(home.path(), &releases_url);
+
+    let binary = assert_cmd::cargo::cargo_bin("ovm");
+    let mut session = rexpect::spawn(
+        &format!(
+            "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update",
+            home = home.path().display(),
+            url = releases_url,
+            binary = binary.display(),
+        ),
+        Some(120_000),
+    )
+    .expect("spawn under a pty");
+
+    session
+        .exp_string("auto-update on launch")
+        .expect("settings section");
+    // One update row (pinned Codex), then the policy rows: down once lands on
+    // the first product's policy; space advances it `on → notify`.
+    session.send("\x1b[B").expect("arrow down");
+    session.send(" ").expect("cycle policy");
+    session.send_line("").expect("confirm");
+    // Wait for the process to finish so the config write has landed.
+    let tail = session.exp_eof().expect("run finishes");
+    assert!(tail.contains("notify"), "reports the policy move: {tail}");
+
+    let config = fs::read_to_string(home.path().join(".ovm/config.json")).expect("config saved");
+    assert!(
+        config.contains("notify"),
+        "the policy change was persisted: {config}"
+    );
+    assert_eq!(
+        active_version(home.path()),
+        OLD,
+        "a settings-only confirm installs nothing"
+    );
+}
+
+/// A corrupt config fails every product check (each one loads it), and the
+/// settings section must degrade to a warning rather than abort before the
+/// summary — the run still ends as a reported failure, never as success or
+/// a picker waiting on keys it can do nothing with.
+#[test]
+fn a_corrupt_config_reports_failure_instead_of_aborting_or_succeeding() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let (_server, releases_url) = setup_two_version_mock();
+    install_old(home.path(), &releases_url);
+    fs::write(home.path().join(".ovm/config.json"), "{not json").expect("corrupt the config");
+
+    let binary = assert_cmd::cargo::cargo_bin("ovm");
+    let mut session = rexpect::spawn(
+        &format!(
+            "env HOME={home} OVM_DISABLE_BACKGROUND_REFRESH=1 OVM_CODEX_RELEASES_URL={url} \
+             OVM_SKIP_SIGNATURE_VERIFY=1 {binary} update",
+            home = home.path().display(),
+            url = releases_url,
+            binary = binary.display(),
+        ),
+        Some(120_000),
+    )
+    .expect("spawn under a pty");
+
+    session
+        .exp_string("auto-update settings unavailable")
+        .expect("the settings section explains itself instead of aborting");
+    session
+        .exp_string("failed")
+        .expect("the summary still counts the failures");
+    // The closing error only prints on the Err path, which is what makes the
+    // process exit non-zero — an all-failed sweep must never read as success.
+    session
+        .exp_string("Could not update")
+        .expect("the run ends as a failure");
+    assert_eq!(active_version(home.path()), OLD);
+}
+
 /// A guard for the flag itself: `--check` and `--yes` contradict each other,
 /// and clap must say so rather than silently preferring one.
 #[test]

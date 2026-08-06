@@ -70,7 +70,7 @@ pub fn run() -> Result<()> {
     println!("  adopt        Import an existing app version without deleting the original");
     println!("  install      Install a version (no switch)");
     println!("  uninstall    Remove an installed version");
-    println!("  update       Check for updates and choose what to install (--yes, --check)");
+    println!("  update       Check for updates, pick installs, tune auto-update (--yes, --check)");
     println!("\nInspect:");
     println!("  version      OVM's version + every product's active version");
     println!("  ls           List versions (--remote for available, --all for both)");

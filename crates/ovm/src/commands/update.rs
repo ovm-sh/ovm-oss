@@ -12,7 +12,7 @@
 //! never blocks on the network, while this command was *asked* for by name and
 //! so resolves upstream the same way `ovm <product> latest` does.
 
-use crate::config::AutoUpdatePolicy;
+use crate::config::{AutoUpdatePolicy, OvmConfig, OvmDirs};
 use crate::error::{OvmError, Result};
 use crate::product::Product;
 use crate::version_manager::VersionManager;
@@ -132,16 +132,24 @@ enum Plan {
     /// A local `dev:` build. OVM has no upstream to compare it against, so the
     /// launch path leaves it alone and so does this.
     DevBuild(String),
-    /// Deliberately pinned and not named on the command line. A sweep must not
-    /// quietly undo a pin the user set on purpose.
+    /// Deliberately pinned and not named on the command line, with nobody
+    /// there to ask. A hands-off sweep must not quietly undo a pin the user
+    /// set on purpose.
     PinnedSkip(String),
-    /// Resolve the latest release and move to it if it is newer.
-    Resolve(String),
+    /// Resolve the latest release and move to it if it is newer. `pinned`
+    /// carries the pin into the offer: the picker shows the row unticked, so
+    /// moving the pin takes a deliberate keypress instead of happening as a
+    /// side effect of "yes, all of them".
+    Resolve { baseline: String, pinned: bool },
 }
 
 /// The pure decision. `baseline` is the version an update would move away from
 /// (the active version, or the newest installed one when nothing is selected).
-fn plan_for(baseline: Option<&str>, pin: Option<&str>, scope: Scope) -> Plan {
+/// `offer_pinned` is whether a pin may be surfaced as an opt-in choice rather
+/// than skipped outright — true exactly when a human will see the result
+/// before anything installs (the picker, `--check`), false for `--yes` and
+/// scripted sweeps.
+fn plan_for(baseline: Option<&str>, pin: Option<&str>, scope: Scope, offer_pinned: bool) -> Plan {
     let Some(baseline) = baseline else {
         return Plan::NotInstalled;
     };
@@ -149,11 +157,21 @@ fn plan_for(baseline: Option<&str>, pin: Option<&str>, scope: Scope) -> Plan {
         return Plan::DevBuild(baseline.to_string());
     }
     // A pin is an explicit "keep me here". Naming the product overrides it
-    // (and clears it); a bare `ovm update` reports it and moves on.
+    // (and clears it); a bare `ovm update` offers it when it can ask and
+    // reports it when it cannot.
     if scope == Scope::All && pin == Some(baseline) {
+        if offer_pinned {
+            return Plan::Resolve {
+                baseline: baseline.to_string(),
+                pinned: true,
+            };
+        }
         return Plan::PinnedSkip(baseline.to_string());
     }
-    Plan::Resolve(baseline.to_string())
+    Plan::Resolve {
+        baseline: baseline.to_string(),
+        pinned: false,
+    }
 }
 
 /// What actually happened to one product.
@@ -183,12 +201,16 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
     );
     println!();
 
+    // Pins become opt-in rows only where someone will see them before
+    // anything installs; a `--yes` or scripted sweep keeps the hands-off rule.
+    let offer_pinned = mode != Mode::All;
+
     // Phase 1 — look, decide nothing. Resolving every product before touching
     // any of them is what makes the choice possible: you cannot pick from a
     // list that is being installed as it is printed.
     let checks: Vec<(Product, Check)> = products
         .iter()
-        .map(|product| (*product, check_one(*product, scope)))
+        .map(|product| (*product, check_one(*product, scope, offer_pinned)))
         .collect();
 
     // Everything that will not change, said once and up front.
@@ -206,12 +228,36 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
         })
         .collect();
 
-    if available.is_empty() {
+    // The bare interactive sweep doubles as the settings screen: updates on
+    // top, launch-time auto-update policies underneath, one enter for both.
+    // A named product stays a plain "update this" question. The settings are
+    // an extra offer, so a config that will not load costs the offer, never
+    // the update — `ovm update auto` will surface the same error with a
+    // stack that actually points at the setting.
+    let mut settings = if mode == Mode::Ask && scope == Scope::All {
+        match Settings::load() {
+            Ok(settings) => Some(settings),
+            Err(error) => {
+                println!(
+                    "  {}",
+                    style(format!("auto-update settings unavailable: {error}")).dim()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Failures already happened during the checks; whichever way the
+    // interaction below ends, they must still decide the exit code.
+    let settled: Vec<(Product, Outcome)> = checks
+        .iter()
+        .filter_map(|(p, c)| c.as_settled_outcome().map(|o| (*p, o)))
+        .collect();
+
+    if available.is_empty() && settings.is_none() {
         println!();
-        let settled: Vec<(Product, Outcome)> = checks
-            .iter()
-            .filter_map(|(p, c)| c.as_settled_outcome().map(|o| (*p, o)))
-            .collect();
         print_summary(&settled);
         return report_failures(&settled);
     }
@@ -224,10 +270,16 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
             print_available(*product, update);
         }
         println!();
+        let pinned_count = available.iter().filter(|(_, u)| u.pinned).count();
+        let yes_hint = if pinned_count > 0 {
+            "`ovm update --yes` for all but pinned"
+        } else {
+            "`ovm update --yes` for all"
+        };
         println!(
             "  {}",
             style(format!(
-                "{} to install — run `ovm update` to choose, or `ovm update --yes` for all",
+                "{} to install — run `ovm update` to choose, or {yes_hint}",
                 available.len()
             ))
             .dim()
@@ -235,42 +287,139 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
         return Ok(());
     }
 
-    let chosen: Vec<usize> = match mode {
-        Mode::All => (0..available.len()).collect(),
-        Mode::Ask => match super::update_picker::choose(&available)? {
-            Some(indices) => indices,
-            // Cancelling is a valid answer, not an error: nothing was touched.
-            None => {
-                println!();
-                println!("  {}", style("Nothing updated.").dim());
-                return Ok(());
+    let (chosen, chosen_policies): (Vec<usize>, Vec<AutoUpdatePolicy>) = match mode {
+        Mode::All => ((0..available.len()).collect(), Vec::new()),
+        Mode::Ask => {
+            let names = settings.as_ref().map(Settings::names).unwrap_or_default();
+            let initial = settings
+                .as_ref()
+                .map(Settings::policies)
+                .unwrap_or_default();
+            match super::update_picker::choose(&available, &names, initial)? {
+                Some(choice) => choice,
+                // Cancelling is a valid answer, not an error: nothing was
+                // touched — not the products, not the settings. Check
+                // failures still count, though; declining to install does
+                // not un-fail a product that could not even be looked at.
+                None => {
+                    println!();
+                    println!("  {}", style("Nothing updated.").dim());
+                    return report_failures(&settled);
+                }
             }
-        },
+        }
         Mode::CheckOnly => unreachable!("check-only returns above"),
     };
 
-    if chosen.is_empty() {
+    // Settings save first: a policy edit must stick even if a download after
+    // it fails halfway.
+    let setting_changes = match settings.as_mut() {
+        Some(settings) => settings.apply(&chosen_policies)?,
+        None => Vec::new(),
+    };
+
+    if chosen.is_empty() && setting_changes.is_empty() {
         println!();
         println!("  {}", style("Nothing selected — nothing updated.").dim());
-        return Ok(());
+        return report_failures(&settled);
     }
 
     // Phase 3 — apply only what was chosen.
     println!();
-    let mut results: Vec<(Product, Outcome)> = checks
-        .iter()
-        .filter_map(|(p, c)| c.as_settled_outcome().map(|o| (*p, o)))
-        .collect();
+    let mut results: Vec<(Product, Outcome)> = settled.clone();
     for index in chosen {
         let (product, update) = available[index];
         let outcome = apply(product, update);
         print_row(product, &outcome);
         results.push((product, outcome));
     }
+    for change in &setting_changes {
+        print_setting_change(change);
+    }
 
     println!();
     print_summary(&results);
     report_failures(&results)
+}
+
+/// The launch-time auto-update policies as one editable block: the three
+/// products in `Product::ALL` order, then OVM itself. Names, values, and the
+/// save all speak the same row order, so the picker can stay a plain list.
+struct Settings {
+    dirs: OvmDirs,
+    config: OvmConfig,
+}
+
+/// The settings row for OVM's own launch updates.
+const SELF_ROW: &str = "OVM";
+
+/// One policy row the picker moved, kept for printing after the save.
+struct SettingChange {
+    name: &'static str,
+    from: AutoUpdatePolicy,
+    to: AutoUpdatePolicy,
+}
+
+impl Settings {
+    fn load() -> Result<Self> {
+        let dirs = OvmDirs::new()?;
+        let config = OvmConfig::load(&dirs.config_file)?;
+        Ok(Self { dirs, config })
+    }
+
+    fn names(&self) -> Vec<&'static str> {
+        Product::ALL
+            .iter()
+            .map(|product| product.display_name())
+            .chain([SELF_ROW])
+            .collect()
+    }
+
+    fn policies(&self) -> Vec<AutoUpdatePolicy> {
+        Product::ALL
+            .iter()
+            .map(|product| self.config.auto_update.policy_for(*product))
+            .chain([self.config.self_.auto_update])
+            .collect()
+    }
+
+    /// Persist the rows the picker moved, if any, and say which they were.
+    /// Rows that came back unchanged write nothing — confirming the screen
+    /// without touching it must not start pinning per-product overrides.
+    fn apply(&mut self, chosen: &[AutoUpdatePolicy]) -> Result<Vec<SettingChange>> {
+        let before = self.policies();
+        let names = self.names();
+        let mut changes = Vec::new();
+        for (index, (&from, &to)) in before.iter().zip(chosen).enumerate() {
+            if from == to {
+                continue;
+            }
+            match Product::ALL.get(index) {
+                Some(product) => self.config.set_auto_update_product(*product, to),
+                None => self.config.set_self_auto_update(to),
+            }
+            changes.push(SettingChange {
+                name: names[index],
+                from,
+                to,
+            });
+        }
+        if !changes.is_empty() {
+            self.config.save(&self.dirs.config_file)?;
+        }
+        Ok(changes)
+    }
+}
+
+fn print_setting_change(change: &SettingChange) {
+    println!(
+        "  {:<12} {} {} {} {}",
+        change.name,
+        style("auto-update").dim(),
+        style(change.from.label()).dim(),
+        style("→").cyan(),
+        style(change.to.label()).green().bold()
+    );
 }
 
 fn report_failures(results: &[(Product, Outcome)]) -> Result<()> {
@@ -289,11 +438,14 @@ fn report_failures(results: &[(Product, Outcome)]) -> Result<()> {
     }
 }
 
-/// An update that exists and has not been applied.
+/// An update that exists and has not been applied. `pinned` means the current
+/// version is a deliberate pin, so the picker offers this row unticked and
+/// taking it is a conscious "move my pin".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Available {
     pub(crate) from: String,
     pub(crate) to: String,
+    pub(crate) pinned: bool,
 }
 
 /// The result of *looking* at one product. Separate from [`Outcome`] because
@@ -321,7 +473,7 @@ impl Check {
     }
 }
 
-fn check_one(product: Product, scope: Scope) -> Check {
+fn check_one(product: Product, scope: Scope, offer_pinned: bool) -> Check {
     let vm = match VersionManager::new(product) {
         Ok(vm) => vm,
         Err(error) => return Check::Failed(error.to_string()),
@@ -339,7 +491,7 @@ fn check_one(product: Product, scope: Scope) -> Check {
     };
     let pin = vm.read_pin();
 
-    match plan_for(baseline.as_deref(), pin.as_deref(), scope) {
+    match plan_for(baseline.as_deref(), pin.as_deref(), scope, offer_pinned) {
         Plan::NotInstalled => Check::Skipped {
             detail: "not installed".to_string(),
             hint: format!("ovm install {} latest", product.canonical_name()),
@@ -348,11 +500,24 @@ fn check_one(product: Product, scope: Scope) -> Check {
             detail: format!("{version} (local dev build)"),
             hint: format!("ovm use {} <version>", product.canonical_name()),
         },
-        Plan::PinnedSkip(version) => Check::Skipped {
-            detail: format!("pinned to {version}"),
-            hint: format!("ovm update {}", product.canonical_name()),
-        },
-        Plan::Resolve(baseline) => resolve(&vm, &baseline),
+        Plan::PinnedSkip(version) => pinned_skip(product, &version),
+        Plan::Resolve { baseline, pinned } => {
+            let check = resolve(&vm, &baseline, pinned);
+            // A pin with nothing newer — or whose lookup failed — is simply a
+            // pin. The offer was optional; its absence must not turn into an
+            // "already latest" claim or fail the sweep.
+            if pinned && !matches!(check, Check::Available(_)) {
+                return pinned_skip(product, &baseline);
+            }
+            check
+        }
+    }
+}
+
+fn pinned_skip(product: Product, version: &str) -> Check {
+    Check::Skipped {
+        detail: format!("pinned to {version}"),
+        hint: format!("ovm update {}", product.canonical_name()),
     }
 }
 
@@ -362,7 +527,7 @@ fn check_one(product: Product, scope: Scope) -> Check {
 /// service is unreachable, printing its own "could not reach update service"
 /// warning first — so an offline check reports "already latest" only directly
 /// underneath that warning, never in place of it.
-fn resolve(vm: &VersionManager, baseline: &str) -> Check {
+fn resolve(vm: &VersionManager, baseline: &str, pinned: bool) -> Check {
     let product = vm.product();
     let latest = match vm.latest_available_version() {
         Ok(latest) => product.normalize_version(&latest),
@@ -376,6 +541,7 @@ fn resolve(vm: &VersionManager, baseline: &str) -> Check {
     Check::Available(Available {
         from: baseline.to_string(),
         to: latest,
+        pinned,
     })
 }
 
@@ -412,8 +578,13 @@ fn apply(product: Product, update: &Available) -> Outcome {
 
 /// A row for an update that exists but has not been applied.
 fn print_available(product: Product, update: &Available) {
+    let pin_note = if update.pinned {
+        format!("  {}", style("(pinned)").dim())
+    } else {
+        String::new()
+    };
     println!(
-        "  {:<12} {} {} {}",
+        "  {:<12} {} {} {}{pin_note}",
         product.display_name(),
         style(&update.from).dim(),
         style("→").cyan(),
@@ -484,31 +655,53 @@ fn summary_line(results: &[(Product, Outcome)]) -> String {
 mod tests {
     use super::*;
 
+    fn resolve_plan(baseline: &str, pinned: bool) -> Plan {
+        Plan::Resolve {
+            baseline: baseline.into(),
+            pinned,
+        }
+    }
+
     #[test]
     fn nothing_installed_is_reported_not_updated() {
-        assert_eq!(plan_for(None, None, Scope::All), Plan::NotInstalled);
-        assert_eq!(plan_for(None, None, Scope::Named), Plan::NotInstalled);
+        assert_eq!(plan_for(None, None, Scope::All, true), Plan::NotInstalled);
+        assert_eq!(
+            plan_for(None, None, Scope::Named, false),
+            Plan::NotInstalled
+        );
     }
 
     #[test]
     fn dev_builds_are_left_alone_like_a_launch_leaves_them() {
         assert_eq!(
-            plan_for(Some("dev:resume-fix"), None, Scope::Named),
+            plan_for(Some("dev:resume-fix"), None, Scope::Named, true),
             Plan::DevBuild("dev:resume-fix".into())
         );
     }
 
     #[test]
-    fn a_sweep_respects_a_pin_but_naming_the_product_overrides_it() {
-        // `ovm update` must not silently undo a deliberate `ovm use`.
+    fn a_hands_off_sweep_respects_a_pin_but_naming_the_product_overrides_it() {
+        // `ovm update --yes` (or a script) must not silently undo a
+        // deliberate `ovm use`.
         assert_eq!(
-            plan_for(Some("2.1.159"), Some("2.1.159"), Scope::All),
+            plan_for(Some("2.1.159"), Some("2.1.159"), Scope::All, false),
             Plan::PinnedSkip("2.1.159".into())
         );
         // `ovm update claude` is unambiguous intent — move it.
         assert_eq!(
-            plan_for(Some("2.1.159"), Some("2.1.159"), Scope::Named),
-            Plan::Resolve("2.1.159".into())
+            plan_for(Some("2.1.159"), Some("2.1.159"), Scope::Named, false),
+            resolve_plan("2.1.159", false)
+        );
+    }
+
+    #[test]
+    fn an_asking_sweep_offers_the_pin_instead_of_skipping_it() {
+        // With a picker (or `--check`) in front of the user, the pin becomes
+        // an unticked row rather than an invisible skip: ticking it is the
+        // explicit consent the skip existed to require.
+        assert_eq!(
+            plan_for(Some("2.1.220"), Some("2.1.220"), Scope::All, true),
+            resolve_plan("2.1.220", true)
         );
     }
 
@@ -517,8 +710,74 @@ mod tests {
         // The pin names a version that is no longer active — it says nothing
         // about the version we would be moving away from.
         assert_eq!(
-            plan_for(Some("2.1.170"), Some("2.1.159"), Scope::All),
-            Plan::Resolve("2.1.170".into())
+            plan_for(Some("2.1.170"), Some("2.1.159"), Scope::All, false),
+            resolve_plan("2.1.170", false)
+        );
+        assert_eq!(
+            plan_for(Some("2.1.170"), Some("2.1.159"), Scope::All, true),
+            resolve_plan("2.1.170", false)
+        );
+    }
+
+    #[test]
+    fn settings_rows_cover_every_product_and_then_ovm_itself() {
+        let dirs = OvmDirs::at(tempfile::tempdir().unwrap().path().join(".ovm"));
+        let settings = Settings {
+            dirs,
+            config: OvmConfig::default(),
+        };
+        let names = settings.names();
+        assert_eq!(names.len(), Product::ALL.len() + 1);
+        assert_eq!(names.last(), Some(&SELF_ROW));
+        assert_eq!(settings.policies().len(), names.len());
+    }
+
+    #[test]
+    fn applying_settings_saves_only_the_rows_that_moved() {
+        let temp = tempfile::tempdir().unwrap();
+        let dirs = OvmDirs::at(temp.path().join(".ovm"));
+        std::fs::create_dir_all(&dirs.base).unwrap();
+        let mut settings = Settings {
+            dirs: OvmDirs::at(temp.path().join(".ovm")),
+            config: OvmConfig::default(),
+        };
+
+        let mut chosen = settings.policies();
+        let self_row = chosen.len() - 1;
+        chosen[0] = AutoUpdatePolicy::Notify; // first product
+        chosen[self_row] = AutoUpdatePolicy::Off; // OVM itself
+
+        let changes = settings.apply(&chosen).unwrap();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].to, AutoUpdatePolicy::Notify);
+        assert_eq!(changes[1].name, SELF_ROW);
+
+        let reloaded = OvmConfig::load(&settings.dirs.config_file).unwrap();
+        assert_eq!(
+            reloaded.auto_update.policy_for(Product::ALL[0]),
+            AutoUpdatePolicy::Notify
+        );
+        assert_eq!(reloaded.self_.auto_update, AutoUpdatePolicy::Off);
+        // Untouched rows stay at the default, not pinned as overrides.
+        assert_eq!(reloaded.auto_update.codex, None);
+    }
+
+    #[test]
+    fn confirming_unchanged_settings_writes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let dirs = OvmDirs::at(temp.path().join(".ovm"));
+        let mut settings = Settings {
+            dirs,
+            config: OvmConfig::default(),
+        };
+
+        let chosen = settings.policies();
+        let changes = settings.apply(&chosen).unwrap();
+
+        assert!(changes.is_empty());
+        assert!(
+            !settings.dirs.config_file.exists(),
+            "an untouched screen must not create or rewrite config.json"
         );
     }
 
