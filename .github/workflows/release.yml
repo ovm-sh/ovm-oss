@@ -190,6 +190,9 @@ jobs:
     needs: metadata
     if: needs.metadata.outputs.stage == 'draft'
     strategy:
+      # Keep both legs' diagnostics: an ubuntu failure must not cancel the
+      # macOS run mid-flight, or a real failure arrives with half the picture.
+      fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}

@@ -454,7 +454,27 @@ pub(crate) fn reported_store_version(product: Product, binary: &Path) -> Result<
 }
 
 fn version_output(binary: &Path) -> Result<String> {
-    let output = Command::new(binary).arg("--version").output()?;
+    // The caller often executes a binary written moments earlier (the staged
+    // import copy). On Linux, a concurrently forked child — OVM's own detached
+    // background refresh, or a parallel test's spawn — can still hold the
+    // write descriptor across its fork-to-exec window, and executing the file
+    // then fails with ETXTBSY. The condition clears as soon as that child
+    // execs, so a short bounded retry is the whole fix; any persistent
+    // ETXTBSY (a genuinely running binary) still surfaces.
+    let output = {
+        let mut attempt = 0;
+        loop {
+            match Command::new(binary).arg("--version").output() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 5 =>
+                {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                other => break other,
+            }
+        }
+    }?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let text = format!("{stdout}{stderr}");
