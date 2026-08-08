@@ -1286,7 +1286,17 @@ fn purge_refuses_a_piped_yes_even_from_a_terminal() {
         .stderr(Stdio::from(terminal_stderr))
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(b"y\n").unwrap();
+    // The child must refuse piped consent, and may have already exited by the
+    // time this write lands — release-profile builds lost that race on the CI
+    // ubuntu leg. A broken pipe here is the refusal observed from the writing
+    // end, not a harness failure; any other error is still real.
+    if let Err(error) = child.stdin.take().unwrap().write_all(b"y\n") {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected stdin write failure: {error}"
+        );
+    }
     let status = child.wait().unwrap();
 
     assert!(

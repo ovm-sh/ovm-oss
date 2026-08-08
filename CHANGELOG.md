@@ -5,6 +5,32 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-08-09
+
+The first stable release. OVM installs, pins, switches, and launches versions
+of **Claude Code**, **Codex**, and **Pi** side by side — like `nvm` for the
+CLIs you code with — with a verification layer none of them ship on their own:
+
+- **Verified versions.** Every release OVM offers has been installed and run
+  on real hardware (macOS and Linux) before the registry lists it. Coding
+  agents are exercised through real tool-use probes; releases that fail are
+  withheld per platform rather than offered.
+- **Instant listings.** Version lists come from `ovm.sh/api` in one request,
+  with a direct-upstream fallback when the registry is unreachable.
+- **Side-by-side installs and hot switching.** `ovm use`, per-invocation
+  `--ovm-version`, launch shortcuts (`cc`, `cx`, `pi`, and yolo/fast stacking
+  like `cxyf`), pinning, and adoption of existing unmanaged installs — the
+  original stays untouched and OVM tells you how to retire it.
+- **Self-managing.** `ovm self update` follows a channel (`stable` by
+  default, `alpha` opt-in) against immutable, build-provenance-attested
+  GitHub releases; hot-swap and rollback of OVM itself are first-class.
+- **Safe by default.** Launches never delete installs; destructive cleanup is
+  explicit and confirmed. Signature verification pins the publishers' Apple
+  Team IDs on macOS. A plugin system (`ovm-*` on PATH) extends the CLI.
+
+The installer and the GitHub release bundles are the supported channels; npm,
+Homebrew, and crates.io are prepared but not yet published.
+
 ## [0.0.3-alpha.14] - 2026-08-09
 
 ### Changed
@@ -616,7 +642,15 @@ the real first public release carries the version the public repo ships.
 
 <!-- v0.0.3-alpha.4 is the first tag on the repaired public history; older
      versions predate it and intentionally have no public link targets. -->
-[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.7...HEAD
+[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.14...v0.1.0
+[0.0.3-alpha.14]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.13...v0.0.3-alpha.14
+[0.0.3-alpha.13]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.12...v0.0.3-alpha.13
+[0.0.3-alpha.12]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.11...v0.0.3-alpha.12
+[0.0.3-alpha.11]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.10...v0.0.3-alpha.11
+[0.0.3-alpha.10]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.9...v0.0.3-alpha.10
+[0.0.3-alpha.9]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.8...v0.0.3-alpha.9
+[0.0.3-alpha.8]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.7...v0.0.3-alpha.8
 [0.0.3-alpha.7]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.6...v0.0.3-alpha.7
 [0.0.3-alpha.6]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.5...v0.0.3-alpha.6
 [0.0.3-alpha.5]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.4...v0.0.3-alpha.5
