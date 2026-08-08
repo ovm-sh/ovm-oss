@@ -28,11 +28,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// (canonical name, a representative installed version) for each product.
-const PRODUCTS: [(&str, &str); 4] = [
+const PRODUCTS: [(&str, &str); 3] = [
     ("claude", "2.1.112"),
     ("codex", "rust-v0.130.0"),
     ("pi", "0.67.6"),
-    ("qm", "0.1.4"),
 ];
 
 /// The launch foreground only reads the local cache; a correct launch finishes
@@ -81,7 +80,6 @@ fn active_binary_path(home: &Path, product: &str, version: &str) -> PathBuf {
         "claude" => version_dir.join("native/claude"),
         "codex" => version_dir.join("release/bin/codex"),
         "pi" => version_dir.join("release/bundle/pi/pi"),
-        "qm" => version_dir.join("release/bundle/package/dist/bin/qm.js"),
         other => panic!("unknown product {other}"),
     }
 }
@@ -109,14 +107,11 @@ fn seed_active(home: &Path, product: &str, version: &str) {
         .join(version);
     let source_root = match product {
         "claude" => version_dir.join("native"),
-        "codex" | "pi" | "qm" => version_dir.join("release"),
+        "codex" | "pi" => version_dir.join("release"),
         other => panic!("unknown product {other}"),
     };
     match product {
         "pi" => fs::write(source_root.join("bundle/pi/package.json"), "{}").expect("pi package"),
-        "qm" => {
-            fs::write(source_root.join("bundle/package/package.json"), "{}").expect("qm package")
-        }
         "claude" | "codex" => {}
         other => panic!("unknown product {other}"),
     }
@@ -331,14 +326,8 @@ fn time_launch(scenario: &str, product: &str, version: &str, update_service: &st
 /// `update_service` so no test can touch the real internet.
 fn ovm(home: &Path, update_service: &str) -> Command {
     ensure_test_config(home);
-    let runtime_bin = ensure_test_node(home);
-    let mut path = vec![runtime_bin];
-    path.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
     let mut cmd = Command::cargo_bin("ovm").expect("binary built");
     cmd.env("HOME", home)
-        .env("PATH", std::env::join_paths(path).expect("test PATH"))
         .env("NO_COLOR", "1")
         .env("OVM_REGISTRY_BASE_URL", update_service)
         .env("OVM_CODEX_RELEASES_URL", update_service)
@@ -346,7 +335,6 @@ fn ovm(home: &Path, update_service: &str) -> Command {
         .env("OVM_PI_RELEASES_URL", update_service)
         .env("OVM_PI_NPM_REGISTRY_URL", update_service)
         .env("OVM_NPM_PACKAGE_URL", update_service)
-        .env("OVM_QM_NPM_PACKAGE_URL", update_service)
         .env("OVM_GITHUB_API_URL", update_service)
         .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
@@ -358,23 +346,8 @@ fn ovm(home: &Path, update_service: &str) -> Command {
     cmd
 }
 
-fn ensure_test_node(home: &Path) -> PathBuf {
-    let bin = home.join(".test-bin");
-    let node = bin.join("node");
-    if node.exists() {
-        return bin;
-    }
-    fs::create_dir_all(&bin).expect("test runtime bin");
-    fs::write(&node, "#!/bin/sh\nprintf 'v24.0.0\\n'\n").expect("fake node");
-    let mut permissions = fs::metadata(&node).expect("node metadata").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&node, permissions).expect("node permissions");
-    bin
-}
-
 /// The config under test is deliberately the DEFAULT one: `autoUpdate` stays at
-/// its default `on` for existing products and QM keeps its risk-based `notify`
-/// default; `checkForUpdates` stays `true`. These guards therefore measure what
+/// its default `on` and `checkForUpdates` stays `true`. These guards therefore measure what
 /// every new user actually runs.
 ///
 /// This file used to pin `autoUpdate: off`, which quietly excused the only

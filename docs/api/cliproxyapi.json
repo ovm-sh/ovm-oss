@@ -2,7 +2,7 @@
   "product": "cliproxyapi",
   "display_name": "CLIProxyAPI",
   "source": "github:router-for-me/CLIProxyAPI",
-  "updated_at": "2026-08-08T03:14:32Z",
+  "updated_at": "2026-08-08T13:32:56Z",
   "dist_tags": {
     "latest": "7.2.123"
   },
@@ -804,38 +804,6 @@
       "date": "2025-11-07"
     },
     {
-      "version": "6.3.14",
-      "date": "2025-11-07"
-    },
-    {
-      "version": "6.3.15",
-      "date": "2025-11-07"
-    },
-    {
-      "version": "6.3.16",
-      "date": "2025-11-07"
-    },
-    {
-      "version": "6.3.17",
-      "date": "2025-11-08"
-    },
-    {
-      "version": "6.3.18",
-      "date": "2025-11-08"
-    },
-    {
-      "version": "6.3.19",
-      "date": "2025-11-08"
-    },
-    {
-      "version": "6.3.20",
-      "date": "2025-11-08"
-    },
-    {
-      "version": "6.3.21",
-      "date": "2025-11-08"
-    },
-    {
       "version": "6.3.22",
       "date": "2025-11-08",
       "verified": {
@@ -999,62 +967,6 @@
     {
       "version": "6.3.45",
       "date": "2025-11-16",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.46",
-      "date": "2025-11-16",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.47",
-      "date": "2025-11-16",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.48",
-      "date": "2025-11-16",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.49",
-      "date": "2025-11-16",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.50",
-      "date": "2025-11-18",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.51",
-      "date": "2025-11-18",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.52",
-      "date": "2025-11-18",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.53",
-      "date": "2025-11-19",
       "verified": {
         "macos-auth": true
       }

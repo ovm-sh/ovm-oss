@@ -6,7 +6,7 @@ use crate::dev_metadata::{DevInstallMetadata, DevInstallMode};
 use crate::error::{OvmError, Result};
 use crate::hooks::{self, Hook};
 use crate::product::Product;
-use crate::sources::{codex, gcs, npm, pi, qm, registry};
+use crate::sources::{codex, gcs, npm, pi, registry};
 use crate::symlink;
 use crate::util::{create_new_file, make_handle_executable, write_new_file};
 use console::style;
@@ -275,7 +275,6 @@ impl VersionManager {
                 .collect(),
             Product::Codex => codex::list_remote_versions()?,
             Product::Pi => pi::list_remote_versions()?,
-            Product::Qm => qm::list_remote_versions()?,
         };
         Ok((versions, HashMap::new()))
     }
@@ -321,7 +320,7 @@ impl VersionManager {
                     || self.standard_source_paths(version, true).is_complete()
             }
             Product::Codex => self.standard_source_paths(version, false).is_complete(),
-            Product::Pi | Product::Qm => self.product_dirs.bundle_install_is_complete(version),
+            Product::Pi => self.product_dirs.bundle_install_is_complete(version),
         }
     }
 
@@ -690,8 +689,6 @@ impl VersionManager {
                 (Product::Codex, true) => unreachable!("checked above"),
                 (Product::Pi, false) => self.install_pi_release(&version)?,
                 (Product::Pi, true) => unreachable!("checked above"),
-                (Product::Qm, false) => self.install_qm_release(&version)?,
-                (Product::Qm, true) => unreachable!("checked above"),
             }
             Ok(version.clone())
         });
@@ -1007,13 +1004,10 @@ impl VersionManager {
                 self.resolve_latest_or_installed(|| self.resolve_codex_latest())
             }
             (Product::Pi, false) => self.resolve_latest_or_installed(pi::get_latest_version),
-            (Product::Qm, false) => self.resolve_latest_or_installed(qm::get_latest_version),
-            (Product::Codex, true) | (Product::Pi, true) | (Product::Qm, true) => {
-                Err(OvmError::Message(format!(
-                    "{} does not support npm latest resolution.",
-                    self.product().display_name()
-                )))
-            }
+            (Product::Codex, true) | (Product::Pi, true) => Err(OvmError::Message(format!(
+                "{} does not support npm latest resolution.",
+                self.product().display_name()
+            ))),
         }
     }
 
@@ -1305,7 +1299,7 @@ impl VersionManager {
                     destination: self.product_dirs.native_bin(version),
                 }
             }
-            Product::Pi | Product::Qm => {
+            Product::Pi => {
                 let root = version_dir.join("release");
                 InstallSourcePaths {
                     legacy_metadata: Some(root.join("meta.json")),
@@ -1386,10 +1380,6 @@ impl VersionManager {
         // marker write through the cleanup arm below instead of returning with
         // the incomplete source still on disk.
         let published = install().and_then(|value| {
-            if self.product().is_bundle() {
-                self.product_dirs
-                    .validate_required_bundle_members(version)?;
-            }
             // Publish the source BEFORE the hook: create `.complete` and
             // remove `.installing` so a PostInstall hook that runs `ovm
             // which`/`use`/launch against the just-installed version sees
@@ -1580,30 +1570,6 @@ impl VersionManager {
         Ok(())
     }
 
-    fn install_qm_release(&self, version: &str) -> Result<()> {
-        crate::node::require_qm_runtime()?;
-        eprintln!(
-            "  {} Downloading npm package v{}...",
-            style("↓").cyan(),
-            version
-        );
-        let bundle_dir = self.product_dirs.release_bundle_dir(version);
-        let metadata = qm::download_release(version, &bundle_dir)?;
-        write_new_file(
-            &self.product_dirs.release_meta_path(version),
-            serde_json::to_string_pretty(&metadata)?.as_bytes(),
-        )?;
-
-        eprintln!(
-            "  {} Installed {} v{} {}",
-            style("✓").green(),
-            self.product().display_name(),
-            style(version).green().bold(),
-            style("(npm bundle)").dim()
-        );
-        Ok(())
-    }
-
     fn archivable_paths(&self, version: &str) -> Vec<PathBuf> {
         let version_dir = self.product_dirs.version_dir(version);
 
@@ -1615,7 +1581,7 @@ impl VersionManager {
                 version_dir.join("npm").join("installed"),
                 version_dir.join("native"),
             ],
-            Product::Codex | Product::Pi | Product::Qm => {
+            Product::Codex | Product::Pi => {
                 vec![version_dir.join("release"), version_dir.join("dev")]
             }
         }
@@ -3212,22 +3178,18 @@ mod tests {
 
     #[test]
     fn import_rejects_bundle_products() {
-        for (product, version) in [(Product::Pi, "0.79.10"), (Product::Qm, "0.1.4")] {
-            let (vm, dir) = setup_test_vm(product);
-            let source = dir
-                .path()
-                .join(format!("foreign-{}", product.canonical_name()));
-            fs::write(&source, "foreign binary").expect("source binary");
+        let (vm, dir) = setup_test_vm(Product::Pi);
+        let source = dir.path().join("foreign-pi");
+        fs::write(&source, "foreign binary").expect("source binary");
 
-            let error = vm
-                .install(InstallRequest::Import {
-                    version: version.to_string(),
-                    binary: source,
-                })
-                .expect_err("bundle products cannot be imported as one file");
+        let error = vm
+            .install(InstallRequest::Import {
+                version: "0.79.10".to_string(),
+                binary: source,
+            })
+            .expect_err("bundle products cannot be imported as one file");
 
-            assert!(error.to_string().contains("bundles"), "{error}");
-        }
+        assert!(error.to_string().contains("bundles"), "{error}");
     }
 
     #[test]

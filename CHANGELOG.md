@@ -5,6 +5,21 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3-alpha.13] - 2026-08-09
+
+### Removed
+
+- **QM is no longer a managed product.** Its CLI turned out to be a deployment
+  control plane rather than a coding tool you launch: it has a handful of
+  versions, no interactive surface, and its scaffolded deployment directories
+  already pin their own CLI version via `package.json` and `npm exec`, so
+  OVM's version management added little on top. `ovm install qm`, the `qm`
+  launcher, the registry feed (`ovm.sh/api/qm.json`), and the nightly QM
+  qualification lane are gone. A `~/.ovm/bin/qm` launcher left behind by
+  alpha.12 now reports an unknown product; delete it with
+  `rm ~/.ovm/bin/qm`. Existing `~/.ovm/products/qm` installs are untouched
+  and can be removed the same way. No stable release ever included QM.
+
 ## [0.0.3-alpha.12] - 2026-08-08
 
 <!-- The version baseline is managed by the release owner; see RELEASING.md.

@@ -1,6 +1,6 @@
 # OVM
 
-**Open Version Manager for AI coding tools** — install, switch, and launch multiple versions of **Claude Code**, **Codex**, **Pi**, and **QM** side by side. Like `nvm` or `rbenv`, but for the CLIs you code with every day.
+**Open Version Manager for AI coding tools** — install, switch, and launch multiple versions of **Claude Code**, **Codex**, and **Pi** side by side. Like `nvm` or `rbenv`, but for the CLIs you code with every day.
 
 ```console
 $ ovm select codex          # browse every version, switch instantly
@@ -38,7 +38,7 @@ ovm use claude 2.1.91        # switch to an installed version
 ovm ls codex --all           # installed + available
 ovm current                  # what's active, everything at a glance
 
-ovm cc / cx / pi / qm        # launch the active version
+ovm cc / cx / pi             # launch the active version
 ovm ccy / cxy                # …in yolo mode
 ovm adopt codex              # take over an existing install without deleting it
 ```
@@ -75,7 +75,6 @@ Switching rewrites one symlink — nothing is downloaded, deleted, or rebuilt, w
 | Claude Code | `claude`, `cc` | npm `@anthropic-ai/claude-code` (native bin via GCS) | `claude` |
 | Codex | `codex`, `cx` | npm `@openai/codex` + GitHub Releases `openai/codex` | `codex` |
 | Pi | `pi` | GitHub Releases `earendil-works/pi` | `pi` |
-| QM | `qm` | npm `@yc-software/qm` | `qm` |
 
 Codex's upstream feed also carries internal build tags; OVM lists only `rust-v…` releases that ship Codex binaries.
 
@@ -119,7 +118,7 @@ OVM ignores ambient `GITHUB_TOKEN` and sends the explicit token only to
 
 **What `ovm update` does at the edges** — nothing installed for a product: says so per product and prints the `ovm install` line, rather than reporting a clean "up to date" or starting an install you did not ask for. Offline: it says it could not reach the update service and falls back to the newest release already in your store; a product it cannot resolve at all is reported as failed and the command exits non-zero. Pinned (`ovm use <product> <version>`): a bare `ovm update` reports the pin and leaves it alone, while `ovm update <product>` overrides it and resumes latest-tracking. `dev:` builds have no upstream and are always left alone.
 
-**Launch shortcuts** — `cc` / `cx` / `pi` / `qm` launch the active version, `ccx` launches claudex. Suffixes stack: `y` = yolo, `f` = fast (priority tier) — so `cxy` is Codex in yolo mode and `ccxyf` is claudex in yolo + fast. Full table: `ovm help launch`.
+**Launch shortcuts** — `cc` / `cx` / `pi` launch the active version, `ccx` launches claudex. Suffixes stack: `y` = yolo, `f` = fast (priority tier) — so `cxy` is Codex in yolo mode and `ccxyf` is claudex in yolo + fast. Full table: `ovm help launch`.
 
 **Turning update checks off** — `"checkForUpdates": false` in `~/.ovm/config.json` stops OVM checking for new versions entirely: no background refresh, no update banner, no `notify` prompt, and no auto-update download — including from a version cache that was filled earlier. Updates you ask for by name (`ovm cx latest`, `ovm install …`, `ovm update`) still resolve and install — the setting turns off *automatic* checking, not the command you just typed — and `autoUpdate: on` will still move to a newer release **already in your version store**, since that is a local switch rather than a check.
 
@@ -170,7 +169,7 @@ Your prompts go **Claude Code UI → local CLIProxyAPI on `127.0.0.1` → OpenAI
 
 ## Version registry
 
-Version lists come from `ovm.sh/api/` (`claude.json`, `codex.json`, `pi.json`, `qm.json`, `cliproxyapi.json`, `registry.json`) in a single request, so listing hundreds of versions takes milliseconds instead of hammering upstream APIs. If the registry is unreachable, OVM falls back to direct upstream calls. Refreshes happen in the background, never on the launch path.
+Version lists come from `ovm.sh/api/` (`claude.json`, `codex.json`, `pi.json`, `cliproxyapi.json`, `registry.json`) in a single request, so listing hundreds of versions takes milliseconds instead of hammering upstream APIs. If the registry is unreachable, OVM falls back to direct upstream calls. Refreshes happen in the background, never on the launch path.
 
 ## Development
 

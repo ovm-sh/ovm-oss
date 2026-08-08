@@ -2,7 +2,7 @@
 
 Instructions for agents and contributors working in the public OVM source tree.
 
-OVM is a Rust CLI version manager for Claude Code, Codex, Pi, and QM. The public
+OVM is a Rust CLI version manager for Claude Code, Codex, and Pi. The public
 repository is `ovm-sh/ovm-oss`; its release assets must always be built from the
 exact public tag that contains their source.
 

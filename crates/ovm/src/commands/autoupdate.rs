@@ -94,18 +94,6 @@ fn print_status(config: &OvmConfig) {
     for (subject, policy) in default {
         println!("  {subject:<6} {}", style(policy).green());
     }
-    // QM is the one product whose row does not follow the default above, so the
-    // listing would otherwise look inconsistent for no visible reason.
-    if config.auto_update.qm.is_none() {
-        println!(
-            "\n  {} QM is excluded from the default: it deploys infrastructure, so it",
-            style("·").dim()
-        );
-        println!(
-            "    is never updated silently. Opt in with {}.",
-            style("ovm autoupdate qm on").cyan()
-        );
-    }
 }
 
 /// The per-subject policy rows shown under the default, as plain

@@ -93,7 +93,7 @@ fn help_launch_holds_the_full_shortcut_table() {
     let stdout = console::strip_ansi_codes(&String::from_utf8_lossy(&output)).to_string();
 
     for shortcut in [
-        "cc", "ccy", "cx", "cxy", "cxf", "cxyf", "pi", "qm", "ccx", "ccxy", "ccxf", "ccxyf",
+        "cc", "ccy", "cx", "cxy", "cxf", "cxyf", "pi", "ccx", "ccxy", "ccxf", "ccxyf",
     ] {
         assert!(
             stdout.contains(shortcut),
@@ -161,7 +161,6 @@ fn ovm_help_redirected_stdout_is_ansi_free_and_shows_full_overview() {
         "claude",
         "codex",
         "pi",
-        "qm",
         "self-update",
         "doctor",
         "shortcuts",
@@ -211,33 +210,30 @@ fn doctor_and_check_cannot_be_shadowed_by_path_plugins() {
 
 #[test]
 #[cfg(unix)]
-fn qm_builtin_cannot_be_shadowed_by_a_path_plugin() {
+fn pi_builtin_cannot_be_shadowed_by_a_path_plugin() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let plugin_dir = tmp.path().join("plugins");
     std::fs::create_dir(&plugin_dir).expect("plugin dir");
     let marker = tmp.path().join("plugin-ran");
-    for (name, script) in [
-        ("ovm-qm", "#!/bin/sh\ntouch \"$PLUGIN_MARKER\"\n"),
-        ("node", "#!/bin/sh\nprintf 'v24.0.0\\n'\n"),
-    ] {
-        let path = plugin_dir.join(name);
-        std::fs::write(&path, script).expect("write executable");
-        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&path, permissions).expect("executable");
-    }
+    let path = plugin_dir.join("ovm-pi");
+    std::fs::write(&path, "#!/bin/sh\ntouch \"$PLUGIN_MARKER\"\n").expect("write executable");
+    let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).expect("executable");
 
     ovm()
         .env("PATH", &plugin_dir)
         .env("PLUGIN_MARKER", &marker)
-        .env("OVM_QM_NPM_PACKAGE_URL", "http://127.0.0.1:1")
+        .env("OVM_PI_RELEASES_URL", "http://127.0.0.1:1")
+        .env("OVM_PI_NPM_REGISTRY_URL", "http://127.0.0.1:1")
+        .env("OVM_GITHUB_API_URL", "http://127.0.0.1:1")
         .env("OVM_REGISTRY_BASE_URL", "http://127.0.0.1:1")
-        .args(["qm", "--ovm-version", "9.9.9"])
+        .args(["pi", "--ovm-version", "9.9.9"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("QM 9.9.9 not found"));
+        .stderr(predicate::str::contains("Pi 9.9.9 not found"));
     assert!(!marker.exists(), "the PATH plugin must not run");
 }
 
@@ -272,8 +268,7 @@ fn unknown_product_gives_helpful_error() {
         .stderr(predicate::str::contains("Unknown product"))
         .stderr(predicate::str::contains("claude"))
         .stderr(predicate::str::contains("codex"))
-        .stderr(predicate::str::contains("pi"))
-        .stderr(predicate::str::contains("qm"));
+        .stderr(predicate::str::contains("pi"));
 }
 
 #[test]
@@ -332,8 +327,7 @@ fn current_with_no_product_shows_dashboard() {
         .stdout(predicate::str::contains("ovm"))
         .stdout(predicate::str::contains("claude"))
         .stdout(predicate::str::contains("codex"))
-        .stdout(predicate::str::contains("pi"))
-        .stdout(predicate::str::contains("qm"));
+        .stdout(predicate::str::contains("pi"));
 }
 
 #[test]
@@ -423,7 +417,7 @@ fn update_exists_and_reports_per_product_state() {
     let stdout = console::strip_ansi_codes(&String::from_utf8_lossy(&assert.get_output().stdout))
         .to_string();
 
-    for product in ["Claude Code", "Codex", "Pi", "QM"] {
+    for product in ["Claude Code", "Codex", "Pi"] {
         assert!(
             stdout.contains(product),
             "`ovm update` must report {product}:\n{stdout}"
@@ -431,7 +425,7 @@ fn update_exists_and_reports_per_product_state() {
     }
     assert_eq!(
         stdout.matches("not installed").count(),
-        4,
+        3,
         "an empty store must be reported, not silently called up to date:\n{stdout}"
     );
     assert!(

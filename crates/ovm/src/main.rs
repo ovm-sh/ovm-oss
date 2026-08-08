@@ -95,7 +95,6 @@ fn run() -> Result<()> {
             Product::Pi => commands::pi::run(&args[1..])?,
             Product::Codex => commands::codex::run(&args[1..])?,
             Product::Claude => commands::claude::run(&args[1..])?,
-            Product::Qm => commands::qm::run(&args[1..])?,
         }
         return Ok(());
     }
@@ -169,10 +168,6 @@ fn run() -> Result<()> {
             }
             "pi" => {
                 commands::pi::run(&args[2..])?;
-                return Ok(());
-            }
-            "qm" => {
-                commands::qm::run(&args[2..])?;
                 return Ok(());
             }
             _ => {
@@ -574,7 +569,7 @@ fn format_clap_error(err: clap::Error) -> OvmError {
 
     let hint = match err.kind() {
         ErrorKind::MissingRequiredArgument if context.contains("PRODUCT") => {
-            "Tip: pass a product name (claude, codex, pi, qm) or its alias (cc, cx). Some commands accept no product to show all — try `ovm current` or `ovm which`."
+            "Tip: pass a product name (claude, codex, pi) or its alias (cc, cx). Some commands accept no product to show all — try `ovm current` or `ovm which`."
         }
         ErrorKind::MissingRequiredArgument if context.contains("VERSION") => {
             "Tip: pass a version, or `latest` to install the newest upstream release. List options with `ovm ls <product> --remote`."
@@ -749,7 +744,6 @@ mod tests {
     fn requires_explicit_known_product() {
         assert_eq!(required_product("claude").expect("claude"), Product::Claude);
         assert_eq!(required_product("cx").expect("codex alias"), Product::Codex);
-        assert_eq!(required_product("qm").expect("qm"), Product::Qm);
         assert!(required_product("latest").is_err());
     }
 

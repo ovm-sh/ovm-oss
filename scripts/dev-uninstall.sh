@@ -26,7 +26,7 @@ remove_exact_link "$CARGO_BIN/ovm-claudex" "$ARTIFACT_DIR/ovm-claudex"
 remove_exact_link "$INSTALL_DIR/ovm" "$ARTIFACT_DIR/ovm"
 remove_exact_link "$INSTALL_DIR/ovm-codex-skew" "$ARTIFACT_DIR/ovm-codex-skew"
 
-for product in claude codex pi qm; do
+for product in claude codex pi; do
     remove_exact_link "$INSTALL_DIR/$product" "$ARTIFACT_DIR/ovm"
 done
 

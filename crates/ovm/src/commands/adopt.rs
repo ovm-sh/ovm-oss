@@ -579,15 +579,15 @@ mod tests {
     }
 
     #[test]
-    fn qm_adoption_rejects_a_single_file_bundle_import() {
+    fn bundle_adoption_rejects_a_single_file_import() {
         let root = tempdir().expect("tempdir");
         let dirs = OvmDirs::at(root.path().join(".ovm"));
-        let vm = VersionManager::with(dirs, OvmConfig::default(), Product::Qm);
-        let binary = root.path().join("foreign-qm");
+        let vm = VersionManager::with(dirs, OvmConfig::default(), Product::Pi);
+        let binary = root.path().join("foreign-pi");
         fs::write(&binary, b"not-a-wrapper").expect("write foreign binary");
 
         assert_eq!(
-            import_rejection(&vm, &binary, "0.1.4"),
+            import_rejection(&vm, &binary, "0.79.10"),
             Some("part of a bundle OVM cannot copy as one file")
         );
     }

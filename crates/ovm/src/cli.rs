@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[command(
     name = "ovm",
     version,
-    about = "Manage Claude Code, Codex, Pi, and QM versions"
+    about = "Manage Claude Code, Codex, and Pi versions"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -195,7 +195,7 @@ pub enum Commands {
     /// Pick a version interactively (browse, install, switch)
     #[command(alias = "switch")]
     Select {
-        /// Product name (claude, codex, pi, qm) or alias (cc, cx). `ovm` selects OVM
+        /// Product name (claude, codex, pi) or alias (cc, cx). `ovm` selects OVM
         /// itself, but only on the alpha channel or with advanced.selfInPicker.
         /// Omit to pick a product first.
         product: Option<String>,
@@ -235,14 +235,12 @@ pub enum Commands {
         long_about = "Update installed products to their latest release, right now.\n\
         \n\
         \x20 ovm update                      every installed product\n\
-        \x20 ovm update <product>            just that one (claude, codex, pi, qm)\n\
+        \x20 ovm update <product>            just that one (claude, codex, pi)\n\
         \x20 ovm update self                 OVM itself (same as `ovm self update`)\n\
         \x20 ovm update auto on|off|notify   launch-time policy for everything\n\
         \x20 ovm update auto <product> off   launch-time policy for one product\n\
         \x20 ovm update auto self notify     launch-time policy for OVM itself\n\
         \n\
-        QM is excluded from autoUpdate.default because silent infrastructure-tool \
-        updates are unsafe; it defaults to notify unless autoUpdate.qm is set explicitly.\n\
         \n\
         Latest is resolved upstream, because you asked for it by name — unlike a \
         launch under `autoUpdate: on`, which only ever reads the local cache. \

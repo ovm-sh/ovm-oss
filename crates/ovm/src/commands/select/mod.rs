@@ -588,7 +588,7 @@ fn parse_launch_reply(product: Product, reply: &str) -> LaunchChoice {
     let yolo_keyword = match product {
         Product::Claude => "ccy",
         Product::Codex => "cxy",
-        Product::Pi | Product::Qm => return LaunchChoice::No,
+        Product::Pi => return LaunchChoice::No,
     };
     if trimmed == yolo_keyword {
         LaunchChoice::Yolo
@@ -607,7 +607,7 @@ fn prompt_launch(product: Product) -> Result<LaunchChoice> {
     let options = match product {
         Product::Claude => "[y/n/ccy]",
         Product::Codex => "[y/n/cxy]",
-        Product::Pi | Product::Qm => "[y/n]",
+        Product::Pi => "[y/n]",
     };
     eprintln!();
     eprint!(
@@ -654,7 +654,7 @@ fn check_companion_support(product: Product, version: &str) -> Option<bool> {
                 .expect("hard-coded Codex pet version should parse");
             Some(parsed >= first_pet)
         }
-        Product::Pi | Product::Qm => None,
+        Product::Pi => None,
     }
 }
 

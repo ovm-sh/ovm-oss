@@ -11,7 +11,7 @@ use console::style;
 pub fn run_short() -> Result<()> {
     print_banner();
     println!();
-    println!("Manage Claude Code, Codex, Pi, and QM versions.\n");
+    println!("Manage Claude Code, Codex, and Pi versions.\n");
     println!("Usage: ovm <command> [args]\n");
 
     println!("Common:");
@@ -19,7 +19,7 @@ pub fn run_short() -> Result<()> {
     println!("  install / use       add a version, switch to one");
     println!("  ls / current        what's available, what's active");
     println!("  update              update to latest");
-    println!("  cc, cx, pi, qm      launch (y = yolo, f = fast — ccy, cxyf, …)");
+    println!("  cc, cx, pi          launch (y = yolo, f = fast — ccy, cxyf, …)");
     println!("  help                everything else");
 
     println!(
@@ -58,7 +58,7 @@ fn print_banner() {
 pub fn run() -> Result<()> {
     print_banner();
     println!();
-    println!("Manage Claude Code, Codex, Pi, and QM versions\n");
+    println!("Manage Claude Code, Codex, and Pi versions\n");
     println!("Usage:");
     println!("  ovm <command> <product> [args]");
     println!("  ovm <product> [args]\n");
@@ -104,7 +104,7 @@ pub fn run() -> Result<()> {
     // One pattern, two examples — not the eight-row cross product of two flags
     // and two products. The exhaustive table lives in `ovm help launch`.
     println!("\nLaunch shortcuts:");
-    println!("  cc, cx, pi, qm   Launch the active Claude Code / Codex / Pi / QM");
+    println!("  cc, cx, pi       Launch the active Claude Code / Codex / Pi");
     println!("  ccx          Launch claudex (Claude Code's interface on GPT-5.6)");
     println!("  Suffixes stack onto any of those: y = yolo, f = fast (priority tier).");
     println!("  So cxy is Codex in yolo mode, and ccxyf is claudex in yolo + fast.");
@@ -116,7 +116,6 @@ pub fn run() -> Result<()> {
     println!("  ovm ls claude --remote        List available Claude versions");
     println!("  ovm update                    Update every installed product to latest");
     println!("  ovm update auto codex notify  Ask before updating Codex on launch");
-    println!("  ovm update auto qm on         Opt QM into silent launch-time updates");
     println!("  ovm self update               Update OVM itself");
     println!("  ovm cleanup 60                Keep inactive installs for 60 days");
     println!("  ovm cxy                       Launch active Codex in yolo mode");
@@ -151,7 +150,7 @@ fn print_launch_topic() {
     println!("Every shortcut runs the active managed version of a product.");
     println!("Read them as a prefix plus optional suffixes:");
     println!();
-    println!("  Prefix   cc = Claude Code   cx = Codex   pi = Pi   qm = QM");
+    println!("  Prefix   cc = Claude Code   cx = Codex   pi = Pi");
     println!("           ccx = claudex (Claude Code's interface on GPT-5.6)");
     println!("  Suffix   y = yolo (skip permission prompts)");
     println!("           f = fast (OpenAI priority service tier — Codex and claudex only)");
@@ -164,7 +163,6 @@ fn print_launch_topic() {
     println!("  {:<8} Codex, fast", "cxf");
     println!("  {:<8} Codex, yolo + fast", "cxyf");
     println!("  {:<8} Pi (no permission system, so no yolo form)", "pi");
-    println!("  {:<8} QM (no permission system, so no yolo form)", "qm");
     println!("  {:<8} claudex", "ccx");
     println!("  {:<8} claudex, yolo", "ccxy");
     println!("  {:<8} claudex, fast", "ccxf");
@@ -174,9 +172,6 @@ fn print_launch_topic() {
     println!("  ovm cc latest                 Move Claude Code to the newest release, then launch");
     println!("  ovm cx rust-v0.146.0          Launch one specific version (and pin it)");
     println!("  ovm ccy --ovm-version 2.1.91  One-off version, leaving the default alone");
-    println!();
-    println!("QM requires Node.js 24 or newer. Because QM can deploy infrastructure,");
-    println!("it defaults to notify and does not inherit the global auto-update default.");
     println!();
     println!(
         "Run `{}` to install ccy/cxy/ccx*/claudex as bare commands in ~/.local/bin,",

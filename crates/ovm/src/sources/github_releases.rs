@@ -12,7 +12,6 @@ pub fn github_repo(product: Product) -> &'static str {
         Product::Claude => "anthropics/claude-code",
         Product::Codex => "openai/codex",
         Product::Pi => "earendil-works/pi",
-        Product::Qm => "yc-software/qm",
     }
 }
 
@@ -116,7 +115,7 @@ fn get_recent_releases_at_base(
 
 fn format_tag(product: Product, version: &str) -> String {
     match product {
-        Product::Claude | Product::Pi | Product::Qm => {
+        Product::Claude | Product::Pi => {
             if version.starts_with('v') {
                 version.to_string()
             } else {
@@ -130,9 +129,7 @@ fn format_tag(product: Product, version: &str) -> String {
 #[cfg(test)]
 fn parse_tag(product: Product, tag: &str) -> String {
     match product {
-        Product::Claude | Product::Pi | Product::Qm => {
-            tag.strip_prefix('v').unwrap_or(tag).to_string()
-        }
+        Product::Claude | Product::Pi => tag.strip_prefix('v').unwrap_or(tag).to_string(),
         Product::Codex => tag.to_string(),
     }
 }
@@ -155,7 +152,6 @@ mod tests {
         assert_eq!(format_tag(Product::Claude, "2.1.91"), "v2.1.91");
         assert_eq!(format_tag(Product::Claude, "v2.1.91"), "v2.1.91");
         assert_eq!(format_tag(Product::Pi, "0.67.6"), "v0.67.6");
-        assert_eq!(format_tag(Product::Qm, "0.1.4"), "v0.1.4");
         assert_eq!(format_tag(Product::Codex, "rust-v0.120.0"), "rust-v0.120.0");
     }
 
@@ -163,7 +159,6 @@ mod tests {
     fn parses_tags_per_product() {
         assert_eq!(parse_tag(Product::Claude, "v2.1.91"), "2.1.91");
         assert_eq!(parse_tag(Product::Pi, "v0.67.6"), "0.67.6");
-        assert_eq!(parse_tag(Product::Qm, "v0.1.4"), "0.1.4");
         assert_eq!(parse_tag(Product::Codex, "rust-v0.120.0"), "rust-v0.120.0");
     }
 
@@ -172,7 +167,6 @@ mod tests {
         assert_eq!(github_repo(Product::Claude), "anthropics/claude-code");
         assert_eq!(github_repo(Product::Codex), "openai/codex");
         assert_eq!(github_repo(Product::Pi), "earendil-works/pi");
-        assert_eq!(github_repo(Product::Qm), "yc-software/qm");
     }
 
     /// `None` here renders as "this release has no notes". A spent quota is not

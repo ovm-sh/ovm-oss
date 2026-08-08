@@ -386,7 +386,6 @@ fn version_picker_loads_quickly_for_all_products_from_registry() {
         ("claude", "2.1.112"),
         ("codex", "rust-v0.130.0"),
         ("pi", "0.67.6"),
-        ("qm", "0.1.4"),
     ];
 
     for (product, version) in products {

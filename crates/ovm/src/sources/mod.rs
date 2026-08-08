@@ -3,7 +3,6 @@ pub mod gcs;
 pub mod github_releases;
 pub mod npm;
 pub mod pi;
-pub mod qm;
 pub mod registry;
 
 pub(crate) fn http_client(timeout_secs: u64) -> crate::error::Result<reqwest::blocking::Client> {
