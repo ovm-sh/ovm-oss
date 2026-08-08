@@ -53,7 +53,7 @@ pub fn list_remote_versions() -> Result<Vec<semver::Version>> {
     list_remote_versions_at(&registry_url())
 }
 
-fn list_remote_versions_at(url: &str) -> Result<Vec<semver::Version>> {
+pub(crate) fn list_remote_versions_at(url: &str) -> Result<Vec<semver::Version>> {
     let resp = registry_client(30)?
         .get(url)
         .header("Accept", "application/json")
@@ -82,7 +82,7 @@ pub fn get_latest_version() -> Result<String> {
     get_latest_version_at(&registry_url())
 }
 
-fn get_latest_version_at(url: &str) -> Result<String> {
+pub(crate) fn get_latest_version_at(url: &str) -> Result<String> {
     let resp = registry_client(15)?
         .get(url)
         .header("Accept", "application/json")
@@ -96,8 +96,8 @@ fn get_latest_version_at(url: &str) -> Result<String> {
         .ok_or_else(|| OvmError::VersionNotFound("latest".into()))
 }
 
-fn get_tarball_ref(version: &str) -> Result<TarballRef> {
-    let url = format!("{}/{}", registry_url(), version);
+fn get_tarball_ref_at(package_url: &str, version: &str) -> Result<TarballRef> {
+    let url = format!("{package_url}/{version}");
     let resp = registry_client(15)?
         .get(&url)
         .header("Accept", "application/json")
@@ -116,8 +116,8 @@ fn get_tarball_ref(version: &str) -> Result<TarballRef> {
 
 /// Host of the configured registry. The tarball must come from this same host
 /// (in addition to the generic HTTPS/loopback rules in `validate_download_url`).
-fn registry_host() -> String {
-    reqwest::Url::parse(&registry_url())
+fn registry_host(package_url: &str) -> String {
+    reqwest::Url::parse(package_url)
         .ok()
         .and_then(|u| u.host_str().map(str::to_string))
         .unwrap_or_default()
@@ -157,12 +157,43 @@ pub(crate) fn verify_sha512_integrity(integrity: &str, digest: &[u8]) -> Result<
 }
 
 pub fn download_tarball(version: &str, dest: &Path) -> Result<()> {
-    let tarball = get_tarball_ref(version)?;
+    download_tarball_to(&registry_url(), "OVM_NPM_PACKAGE_URL", version, dest, false)
+}
+
+/// Download one version of an npm package from `package_url`.
+///
+/// `override_var` binds the loopback exception to the exact test-only URL
+/// override used by the caller. `require_sha512` is for modern packages whose
+/// publisher always supplies npm SRI metadata: a missing digest is then an
+/// unreadable/incomplete registry response, never permission to downgrade to
+/// length-only verification.
+pub(crate) fn download_tarball_to(
+    package_url: &str,
+    override_var: &str,
+    version: &str,
+    dest: &Path,
+    require_sha512: bool,
+) -> Result<()> {
+    let tarball = get_tarball_ref_at(package_url, version)?;
+    if require_sha512
+        && !tarball.integrity.as_deref().is_some_and(|value| {
+            value
+                .split_whitespace()
+                .any(|hash| hash.starts_with("sha512-"))
+        })
+    {
+        return Err(OvmError::DownloadFailed {
+            url: package_url.to_string(),
+            message: format!(
+                "npm registry metadata for version {version} did not include the required SHA-512 integrity digest"
+            ),
+        });
+    }
     let tarball_url = tarball.url;
-    let allowed = registry_host();
+    let allowed = registry_host(package_url);
     // Loopback is only a legitimate tarball host when the test registry override
     // is set; production metadata must never point the download at loopback.
-    let allow_loopback = super::test_override_active("OVM_NPM_PACKAGE_URL");
+    let allow_loopback = super::test_override_active(override_var);
 
     super::validate_download_url(&tarball_url, &[allowed.as_str()], allow_loopback)?;
 

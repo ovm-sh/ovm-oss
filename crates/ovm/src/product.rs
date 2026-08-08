@@ -5,18 +5,32 @@ pub enum Product {
     Claude,
     Codex,
     Pi,
+    Qm,
 }
 
 impl Product {
-    pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::Pi];
+    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::Pi, Self::Qm];
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "claude" | "cc" => Some(Self::Claude),
             "codex" | "cx" => Some(Self::Codex),
             "pi" => Some(Self::Pi),
+            "qm" => Some(Self::Qm),
             _ => None,
         }
+    }
+
+    pub fn accepted_names() -> String {
+        let mut names = Vec::new();
+        for product in Self::ALL {
+            names.push(product.canonical_name());
+            let alias = product.shortest_alias();
+            if alias != product.canonical_name() {
+                names.push(alias);
+            }
+        }
+        names.join(", ")
     }
 
     pub fn canonical_name(self) -> &'static str {
@@ -24,6 +38,7 @@ impl Product {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Pi => "pi",
+            Self::Qm => "qm",
         }
     }
 
@@ -32,6 +47,7 @@ impl Product {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Pi => "Pi",
+            Self::Qm => "QM",
         }
     }
 
@@ -40,6 +56,7 @@ impl Product {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Pi => "pi",
+            Self::Qm => "qm",
         }
     }
 
@@ -50,7 +67,7 @@ impl Product {
     pub fn companions(self) -> &'static [&'static str] {
         match self {
             Self::Codex => &["ovm-codex-skew"],
-            Self::Claude | Self::Pi => &[],
+            Self::Claude | Self::Pi | Self::Qm => &[],
         }
     }
 
@@ -66,7 +83,7 @@ impl Product {
         match self {
             Self::Claude => Some("Q6L2SF6YDW"),
             Self::Codex => Some("2DC432GLL2"),
-            Self::Pi => None,
+            Self::Pi | Self::Qm => None,
         }
     }
 
@@ -76,6 +93,10 @@ impl Product {
 
     pub fn supports_dev_installs(self) -> bool {
         matches!(self, Self::Codex)
+    }
+
+    pub fn is_bundle(self) -> bool {
+        matches!(self, Self::Pi | Self::Qm)
     }
 
     pub fn install_example(self, version: &str) -> String {
@@ -89,7 +110,7 @@ impl Product {
     pub fn normalize_version(self, value: &str) -> String {
         match self {
             Self::Claude => value.to_string(),
-            Self::Pi => normalize_pi_version(value),
+            Self::Pi | Self::Qm => normalize_plain_semver_version(value),
             Self::Codex => normalize_codex_version(value),
         }
     }
@@ -111,6 +132,7 @@ impl Product {
             Self::Claude => "cc",
             Self::Codex => "cx",
             Self::Pi => "pi",
+            Self::Qm => "qm",
         }
     }
 
@@ -120,7 +142,7 @@ impl Product {
 
     pub fn is_official_remote_version(self, value: &str) -> bool {
         match self {
-            Self::Claude | Self::Pi => semver::Version::parse(value).is_ok(),
+            Self::Claude | Self::Pi | Self::Qm => semver::Version::parse(value).is_ok(),
             Self::Codex => value
                 .strip_prefix("rust-v")
                 .and_then(|version| semver::Version::parse(version).ok())
@@ -153,7 +175,7 @@ impl Product {
 
     fn parse_semver(self, value: &str) -> Option<semver::Version> {
         match self {
-            Self::Claude | Self::Pi => semver::Version::parse(value).ok(),
+            Self::Claude | Self::Pi | Self::Qm => semver::Version::parse(value).ok(),
             Self::Codex => {
                 let trimmed = value
                     .strip_prefix("rust-v")
@@ -165,7 +187,7 @@ impl Product {
     }
 }
 
-fn normalize_pi_version(value: &str) -> String {
+fn normalize_plain_semver_version(value: &str) -> String {
     if value == "latest" {
         return value.to_string();
     }
@@ -204,6 +226,7 @@ mod tests {
         assert_eq!(Product::parse("codex"), Some(Product::Codex));
         assert_eq!(Product::parse("cx"), Some(Product::Codex));
         assert_eq!(Product::parse("pi"), Some(Product::Pi));
+        assert_eq!(Product::parse("qm"), Some(Product::Qm));
         assert_eq!(Product::parse("other"), None);
     }
 
@@ -272,5 +295,20 @@ mod tests {
             "1.2.3-beta.1"
         );
         assert_eq!(Product::Pi.normalize_version("latest"), "latest");
+    }
+
+    #[test]
+    fn qm_identity_and_versions_are_canonical() {
+        assert_eq!(Product::Qm.canonical_name(), "qm");
+        assert_eq!(Product::Qm.display_name(), "QM");
+        assert_eq!(Product::Qm.binary_name(), "qm");
+        assert_eq!(Product::Qm.shortest_alias(), "qm");
+        assert!(Product::Qm.is_bundle());
+        assert!(!Product::Qm.supports_npm());
+        assert!(!Product::Qm.supports_dev_installs());
+        assert_eq!(Product::Qm.normalize_version("v0.1.4"), "0.1.4");
+        assert!(Product::Qm.is_official_remote_version("0.1.4"));
+        assert!(!Product::Qm.is_official_remote_version("0.1.4/../../escape"));
+        assert!(!Product::Qm.is_official_remote_version("0.1.4-beta.1+../escape"));
     }
 }

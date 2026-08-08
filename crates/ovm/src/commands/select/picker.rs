@@ -652,6 +652,11 @@ fn partial_download_path(product: Product, version: &str) -> Option<PathBuf> {
         Product::Claude => Some(product_dirs.native_bin(version).with_extension("part")),
         Product::Codex => Some(product_dirs.release_bin(version).with_extension("tar.gz")),
         Product::Pi => Some(product_dirs.release_bundle_dir(version).join("pi.tar.gz")),
+        Product::Qm => Some(
+            product_dirs
+                .release_bundle_dir(version)
+                .join(format!(".qm-{version}.tgz")),
+        ),
     }
 }
 
@@ -1036,7 +1041,7 @@ fn render_version_picker_frame(frame: VersionPickerFrame<'_>) -> Vec<String> {
     let companion_label = match frame.product {
         Product::Claude => "buddy",
         Product::Codex => "pet",
-        Product::Pi => "",
+        Product::Pi | Product::Qm => "",
     };
 
     let end = (frame.offset + frame.visible).min(frame.rows.len());

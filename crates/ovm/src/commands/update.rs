@@ -51,8 +51,9 @@ pub fn run(
         Some(value) => {
             let product = Product::parse(value).ok_or_else(|| {
                 OvmError::Message(format!(
-                    "Unknown product {value}. Use one of: claude, cc, codex, cx, pi, self — \
-                     or `ovm update auto` for the launch-time setting."
+                    "Unknown product {value}. Use one of: {}, self — \
+                     or `ovm update auto` for the launch-time setting.",
+                    Product::accepted_names()
                 ))
             })?;
             // `ovm update codex notify` is the old setting shape under the new
@@ -259,7 +260,7 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
     if available.is_empty() && settings.is_none() {
         println!();
         print_summary(&settled);
-        return report_failures(&settled);
+        return report_failures(&settled, false);
     }
 
     // Phase 2 — choose. `--check` stops here by definition.
@@ -304,7 +305,7 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
                 None => {
                     println!();
                     println!("  {}", style("Nothing updated.").dim());
-                    return report_failures(&settled);
+                    return report_failures(&settled, false);
                 }
             }
         }
@@ -321,7 +322,7 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
     if chosen.is_empty() && setting_changes.is_empty() {
         println!();
         println!("  {}", style("Nothing selected — nothing updated.").dim());
-        return report_failures(&settled);
+        return report_failures(&settled, false);
     }
 
     // Phase 3 — apply only what was chosen.
@@ -339,7 +340,7 @@ fn update_now(products: &[Product], scope: Scope, mode: Mode) -> Result<()> {
 
     println!();
     print_summary(&results);
-    report_failures(&results)
+    report_failures(&results, !setting_changes.is_empty())
 }
 
 /// The launch-time auto-update policies as one editable block: the three
@@ -422,20 +423,32 @@ fn print_setting_change(change: &SettingChange) {
     );
 }
 
-fn report_failures(results: &[(Product, Outcome)]) -> Result<()> {
+/// The failing exit, worded to match what actually happened. A failure next to
+/// successful work is a *partial* run: claiming "nothing else was changed" when
+/// a product was just installed contradicts the summary printed one line above
+/// it, and would send someone looking for an update they already have.
+fn report_failures(results: &[(Product, Outcome)], settings_changed: bool) -> Result<()> {
     let failed: Vec<&'static str> = results
         .iter()
         .filter(|(_, outcome)| outcome.is_failure())
         .map(|(product, _)| product.display_name())
         .collect();
     if failed.is_empty() {
-        Ok(())
-    } else {
-        Err(OvmError::Message(format!(
-            "Could not update: {}. Nothing else was changed.",
-            failed.join(", ")
-        )))
+        return Ok(());
     }
+    let changed = settings_changed
+        || results
+            .iter()
+            .any(|(_, outcome)| matches!(outcome, Outcome::Updated { .. }));
+    let tail = if changed {
+        "Everything else was applied as shown above."
+    } else {
+        "Nothing else was changed."
+    };
+    Err(OvmError::Message(format!(
+        "Could not update: {}. {tail}",
+        failed.join(", ")
+    )))
 }
 
 /// An update that exists and has not been applied. `pinned` means the current
@@ -816,6 +829,88 @@ mod tests {
         assert_eq!(
             summary_line(&results),
             "1 updated, 1 already latest, 1 failed"
+        );
+    }
+
+    fn failure_message(results: &[(Product, Outcome)], settings_changed: bool) -> String {
+        report_failures(results, settings_changed)
+            .expect_err("a failed product must decide the exit code")
+            .to_string()
+    }
+
+    #[test]
+    fn a_clean_run_is_not_reported_as_a_failure() {
+        let results = vec![(
+            Product::Claude,
+            Outcome::Updated {
+                from: "2.1.220".into(),
+                to: "2.1.224".into(),
+            },
+        )];
+
+        assert!(report_failures(&results, true).is_ok());
+    }
+
+    #[test]
+    fn a_partial_run_does_not_claim_nothing_changed() {
+        // The exact shape of the run that exposed this: Claude installed,
+        // Codex already current, Pi failed its checksum fetch. The tail must
+        // not contradict the "1 updated" summary printed above it.
+        let results = vec![
+            (
+                Product::Claude,
+                Outcome::Updated {
+                    from: "2.1.220".into(),
+                    to: "2.1.224".into(),
+                },
+            ),
+            (
+                Product::Codex,
+                Outcome::AlreadyLatest("rust-v0.146.0".into()),
+            ),
+            (Product::Pi, Outcome::Failed("offline".into())),
+        ];
+
+        let message = failure_message(&results, false);
+        assert!(message.contains("Could not update: Pi"), "{message}");
+        assert!(!message.contains("Nothing else was changed"), "{message}");
+        assert!(
+            message.contains("Everything else was applied as shown above"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_settings_only_change_still_counts_as_changed() {
+        let results = vec![
+            (
+                Product::Codex,
+                Outcome::AlreadyLatest("rust-v0.146.0".into()),
+            ),
+            (Product::Pi, Outcome::Failed("offline".into())),
+        ];
+
+        assert!(!failure_message(&results, false).contains("applied as shown above"));
+        assert!(failure_message(&results, true).contains("applied as shown above"));
+    }
+
+    #[test]
+    fn a_run_that_changed_nothing_says_so() {
+        let results = vec![
+            (
+                Product::Claude,
+                Outcome::Skipped {
+                    detail: "not installed".into(),
+                    hint: "ovm install claude latest".into(),
+                },
+            ),
+            (Product::Pi, Outcome::Failed("offline".into())),
+        ];
+
+        let message = failure_message(&results, false);
+        assert!(
+            message.contains("Could not update: Pi. Nothing else was changed."),
+            "{message}"
         );
     }
 

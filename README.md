@@ -1,6 +1,6 @@
 # OVM
 
-**Open Version Manager for AI coding tools** — install, switch, and launch multiple versions of **Claude Code**, **Codex**, and **Pi** side by side. Like `nvm` or `rbenv`, but for the CLIs you code with every day.
+**Open Version Manager for AI coding tools** — install, switch, and launch multiple versions of **Claude Code**, **Codex**, **Pi**, and **QM** side by side. Like `nvm` or `rbenv`, but for the CLIs you code with every day.
 
 ```console
 $ ovm select codex          # browse every version, switch instantly
@@ -10,7 +10,7 @@ $ ovm use codex rust-v0.130.0   # a bad release shipped? drop back in one second
 
 - 🔒 **Pin and roll back** — a bad upstream release can't strand you.
 - ⚡ **Switch instantly** — releases, alphas, and your own dev builds, side by side.
-- 🛡️ **Only versions that provably run** — every release is install-tested and driven through a real tool-use probe before OVM offers it to you.
+- 🛡️ **Evidence before promotion** — releases must pass their documented verification tier before OVM offers them; coding agents get tool-use probes, while non-agent tools get exact install/version checks.
 
 **macOS** is manually tested and supported. **Linux** is covered by CI. Windows is not supported.
 
@@ -38,7 +38,7 @@ ovm use claude 2.1.91        # switch to an installed version
 ovm ls codex --all           # installed + available
 ovm current                  # what's active, everything at a glance
 
-ovm cc / cx / pi             # launch the active version
+ovm cc / cx / pi / qm        # launch the active version
 ovm ccy / cxy                # …in yolo mode
 ovm adopt codex              # take over an existing install without deleting it
 ```
@@ -49,7 +49,7 @@ AI coding tools ship *fast* — sometimes several releases a week — and good r
 
 The trigger was a Claude Code build that started killing Bash commands mid-run. With the published version broken and no easy way back, the only fix was pinning to a known-good version and rolling forward on your own schedule. Once versions were pinnable, the rest followed: switching Codex versions the same way, juggling your own local dev builds, and knowing when an upgrade is *breaking* rather than merely newer.
 
-That last part isn't hypothetical either. Codex 0.144.0 installed fine, `--version` worked, `login` worked — and every real tool call died. A version manager that reports "installed, success" would have shipped it to everyone. So OVM verifies that a release **runs** before offering it.
+That last part isn't hypothetical either. Codex 0.144.0 installed fine, `--version` worked, `login` worked — and every real tool call died. A version manager that reports "installed, success" would have shipped it to everyone. So OVM verifies each release at the product's documented tier before offering it.
 
 ## How it works
 
@@ -75,8 +75,14 @@ Switching rewrites one symlink — nothing is downloaded, deleted, or rebuilt, w
 | Claude Code | `claude`, `cc` | npm `@anthropic-ai/claude-code` (native bin via GCS) | `claude` |
 | Codex | `codex`, `cx` | npm `@openai/codex` + GitHub Releases `openai/codex` | `codex` |
 | Pi | `pi` | GitHub Releases `earendil-works/pi` | `pi` |
+| QM | `qm` | npm `@yc-software/qm` | `qm` |
 
 Codex's upstream feed also carries internal build tags; OVM lists only `rust-v…` releases that ship Codex binaries.
+
+GitHub permits only a small anonymous API quota per shared IP. If Codex or Pi
+metadata requests are rate-limited, set `OVM_GITHUB_TOKEN` to a GitHub token.
+OVM ignores ambient `GITHUB_TOKEN` and sends the explicit token only to
+`https://api.github.com`, never to product URL overrides.
 
 ## Commands
 
@@ -113,7 +119,7 @@ Codex's upstream feed also carries internal build tags; OVM lists only `rust-v�
 
 **What `ovm update` does at the edges** — nothing installed for a product: says so per product and prints the `ovm install` line, rather than reporting a clean "up to date" or starting an install you did not ask for. Offline: it says it could not reach the update service and falls back to the newest release already in your store; a product it cannot resolve at all is reported as failed and the command exits non-zero. Pinned (`ovm use <product> <version>`): a bare `ovm update` reports the pin and leaves it alone, while `ovm update <product>` overrides it and resumes latest-tracking. `dev:` builds have no upstream and are always left alone.
 
-**Launch shortcuts** — `cc` / `cx` / `pi` launch the active version, `ccx` launches claudex. Suffixes stack: `y` = yolo, `f` = fast (priority tier) — so `cxy` is Codex in yolo mode and `ccxyf` is claudex in yolo + fast. Full table: `ovm help launch`.
+**Launch shortcuts** — `cc` / `cx` / `pi` / `qm` launch the active version, `ccx` launches claudex. Suffixes stack: `y` = yolo, `f` = fast (priority tier) — so `cxy` is Codex in yolo mode and `ccxyf` is claudex in yolo + fast. Full table: `ovm help launch`.
 
 **Turning update checks off** — `"checkForUpdates": false` in `~/.ovm/config.json` stops OVM checking for new versions entirely: no background refresh, no update banner, no `notify` prompt, and no auto-update download — including from a version cache that was filled earlier. Updates you ask for by name (`ovm cx latest`, `ovm install …`, `ovm update`) still resolve and install — the setting turns off *automatic* checking, not the command you just typed — and `autoUpdate: on` will still move to a newer release **already in your version store**, since that is a local switch rather than a check.
 
@@ -164,7 +170,7 @@ Your prompts go **Claude Code UI → local CLIProxyAPI on `127.0.0.1` → OpenAI
 
 ## Version registry
 
-Version lists come from `ovm.sh/api/` (`claude.json`, `codex.json`, `pi.json`, `cliproxyapi.json`, `registry.json`) in a single request, so listing hundreds of versions takes milliseconds instead of hammering upstream APIs. If the registry is unreachable, OVM falls back to direct upstream calls. Refreshes happen in the background, never on the launch path.
+Version lists come from `ovm.sh/api/` (`claude.json`, `codex.json`, `pi.json`, `qm.json`, `cliproxyapi.json`, `registry.json`) in a single request, so listing hundreds of versions takes milliseconds instead of hammering upstream APIs. If the registry is unreachable, OVM falls back to direct upstream calls. Refreshes happen in the background, never on the launch path.
 
 ## Development
 

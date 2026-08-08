@@ -5,10 +5,69 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.3-alpha.12] - 2026-08-08
 
 <!-- The version baseline is managed by the release owner; see RELEASING.md.
      Do not bump versions in feature commits. -->
+
+### Added
+
+- **QM (`@yc-software/qm`) is now a managed product.** `ovm install qm`,
+  `ovm use qm`, and a `~/.ovm/bin/qm` launcher work like any other product.
+  QM is Y Combinator's multiplayer agent harness — a control-plane CLI rather
+  than a coding agent — distributed only on npm and stored as an extracted
+  bundle. Its entrypoint is a Node script, so OVM preflights the interpreter at
+  install and launch and reports the required and found versions rather than
+  failing on an opaque `env: node: not found`.
+- QM defaults to `autoUpdate: notify` and, unlike the other products, does not
+  inherit `autoUpdate.default`. A control-plane tool deploying infrastructure
+  under a version the user never chose is a different risk from a coding agent
+  picking up a patch release; opting in is explicit.
+- The verification gate now refuses to run when the registry directory contains
+  a product file it does not know how to gate. Previously such a file was
+  indexed and deployed to the public API with no verdict of any kind, silently.
+
+### Changed
+
+- Bundle installs validate every required member, not just the entrypoint, so a
+  bundle that unpacks without its manifest is no longer marked complete and then
+  discovered broken at launch. Pi's historical releases (below ~0.80) predate
+  `package.json` in the published bundle and are deliberately exempt — requiring
+  it retroactively would have reclassified already-installed versions as
+  archives.
+- A Pi release's `SHA256SUMS` manifest is now fetched with up to three
+  attempts. It is a sub-kilobyte idempotent request, and a single dropped
+  connection used to cost the whole update: OVM correctly refuses to install a
+  build it cannot verify, so one blip failed the install outright. Only an
+  unreachable host is retried — a 404, a 403, or a damaged manifest is an
+  answer, and is still refused immediately.
+- A manifest fetch that fails because the host could not be reached now says
+  so — "Could not reach github.com to verify Pi 0.84.1 … check your connection
+  and run the command again" — instead of "refusing to install on length
+  checks alone", which read as a problem with the release itself.
+
+### Fixed
+
+- Adopting a bundle product from an npm-global wrapper now prints the package
+  manager cleanup command even when the old shim still wins `PATH`. OVM keeps
+  the original install and tells the user to move OVM first before removing the
+  fallback.
+- Codex and Pi GitHub metadata requests can authenticate with an explicit
+  `OVM_GITHUB_TOKEN`, avoiding the small anonymous per-IP quota on shared
+  networks. Ambient `GITHUB_TOKEN` is ignored, and the credential is sent only
+  to HTTPS `api.github.com`, never to custom metadata endpoints.
+- An exhausted GitHub quota now says so, and names `OVM_GITHUB_TOKEN` as the
+  remedy, on every path that can hit it. Previously a rate-limited metadata
+  lookup was reported as `VersionNotFound` — telling users a release that
+  plainly exists does not — a listing failure gave a bare `HTTP 403`, and
+  release notes came back empty as though the release had none. A genuine 404
+  still reports a missing version and still shows no notes; only quota
+  refusals, which GitHub marks with `x-ratelimit-remaining: 0` or
+  `retry-after`, are reported differently.
+- `ovm update` no longer claims "Nothing else was changed." when one product
+  fails and others succeeded. A partial run now closes with "Everything else
+  was applied as shown above.", so the error stops contradicting the
+  `1 updated, 1 failed` summary printed one line above it.
 
 ## [0.0.3-alpha.11] - 2026-08-06
 

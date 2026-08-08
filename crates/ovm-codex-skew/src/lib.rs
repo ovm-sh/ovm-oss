@@ -44,8 +44,8 @@ pub struct Migration {
 
 // CODEX_STATE_MIGRATIONS_BEGIN
 // Codex `state` migrator — generated from openai/codex codex-rs/state/migrations
-// at rust-v0.146.0 (regenerate with scripts/gen-codex-migration-manifest.py).
-// source commit: e363b08c9175ac1cbe5893615dd2cb9ddf95043b
+// at rust-v0.147.0 (regenerate with scripts/gen-codex-migration-manifest.py).
+// source commit: be6e8eac029b183056b7e4402879f15d2c85f61b
 // Keep in version
 // order; `breaking` flags removals only.
 #[rustfmt::skip]
@@ -94,6 +94,8 @@ const CODEX_STATE_MIGRATIONS: &[Migration] = &[
     Migration { version: 42, description: "drop agent jobs", breaking: true }, // removes agent_job_items, agent_jobs
     Migration { version: 43, description: "threads is pinned", breaking: false },
     Migration { version: 44, description: "external agent config imports provider id", breaking: false },
+    Migration { version: 45, description: "threads section", breaking: false },
+    Migration { version: 46, description: "threads section order", breaking: false },
 ];
 // CODEX_STATE_MIGRATIONS_END
 
@@ -684,26 +686,61 @@ mod tests {
         assert_eq!(a.db_max_applied, guard_max());
     }
 
+    /// Reviewed history stays pinned exactly; the tail past it is open.
+    ///
+    /// Upstream ships new state migrations constantly, and re-pinning the
+    /// full list made every additive release a manual chore. Policy since
+    /// 2026-08-07: NON-BREAKING migrations flow through the sync + publish
+    /// pipeline automatically; only a breaking or unclassifiable migration
+    /// stops the line ([`old_binary_missing_breaking_migration_is_degraded`]
+    /// pins the complete breaking set, and the workflow fails on the
+    /// classifier's BREAKING/INDETERMINATE verdicts). What this test still
+    /// owns: history that was reviewed by a human must never be rewritten,
+    /// and every generated entry — reviewed or not — must be structurally
+    /// sound (contiguous versions, non-empty descriptions).
     #[test]
-    fn recent_migrations_are_backfilled() {
-        let tail = CODEX_STATE_MIGRATIONS
+    fn reviewed_history_is_pinned_and_the_generated_tail_is_sound() {
+        const LAST_REVIEWED: u32 = 46;
+        let reviewed = CODEX_STATE_MIGRATIONS
             .iter()
-            .filter(|migration| migration.version >= 40)
+            .filter(|migration| (40..=LAST_REVIEWED).contains(&migration.version))
             .map(|migration| (migration.version, migration.description, migration.breaking))
             .collect::<Vec<_>>();
 
         assert_eq!(
-            tail,
+            reviewed,
             vec![
                 (40, "threads history mode", false),
                 (41, "threads name", false),
                 (42, "drop agent jobs", true),
                 (43, "threads is pinned", false),
                 (44, "external agent config imports provider id", false),
+                (45, "threads section", false),
+                (46, "threads section order", false),
             ]
         );
+
+        for pair in CODEX_STATE_MIGRATIONS.windows(2) {
+            assert_eq!(
+                pair[1].version,
+                pair[0].version + 1,
+                "migration versions must stay contiguous: {} then {}",
+                pair[0].version,
+                pair[1].version
+            );
+        }
+        for migration in CODEX_STATE_MIGRATIONS {
+            assert!(
+                !migration.description.is_empty(),
+                "migration {} has an empty description",
+                migration.version
+            );
+        }
     }
 
+    /// Also the full-auto tripwire: this pins the COMPLETE breaking set, so
+    /// an auto-synced migration that the classifier marks breaking turns the
+    /// pipeline red for human review even though additive ones flow through.
     #[test]
     fn old_binary_missing_breaking_migration_is_degraded() {
         let applied: Vec<&str> = CODEX_STATE_MIGRATIONS
@@ -756,10 +793,23 @@ mod tests {
         assert!(a.degraded(), "migration 42 drops the agent-job tables");
         assert_eq!(a.binary_max_known, 35);
         assert_eq!(a.db_max_applied, guard_max());
-        assert_eq!(a.additive().count(), 8); // 36–41, 43, 44
+        // Computed from the manifest so auto-synced additive migrations do
+        // not re-pin this test; the breaking SET itself is pinned by
+        // old_binary_missing_breaking_migration_is_degraded.
+        let expected_additive = CODEX_STATE_MIGRATIONS
+            .iter()
+            .filter(|m| m.version > 35 && !m.breaking)
+            .count();
+        assert_eq!(a.additive().count(), expected_additive);
+        let expected_breaking: Vec<u32> = CODEX_STATE_MIGRATIONS
+            .iter()
+            .filter(|m| m.version > 35 && m.breaking)
+            .map(|m| m.version)
+            .collect();
+        assert!(expected_breaking.contains(&42));
         assert_eq!(
             a.breaking().map(|m| m.version).collect::<Vec<_>>(),
-            vec![42]
+            expected_breaking
         );
     }
 

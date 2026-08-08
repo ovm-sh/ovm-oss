@@ -12,6 +12,7 @@ pub fn github_repo(product: Product) -> &'static str {
         Product::Claude => "anthropics/claude-code",
         Product::Codex => "openai/codex",
         Product::Pi => "earendil-works/pi",
+        Product::Qm => "yc-software/qm",
     }
 }
 
@@ -50,9 +51,20 @@ fn get_release_notes_at_base(
     let tag = format_tag(product, version);
     let url = format!("{api_base}/repos/{repo}/releases/tags/{tag}");
 
-    let response = client()?.get(&url).send()?;
+    let client = client()?;
+    let response = super::github_api_get(&client, &url).send()?;
 
     if !response.status().is_success() {
+        // `None` is a claim: this release has no notes. A spent quota does not
+        // support that claim — the notes are unknown, not absent — and both
+        // callers already surface an `Err` from this function, so saying so
+        // costs nothing that silence was buying.
+        if super::is_github_rate_limited(response.status(), response.headers()) {
+            return Err(crate::error::OvmError::DownloadFailed {
+                url,
+                message: super::github_failure_message(response.status(), response.headers()),
+            });
+        }
         return Ok(None);
     }
 
@@ -75,7 +87,8 @@ fn get_recent_releases_at_base(
 ) -> Result<Vec<ReleaseInfo>> {
     let url = format!("{api_base}/repos/{repo}/releases?per_page={limit}");
 
-    let response = client()?.get(&url).send()?;
+    let client = client()?;
+    let response = super::github_api_get(&client, &url).send()?;
 
     if !response.status().is_success() {
         return Err(OvmError::Message(format!(
@@ -103,7 +116,7 @@ fn get_recent_releases_at_base(
 
 fn format_tag(product: Product, version: &str) -> String {
     match product {
-        Product::Claude | Product::Pi => {
+        Product::Claude | Product::Pi | Product::Qm => {
             if version.starts_with('v') {
                 version.to_string()
             } else {
@@ -117,7 +130,9 @@ fn format_tag(product: Product, version: &str) -> String {
 #[cfg(test)]
 fn parse_tag(product: Product, tag: &str) -> String {
     match product {
-        Product::Claude | Product::Pi => tag.strip_prefix('v').unwrap_or(tag).to_string(),
+        Product::Claude | Product::Pi | Product::Qm => {
+            tag.strip_prefix('v').unwrap_or(tag).to_string()
+        }
         Product::Codex => tag.to_string(),
     }
 }
@@ -140,6 +155,7 @@ mod tests {
         assert_eq!(format_tag(Product::Claude, "2.1.91"), "v2.1.91");
         assert_eq!(format_tag(Product::Claude, "v2.1.91"), "v2.1.91");
         assert_eq!(format_tag(Product::Pi, "0.67.6"), "v0.67.6");
+        assert_eq!(format_tag(Product::Qm, "0.1.4"), "v0.1.4");
         assert_eq!(format_tag(Product::Codex, "rust-v0.120.0"), "rust-v0.120.0");
     }
 
@@ -147,6 +163,7 @@ mod tests {
     fn parses_tags_per_product() {
         assert_eq!(parse_tag(Product::Claude, "v2.1.91"), "2.1.91");
         assert_eq!(parse_tag(Product::Pi, "v0.67.6"), "0.67.6");
+        assert_eq!(parse_tag(Product::Qm, "v0.1.4"), "0.1.4");
         assert_eq!(parse_tag(Product::Codex, "rust-v0.120.0"), "rust-v0.120.0");
     }
 
@@ -155,6 +172,51 @@ mod tests {
         assert_eq!(github_repo(Product::Claude), "anthropics/claude-code");
         assert_eq!(github_repo(Product::Codex), "openai/codex");
         assert_eq!(github_repo(Product::Pi), "earendil-works/pi");
+        assert_eq!(github_repo(Product::Qm), "yc-software/qm");
+    }
+
+    /// `None` here renders as "this release has no notes". A spent quota is not
+    /// that — the notes are unknown — so it has to arrive as a failure the
+    /// caller can show, with the remedy attached.
+    #[test]
+    fn rate_limited_notes_are_unknown_rather_than_absent() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "0")
+            .create();
+
+        let error = get_release_notes_at_base(
+            Product::Claude,
+            "anthropics/claude-code",
+            "2.1.91",
+            &server.url(),
+        )
+        .expect_err("a spent quota must not read as an empty changelog");
+
+        assert!(error.to_string().contains("OVM_GITHUB_TOKEN"), "{error}");
+    }
+
+    /// A release that genuinely has no notes still comes back as `None`, so the
+    /// change above did not turn every absence into an error.
+    #[test]
+    fn a_missing_release_still_reports_no_notes() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(404)
+            .create();
+
+        let notes = get_release_notes_at_base(
+            Product::Claude,
+            "anthropics/claude-code",
+            "2.1.91",
+            &server.url(),
+        )
+        .expect("an absent release is an answer, not a failure");
+
+        assert!(notes.is_none());
     }
 
     #[test]

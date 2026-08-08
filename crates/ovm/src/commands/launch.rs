@@ -9,6 +9,9 @@ use std::process::{Command, Stdio};
 
 /// Launch a managed product with the active or overridden version.
 pub fn run(product: Product, args: &[String]) -> Result<()> {
+    if product == Product::Qm {
+        crate::node::require_qm_runtime()?;
+    }
     let vm = VersionManager::new(product)?;
     let (requested_version, product_args) = extract_ovm_version(args)?;
     // A launch-supplied version becomes a filesystem path handed to exec; it
@@ -561,7 +564,7 @@ fn yolo_passthrough_flag(product: Product) -> Option<&'static str> {
     match product {
         Product::Claude => Some("--dangerously-skip-permissions"),
         Product::Codex => Some("--dangerously-bypass-approvals-and-sandbox"),
-        Product::Pi => None,
+        Product::Pi | Product::Qm => None,
     }
 }
 

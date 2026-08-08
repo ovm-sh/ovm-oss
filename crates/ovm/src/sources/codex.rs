@@ -130,15 +130,14 @@ fn list_remote_versions_at(api_url: &str) -> Result<Vec<String>> {
     let mut page = 1_u32;
 
     loop {
-        let response = client
-            .get(api_url)
+        let response = super::github_api_get(&client, api_url)
             .query(&[("per_page", 100_u32), ("page", page)])
             .send()?;
 
         if !response.status().is_success() {
             return Err(OvmError::DownloadFailed {
                 url: api_url.to_string(),
-                message: format!("HTTP {}", response.status()),
+                message: super::github_failure_message(response.status(), response.headers()),
             });
         }
 
@@ -308,9 +307,18 @@ fn fetch_release(version: &str) -> Result<Release> {
         format!("tags/{version}")
     };
     let url = format!("{}/{path}", releases_api_base());
-    let response = release_metadata_client()?.get(&url).send()?;
+    let client = release_metadata_client()?;
+    let response = super::github_api_get(&client, &url).send()?;
 
     if !response.status().is_success() {
+        // A spent quota says nothing about whether this version exists, so it
+        // must not be reported as if it did.
+        if super::is_github_rate_limited(response.status(), response.headers()) {
+            return Err(OvmError::DownloadFailed {
+                url,
+                message: super::github_failure_message(response.status(), response.headers()),
+            });
+        }
         return Err(OvmError::VersionNotFound(version.to_string()));
     }
 
@@ -866,9 +874,9 @@ mod tests {
     use super::{
         codex_npm_platform_version, declared_asset_size, download_and_extract_single_binary,
         download_github_release, download_release, expected_asset_names, extract_npm_archive,
-        extract_release_archive, get_latest_npm_release_version_at, install_github_sidecars,
-        latest_release_version, list_remote_versions_at, release_target_triple,
-        select_release_asset, Release, ReleaseAsset,
+        extract_release_archive, fetch_release, get_latest_npm_release_version_at,
+        install_github_sidecars, latest_release_version, list_remote_versions_at,
+        release_target_triple, select_release_asset, Release, ReleaseAsset,
     };
     use flate2::write::GzEncoder;
     use flate2::Compression;
@@ -939,6 +947,73 @@ mod tests {
             .create();
         let result = list_remote_versions_at(&server.url());
         assert!(result.is_err());
+    }
+
+    /// The listing path burns one request per page, so it reaches the quota
+    /// wall long before anything else does. Whoever hits it has to be told what
+    /// to do about it, or the token support may as well not exist.
+    #[test]
+    fn a_rate_limited_listing_names_the_token_remedy() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "0")
+            .create();
+
+        let error = list_remote_versions_at(&server.url()).expect_err("a spent quota must fail");
+        let message = error.to_string();
+
+        assert!(message.contains("OVM_GITHUB_TOKEN"), "{message}");
+        assert!(message.contains("403"), "{message}");
+    }
+
+    /// The defect this guards: any non-success used to become
+    /// `VersionNotFound`, so a rate-limited user was told a release that
+    /// plainly exists does not. The quota refusal is evidence about the quota,
+    /// never about the version.
+    #[test]
+    fn a_rate_limited_lookup_is_not_reported_as_a_missing_version() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "0")
+            .create();
+
+        std::env::set_var("OVM_CODEX_RELEASES_URL", server.url());
+        let result = fetch_release("rust-v0.130.0");
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+        let error = result.expect_err("a spent quota must fail");
+        let message = error.to_string();
+        assert!(message.contains("OVM_GITHUB_TOKEN"), "{message}");
+        assert!(
+            !message.contains("not found"),
+            "a quota refusal must not be dressed up as a missing version: {message}"
+        );
+    }
+
+    /// The other half of the distinction: a genuine 404 still reports the
+    /// version as missing, so the check above narrowed the message rather than
+    /// replacing one blanket answer with another.
+    #[test]
+    fn a_genuine_404_still_reports_a_missing_version() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(404)
+            .create();
+
+        std::env::set_var("OVM_CODEX_RELEASES_URL", server.url());
+        let result = fetch_release("rust-v9.999.0");
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+        let message = result.expect_err("an absent version must fail").to_string();
+        assert!(message.contains("rust-v9.999.0"), "{message}");
+        assert!(!message.contains("OVM_GITHUB_TOKEN"), "{message}");
     }
 
     #[test]

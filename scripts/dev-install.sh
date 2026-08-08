@@ -113,7 +113,7 @@ INSTALL_DIR_REAL=$(CDPATH='' cd "$INSTALL_DIR" && pwd -P)
 
 # Existing managed launchers may still pin this checkout. Rewire only exact
 # legacy links; preserve regular files and unrelated symlinks.
-for product in claude codex pi; do
+for product in claude codex pi qm; do
     launcher="$INSTALL_DIR/$product"
     if legacy_link_to "$launcher" "$LEGACY_ROOT/target/release/ovm"; then
         switch_link "$launcher" ovm

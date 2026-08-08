@@ -145,7 +145,7 @@ fn an_empty_store_says_so_for_every_product_and_names_the_fix() {
 
     assert!(text.contains("ovm "), "reports its own version: {text}");
     assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
-    for product in ["claude", "codex", "pi"] {
+    for product in ["claude", "codex", "pi", "qm"] {
         assert!(text.contains(product), "lists {product}: {text}");
     }
     assert!(text.contains("not installed"), "{text}");
@@ -197,8 +197,12 @@ fn it_answers_offline_because_it_reads_only_local_state() {
         .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_CODEX_RELEASES_URL", dead)
         .env("OVM_CODEX_NPM_REGISTRY_URL", dead)
-        .env("OVM_CLAUDE_NPM_REGISTRY_URL", dead)
+        .env("OVM_NPM_PACKAGE_URL", dead)
+        .env("OVM_QM_NPM_PACKAGE_URL", dead)
+        .env("OVM_PI_RELEASES_URL", dead)
         .env("OVM_PI_NPM_REGISTRY_URL", dead)
+        .env("OVM_REGISTRY_BASE_URL", dead)
+        .env("OVM_GITHUB_API_URL", dead)
         .env_remove("OVM_VERSION")
         .arg("version")
         .timeout(Duration::from_secs(10))

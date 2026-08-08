@@ -25,9 +25,12 @@ In scope:
 - Credential / token leakage through OVM's storage or logs
 - Path-traversal via crafted version names or archive contents
 - Registry or upstream-API injection attacks
+- Integrity, extraction, storage, or launcher flaws in OVM's handling of the
+  managed QM npm bundle
 
 Out of scope:
-- Vulnerabilities in downloaded Claude Code / Codex / Pi binaries (report those upstream)
+- Vulnerabilities in downloaded Claude Code / Codex / Pi binaries or the QM
+  bundle (report those upstream)
 - Social-engineering against the maintainers
 - Issues in dependencies — please report to the upstream project
 

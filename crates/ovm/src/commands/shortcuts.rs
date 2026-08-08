@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 /// (command name, human description). Each shim execs `ovm <command name>`, so
 /// the subcommand is the name itself and is not repeated here.
+// QM deliberately has no yolo/fast shortcut: it has no permission system for
+// either alias to control.
 const SHORTCUTS: [(&str, &str); 9] = [
     ("ccy", "claude --yolo"),
     ("cxy", "codex --yolo"),

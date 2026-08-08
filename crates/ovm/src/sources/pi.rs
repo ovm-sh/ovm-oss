@@ -13,6 +13,12 @@ const PI_NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@earendil-works/pi
 const RELEASE_METADATA_TIMEOUT_SECS: u64 = 30;
 const RELEASE_ASSET_TIMEOUT_SECS: u64 = 300;
 const NPM_METADATA_TIMEOUT_SECS: u64 = 15;
+/// How many times to ask for the `SHA256SUMS` manifest before giving up on an
+/// unreachable host. Three is enough to ride out a dropped connection or a CDN
+/// blip without keeping someone waiting on a network that is genuinely down.
+const CHECKSUM_FETCH_ATTEMPTS: u32 = 3;
+/// Wait before the second attempt; doubled for each one after it.
+const CHECKSUM_RETRY_DELAY_MS: u64 = 500;
 
 /// Resolve the Pi releases API URL. Tests set `OVM_PI_RELEASES_URL` to a mock server.
 fn releases_api_base() -> String {
@@ -78,15 +84,14 @@ fn list_remote_versions_at(api_url: &str) -> Result<Vec<String>> {
     let mut page = 1_u32;
 
     loop {
-        let response = client
-            .get(api_url)
+        let response = super::github_api_get(&client, api_url)
             .query(&[("per_page", 100_u32), ("page", page)])
             .send()?;
 
         if !response.status().is_success() {
             return Err(OvmError::DownloadFailed {
                 url: api_url.to_string(),
-                message: format!("HTTP {}", response.status()),
+                message: super::github_failure_message(response.status(), response.headers()),
             });
         }
 
@@ -161,6 +166,19 @@ pub fn download_release(version: &str, bundle_dir: &Path) -> Result<ReleaseInsta
                 ),
             })
         }
+        // Same refusal, different sentence. A dropped connection is not a
+        // problem with the release, and wording it like one sends people to
+        // read a changelog when what they need is to run the command again.
+        // `DownloadFailed` is deliberately not used here: its "Failed to
+        // download <url>" prefix would name the tarball, which downloaded fine.
+        PublishedChecksum::Unreachable { host, reason } => {
+            return Err(OvmError::Message(format!(
+                "Could not reach {host} to verify Pi {version} against its published \
+                 {CHECKSUMS_ASSET} ({reason}), after {CHECKSUM_FETCH_ATTEMPTS} attempts. \
+                 OVM will not install a build it could not verify — check your connection \
+                 and run the command again."
+            )))
+        }
     };
 
     std::fs::create_dir_all(bundle_dir)?;
@@ -218,9 +236,18 @@ fn fetch_release(version: &str) -> Result<Release> {
         format!("tags/{version}")
     };
     let url = format!("{}/{path}", releases_api_base());
-    let response = release_metadata_client()?.get(&url).send()?;
+    let client = release_metadata_client()?;
+    let response = super::github_api_get(&client, &url).send()?;
 
     if !response.status().is_success() {
+        // A spent quota says nothing about whether this version exists, so it
+        // must not be reported as if it did.
+        if super::is_github_rate_limited(response.status(), response.headers()) {
+            return Err(OvmError::DownloadFailed {
+                url,
+                message: super::github_failure_message(response.status(), response.headers()),
+            });
+        }
         return Err(OvmError::VersionNotFound(version.to_string()));
     }
 
@@ -305,6 +332,12 @@ enum PublishedChecksum {
     /// could not be fetched, read, or used for this asset. Must fail the
     /// install.
     Unavailable(String),
+    /// The manifest could not be fetched because the host could not be reached
+    /// or would not serve it — a transport error, a 5xx, a rate limit. Fails
+    /// the install exactly like `Unavailable`, but it is the one gap that is
+    /// usually gone a minute later, so it is worth retrying and worth saying in
+    /// words that point at the network rather than at the release.
+    Unreachable { host: String, reason: String },
 }
 
 /// Resolve what `release` publishes as the digest of `asset_name`.
@@ -332,10 +365,76 @@ fn published_checksum(release: Option<&Release>, tag: &str, asset_name: &str) ->
     }
 }
 
+/// The host to name when a fetch fails. Falls back to the whole URL rather than
+/// to a guess: "could not reach github.com" must never be printed about a URL
+/// that did not point there.
+fn manifest_host(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+        .unwrap_or_else(|| url.to_string())
+}
+
+/// Why a request never produced a response, in words rather than in a debug
+/// dump. `reqwest`'s own `Display` restates the full URL — which the message
+/// around this already names, by host — and reads like a stack trace in the
+/// one place someone is trying to work out whether their wifi is down.
+fn transport_reason(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        return "the request timed out".to_string();
+    }
+    if error.is_connect() {
+        return "the connection could not be established".to_string();
+    }
+    error.without_url().to_string()
+}
+
+/// Fetch the manifest, retrying a host that could not be reached.
+///
+/// The refusal this feeds is correct but blunt: a single dropped connection
+/// costs the whole update, and the manifest is a sub-kilobyte idempotent GET —
+/// asking again is far cheaper than making someone re-run the command. Only
+/// `Unreachable` is retried; every other answer is the host saying something
+/// definite, and asking twice will not change it.
+fn fetch_published_checksum(url: &str, asset_name: &str, listed: bool) -> PublishedChecksum {
+    let mut delay = checksum_retry_delay();
+    let mut attempt = 1;
+    loop {
+        let result = fetch_published_checksum_once(url, asset_name, listed);
+        let reason = match &result {
+            PublishedChecksum::Unreachable { reason, .. } => reason.clone(),
+            _ => return result,
+        };
+        if attempt >= CHECKSUM_FETCH_ATTEMPTS {
+            return result;
+        }
+        eprintln!(
+            "  {} Could not fetch the {CHECKSUMS_ASSET} manifest ({reason}); retrying \
+             (attempt {} of {CHECKSUM_FETCH_ATTEMPTS})",
+            style("!").yellow(),
+            attempt + 1
+        );
+        std::thread::sleep(delay);
+        delay = delay.saturating_mul(2);
+        attempt += 1;
+    }
+}
+
+/// The wait before the next manifest attempt. Zero whenever the releases URL is
+/// overridden — the retry path is exercised by several tests against a local
+/// server, and real backoff there buys nothing but a slower suite.
+fn checksum_retry_delay() -> std::time::Duration {
+    if super::test_override_active("OVM_PI_RELEASES_URL") {
+        std::time::Duration::ZERO
+    } else {
+        std::time::Duration::from_millis(CHECKSUM_RETRY_DELAY_MS)
+    }
+}
+
 /// Fetch and parse a `SHA256SUMS` manifest. `listed` says whether the release
 /// metadata asserted that this manifest exists — if it did, a 404 is a
 /// contradiction we must report, not an absence we may assume.
-fn fetch_published_checksum(url: &str, asset_name: &str, listed: bool) -> PublishedChecksum {
+fn fetch_published_checksum_once(url: &str, asset_name: &str, listed: bool) -> PublishedChecksum {
     let allow_loopback = super::test_override_active("OVM_PI_RELEASES_URL");
     if let Err(error) =
         super::validate_download_url(url, super::GITHUB_DOWNLOAD_HOSTS, allow_loopback)
@@ -349,7 +448,10 @@ fn fetch_published_checksum(url: &str, asset_name: &str, listed: bool) -> Publis
     let mut response = match client.get(url).send() {
         Ok(response) => response,
         Err(error) => {
-            return PublishedChecksum::Unavailable(format!("request failed: {error}"));
+            return PublishedChecksum::Unreachable {
+                host: manifest_host(url),
+                reason: transport_reason(error),
+            };
         }
     };
     if let Err(error) = super::validate_download_url(
@@ -365,7 +467,18 @@ fn fetch_published_checksum(url: &str, asset_name: &str, listed: bool) -> Publis
         return PublishedChecksum::NotPublished;
     }
     if !response.status().is_success() {
-        return PublishedChecksum::Unavailable(format!("HTTP {}", response.status()));
+        let status = response.status();
+        // A 5xx or a rate limit is the host having a moment, not an answer
+        // about this release. Anything else (a 403, a 404 the listing promised
+        // would be there) is an answer, and repeating the question is rude and
+        // useless.
+        if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return PublishedChecksum::Unreachable {
+                host: manifest_host(url),
+                reason: format!("HTTP {status}"),
+            };
+        }
+        return PublishedChecksum::Unavailable(format!("HTTP {status}"));
     }
 
     let mut body = String::new();
@@ -588,6 +701,24 @@ mod tests {
     use tempfile::tempdir;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Pi paginates the same way Codex does and shares the same IP quota, so it
+    /// needs the same remedy in the same place.
+    #[test]
+    fn a_rate_limited_listing_names_the_token_remedy() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "0")
+            .create();
+
+        let error = list_remote_versions_at(&server.url()).expect_err("a spent quota must fail");
+        let message = error.to_string();
+
+        assert!(message.contains("OVM_GITHUB_TOKEN"), "{message}");
+        assert!(message.contains("403"), "{message}");
+    }
 
     // ── Security: path traversal protection ──────────────────────────
 
@@ -1163,9 +1294,10 @@ not-a-digest  pi-linux-arm64.tar.gz
             .create();
         // The manifest is published — the release listing says so — but the
         // host cannot serve it right now.
-        let _sums = server
+        let sums = server
             .mock("GET", "/download/v0.83.0/SHA256SUMS")
             .with_status(500)
+            .expect(super::CHECKSUM_FETCH_ATTEMPTS as usize)
             .create();
 
         std::env::set_var("OVM_PI_RELEASES_URL", server.url());
@@ -1175,8 +1307,147 @@ not-a-digest  pi-linux-arm64.tar.gz
 
         let error = result.expect_err("an unverifiable checksum must not install");
         let message = error.to_string();
-        assert!(message.contains("could not be verified"), "{message}");
-        assert!(message.contains("length checks alone"), "{message}");
+        // A host having a moment is worth asking again before failing someone's
+        // update over it.
+        sums.assert();
+        // ...and worth saying in words that point at the network. Reading
+        // "refusing to install on length checks alone" sends people to inspect
+        // a release that is fine.
+        assert!(message.contains("Could not reach"), "{message}");
+        assert!(message.contains("check your connection"), "{message}");
+        assert!(!bundle_dir.join("pi/pi").exists());
+    }
+
+    /// The failure this was reported for: not a 500, but a connection that
+    /// never landed. It must read as a network problem and name the host, not
+    /// accuse the release of publishing something unverifiable.
+    #[test]
+    fn a_connection_that_never_lands_reads_as_a_network_failure() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = tempdir().expect("tempdir");
+        // A port nothing is listening on: bind it to learn a free one, then
+        // drop the listener so the connection is refused rather than hanging.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+
+        std::env::set_var("OVM_PI_RELEASES_URL", format!("http://127.0.0.1:{port}"));
+        let bundle_dir = dir.path().join("bundle");
+        let result = download_release("0.83.0", &bundle_dir);
+        std::env::remove_var("OVM_PI_RELEASES_URL");
+
+        let message = result
+            .expect_err("an unverifiable archive must not install")
+            .to_string();
+        assert!(message.contains("Could not reach 127.0.0.1"), "{message}");
+        assert!(message.contains("check your connection"), "{message}");
+        // The raw transport error restates the URL and reads like a stack
+        // trace; the friendly sentence must not simply wrap it.
+        assert!(!message.contains("error sending request"), "{message}");
+        assert!(!message.contains("length checks alone"), "{message}");
+        assert!(!bundle_dir.join("pi/pi").exists());
+    }
+
+    /// The payoff for retrying: the blip that cost a whole update now costs a
+    /// second. One 500, then the real manifest — the install must complete.
+    #[test]
+    fn a_manifest_that_arrives_on_a_retry_still_installs() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = tempdir().expect("tempdir");
+        let mut server = Server::new();
+        let asset_name = super::expected_asset_name();
+        let body = pi_archive(dir.path());
+        let digest: String = sha2::Sha256::digest(&body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let base = server.url();
+        let release_json = format!(
+            r#"{{"tag_name":"v0.83.0","assets":[
+                {{"name":"{asset_name}","browser_download_url":"{base}/download/v0.83.0/{asset_name}","size":{}}},
+                {{"name":"SHA256SUMS","browser_download_url":"{base}/download/v0.83.0/SHA256SUMS"}}
+            ]}}"#,
+            body.len()
+        );
+        let _api = server
+            .mock("GET", "/tags/v0.83.0")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(release_json)
+            .create();
+        let _asset = server
+            .mock("GET", format!("/download/v0.83.0/{asset_name}").as_str())
+            .with_status(200)
+            .with_body(body)
+            .create();
+        let first = server
+            .mock("GET", "/download/v0.83.0/SHA256SUMS")
+            .with_status(500)
+            .expect(1)
+            .create();
+        let second = server
+            .mock("GET", "/download/v0.83.0/SHA256SUMS")
+            .with_status(200)
+            .with_header("content-type", "text/plain")
+            .with_body(format!("{digest}  {asset_name}\n"))
+            .expect(1)
+            .create();
+
+        std::env::set_var("OVM_PI_RELEASES_URL", server.url());
+        let bundle_dir = dir.path().join("bundle");
+        let metadata = download_release("0.83.0", &bundle_dir);
+        std::env::remove_var("OVM_PI_RELEASES_URL");
+
+        metadata.expect("a manifest served on the second attempt verifies the archive");
+        first.assert();
+        second.assert();
+        assert!(bundle_dir.join("pi/pi").exists());
+    }
+
+    /// Retrying is for a host that could not answer. A 404 on a manifest the
+    /// release listing promised is an answer — asking twice cannot change it,
+    /// and the install must still refuse.
+    #[test]
+    fn a_definitive_manifest_failure_is_not_retried() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = tempdir().expect("tempdir");
+        let mut server = Server::new();
+        let asset_name = super::expected_asset_name();
+        let body = pi_archive(dir.path());
+        let base = server.url();
+        let release_json = format!(
+            r#"{{"tag_name":"v0.83.0","assets":[
+                {{"name":"{asset_name}","browser_download_url":"{base}/download/v0.83.0/{asset_name}","size":{}}},
+                {{"name":"SHA256SUMS","browser_download_url":"{base}/download/v0.83.0/SHA256SUMS"}}
+            ]}}"#,
+            body.len()
+        );
+        let _api = server
+            .mock("GET", "/tags/v0.83.0")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(release_json)
+            .create();
+        let _asset = server
+            .mock("GET", format!("/download/v0.83.0/{asset_name}").as_str())
+            .with_status(200)
+            .with_body(body)
+            .create();
+        let sums = server
+            .mock("GET", "/download/v0.83.0/SHA256SUMS")
+            .with_status(404)
+            .expect(1)
+            .create();
+
+        std::env::set_var("OVM_PI_RELEASES_URL", server.url());
+        let bundle_dir = dir.path().join("bundle");
+        let result = download_release("0.83.0", &bundle_dir);
+        std::env::remove_var("OVM_PI_RELEASES_URL");
+
+        let error = result.expect_err("a promised manifest that 404s must not install");
+        sums.assert();
+        assert!(error.to_string().contains("length checks alone"), "{error}");
         assert!(!bundle_dir.join("pi/pi").exists());
     }
 

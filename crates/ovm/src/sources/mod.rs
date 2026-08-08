@@ -3,6 +3,7 @@ pub mod gcs;
 pub mod github_releases;
 pub mod npm;
 pub mod pi;
+pub mod qm;
 pub mod registry;
 
 pub(crate) fn http_client(timeout_secs: u64) -> crate::error::Result<reqwest::blocking::Client> {
@@ -11,6 +12,88 @@ pub(crate) fn http_client(timeout_secs: u64) -> crate::error::Result<reqwest::bl
         .user_agent("ovm")
         .redirect(https_only_redirect_policy())
         .build()?)
+}
+
+/// Start a GitHub release-metadata request, authenticating only when the caller
+/// explicitly supplied `OVM_GITHUB_TOKEN` and the destination is GitHub's
+/// HTTPS API. Ambient `GITHUB_TOKEN` is intentionally ignored, and product URL
+/// overrides never receive the credential: they are useful for tests and
+/// debugging but are not trusted token destinations.
+pub(crate) fn github_api_get(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> reqwest::blocking::RequestBuilder {
+    let token = std::env::var("OVM_GITHUB_TOKEN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    github_api_get_with_token(client, url, token.as_deref())
+}
+
+fn github_api_get_with_token(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    token: Option<&str>,
+) -> reqwest::blocking::RequestBuilder {
+    let request = client.get(url);
+    let is_github_api = reqwest::Url::parse(url)
+        .ok()
+        .map(|parsed| parsed.scheme() == "https" && parsed.host_str() == Some("api.github.com"))
+        .unwrap_or(false);
+    match (is_github_api, token) {
+        (true, Some(token)) => request.bearer_auth(token),
+        _ => request,
+    }
+}
+
+/// What to tell someone whose GitHub metadata request was refused for quota.
+/// One string, because the remedy is worth nothing if only some of the paths
+/// that hit the limit mention it.
+pub(crate) const GITHUB_RATE_LIMIT_HINT: &str =
+    "GitHub's anonymous API quota for this IP is exhausted — it is shared by \
+     everyone behind the same address, so a busy office or VPN can spend it \
+     without you making a single request. Set OVM_GITHUB_TOKEN to a GitHub \
+     token to get your own quota.";
+
+/// Whether a GitHub API refusal is about quota rather than about the resource.
+///
+/// This distinction is the whole point: a quota refusal carries no information
+/// about whether the version exists, so reporting it as "not found" sends
+/// someone hunting for a release that is sitting right there. GitHub marks the
+/// primary limit with `x-ratelimit-remaining: 0` and secondary limits with
+/// `retry-after`, both on 403 or 429.
+///
+/// Deliberately strict: a 403 with neither header is some *other* refusal
+/// (SSO, blocked UA, a proxy in the way), and labelling that one "rate limit"
+/// would trade a misleading message for a different misleading message.
+pub(crate) fn is_github_rate_limited(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> bool {
+    if status != reqwest::StatusCode::FORBIDDEN && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+    {
+        return false;
+    }
+
+    let quota_spent = headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() == "0");
+
+    quota_spent || headers.contains_key(reqwest::header::RETRY_AFTER)
+}
+
+/// The `message` for a failed GitHub metadata response: the status always, plus
+/// the quota remedy when that is what the status means.
+pub(crate) fn github_failure_message(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> String {
+    if is_github_rate_limited(status, headers) {
+        format!("HTTP {status} — {GITHUB_RATE_LIMIT_HINT}")
+    } else {
+        format!("HTTP {status}")
+    }
 }
 
 pub(crate) fn download_http_client(
@@ -447,9 +530,10 @@ pub(crate) fn validate_tar_entry_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_download_url, validate_downloaded_size, validate_tar_entry_path,
-        GITHUB_DOWNLOAD_HOSTS,
+        github_api_get_with_token, validate_download_url, validate_downloaded_size,
+        validate_tar_entry_path, GITHUB_DOWNLOAD_HOSTS,
     };
+    use reqwest::header::AUTHORIZATION;
     use std::path::Path;
 
     #[cfg(target_os = "macos")]
@@ -476,6 +560,95 @@ mod tests {
             metadata.to_string().contains("the release metadata"),
             "{metadata}"
         );
+    }
+
+    #[test]
+    fn explicit_token_authenticates_only_https_github_api_metadata() {
+        let client = super::http_client(5).expect("client");
+        let github = github_api_get_with_token(
+            &client,
+            "https://api.github.com/repos/openai/codex/releases/latest",
+            Some("explicit-token"),
+        )
+        .build()
+        .expect("GitHub request");
+        assert_eq!(
+            github
+                .headers()
+                .get(AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer explicit-token")
+        );
+
+        for url in [
+            "http://api.github.com/repos/openai/codex/releases/latest",
+            "https://api.github.com.evil.test/repos/openai/codex/releases/latest",
+            "https://github.example.test/repos/openai/codex/releases/latest",
+            "http://127.0.0.1:1234/releases/latest",
+        ] {
+            let request = github_api_get_with_token(&client, url, Some("must-not-leak"))
+                .build()
+                .expect("override request");
+            assert!(
+                request.headers().get(AUTHORIZATION).is_none(),
+                "credential leaked to {url}"
+            );
+        }
+    }
+
+    /// The predicate has to separate the two refusals that arrive as the same
+    /// status: a spent quota, and a 403 that means something else entirely.
+    /// Calling the second one a rate limit would swap one misleading message
+    /// for another, so the headers — not the status — decide.
+    #[test]
+    fn only_header_marked_refusals_count_as_rate_limits() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+        use reqwest::StatusCode;
+
+        let mut spent = HeaderMap::new();
+        spent.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        assert!(super::is_github_rate_limited(StatusCode::FORBIDDEN, &spent));
+
+        let mut secondary = HeaderMap::new();
+        secondary.insert(RETRY_AFTER, HeaderValue::from_static("60"));
+        assert!(super::is_github_rate_limited(
+            StatusCode::TOO_MANY_REQUESTS,
+            &secondary
+        ));
+
+        let mut remaining = HeaderMap::new();
+        remaining.insert("x-ratelimit-remaining", HeaderValue::from_static("57"));
+        assert!(!super::is_github_rate_limited(
+            StatusCode::FORBIDDEN,
+            &remaining
+        ));
+
+        assert!(
+            !super::is_github_rate_limited(StatusCode::FORBIDDEN, &HeaderMap::new()),
+            "a bare 403 is some other refusal — SSO, a blocked agent, a proxy"
+        );
+        assert!(!super::is_github_rate_limited(
+            StatusCode::NOT_FOUND,
+            &spent
+        ));
+    }
+
+    /// Only the quota case earns the remedy; every other failure still reports
+    /// its status and nothing more.
+    #[test]
+    fn the_token_remedy_rides_only_on_quota_failures() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+        use reqwest::StatusCode;
+
+        let mut spent = HeaderMap::new();
+        spent.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+
+        let limited = super::github_failure_message(StatusCode::FORBIDDEN, &spent);
+        assert!(limited.contains("OVM_GITHUB_TOKEN"), "{limited}");
+
+        let other = super::github_failure_message(StatusCode::BAD_GATEWAY, &HeaderMap::new());
+        assert!(other.contains("502"), "{other}");
+        assert!(!other.contains("OVM_GITHUB_TOKEN"), "{other}");
     }
 
     #[test]

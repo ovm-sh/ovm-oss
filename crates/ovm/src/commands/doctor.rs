@@ -26,6 +26,11 @@ pub fn run(vm: &VersionManager, version: Option<&str>, fix: bool) -> Result<()> 
         );
     }
 
+    if product == Product::Qm {
+        println!("Doctor checks are not implemented for QM.");
+        return Ok(());
+    }
+
     if product.companions().is_empty() {
         println!(
             "{} has no shared schema store that ovm tracks — nothing to check.",

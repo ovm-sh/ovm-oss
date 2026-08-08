@@ -757,7 +757,7 @@ EOF
         printf '%s\n' "$key" >> "$STATE_BACKUP/launcher-keys"
         snapshot_index=$((snapshot_index + 1))
     done < "$STATE_BACKUP/side-names"
-    for product in claude codex pi; do
+    for product in claude codex pi qm; do
         path="$HOME/.ovm/bin/$product"
         if [ -L "$path" ] && managed_side_link "$path"; then
             key="product-$product"
@@ -848,7 +848,7 @@ EOF
 
     # Historical OVM versions may have pinned product launchers directly to one
     # immutable version. Repoint only recognized managed symlinks to the control.
-    for product in claude codex pi; do
+    for product in claude codex pi qm; do
         launcher="$HOME/.ovm/bin/$product"
         if [ -L "$launcher" ] && managed_side_link "$launcher"; then
             switch_link "$launcher" "$control"

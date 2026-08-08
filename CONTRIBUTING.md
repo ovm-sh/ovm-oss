@@ -84,7 +84,7 @@ tests/          Compatibility data (known-features.json)
 
 - Bug fixes with test coverage
 - Performance improvements
-- New product support (beyond Claude Code, Codex, and Pi)
+- New product support (beyond Claude Code, Codex, Pi, and QM)
 - Plugin examples (any `ovm-*` binary on PATH becomes a plugin — see `docs/architecture.md`)
 - Platform support (Linux improvements, Windows exploration)
 - Documentation improvements

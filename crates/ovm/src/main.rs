@@ -95,6 +95,7 @@ fn run() -> Result<()> {
             Product::Pi => commands::pi::run(&args[1..])?,
             Product::Codex => commands::codex::run(&args[1..])?,
             Product::Claude => commands::claude::run(&args[1..])?,
+            Product::Qm => commands::qm::run(&args[1..])?,
         }
         return Ok(());
     }
@@ -168,6 +169,10 @@ fn run() -> Result<()> {
             }
             "pi" => {
                 commands::pi::run(&args[2..])?;
+                return Ok(());
+            }
+            "qm" => {
+                commands::qm::run(&args[2..])?;
                 return Ok(());
             }
             _ => {
@@ -372,7 +377,7 @@ fn invoked_as_product_launcher(argv0: Option<&String>) -> Option<Product> {
     let name = argv0
         .and_then(|value| Path::new(value).file_name())
         .and_then(|value| value.to_str())?;
-    [Product::Claude, Product::Codex, Product::Pi]
+    Product::ALL
         .into_iter()
         .find(|product| product.binary_name() == name)
 }
@@ -529,7 +534,8 @@ fn utf8_args() -> Result<Vec<String>> {
 fn required_product(value: &str) -> Result<Product> {
     Product::parse(value).ok_or_else(|| {
         OvmError::Message(format!(
-            "Unknown product {value}. Use one of: claude, cc, codex, cx, pi."
+            "Unknown product {value}. Use one of: {}.",
+            Product::accepted_names()
         ))
     })
 }
@@ -568,7 +574,7 @@ fn format_clap_error(err: clap::Error) -> OvmError {
 
     let hint = match err.kind() {
         ErrorKind::MissingRequiredArgument if context.contains("PRODUCT") => {
-            "Tip: pass a product name (claude, codex, pi) or its alias (cc, cx). Some commands accept no product to show all — try `ovm current` or `ovm which`."
+            "Tip: pass a product name (claude, codex, pi, qm) or its alias (cc, cx). Some commands accept no product to show all — try `ovm current` or `ovm which`."
         }
         ErrorKind::MissingRequiredArgument if context.contains("VERSION") => {
             "Tip: pass a version, or `latest` to install the newest upstream release. List options with `ovm ls <product> --remote`."
@@ -743,6 +749,7 @@ mod tests {
     fn requires_explicit_known_product() {
         assert_eq!(required_product("claude").expect("claude"), Product::Claude);
         assert_eq!(required_product("cx").expect("codex alias"), Product::Codex);
+        assert_eq!(required_product("qm").expect("qm"), Product::Qm);
         assert!(required_product("latest").is_err());
     }
 
@@ -783,18 +790,18 @@ mod tests {
         // bin/<product> is a symlink to the ovm binary, so launching it routes
         // through ovm's dispatch (and runs maybe_auto_update). Matched by the
         // launcher's file name, so a full path resolves the same.
-        assert_eq!(
-            invoked_as_product_launcher(arg("/home/u/.ovm/bin/codex").as_ref()),
-            Some(Product::Codex)
-        );
-        assert_eq!(
-            invoked_as_product_launcher(arg("pi").as_ref()),
-            Some(Product::Pi)
-        );
-        assert_eq!(
-            invoked_as_product_launcher(arg("claude").as_ref()),
-            Some(Product::Claude)
-        );
+        for product in Product::ALL {
+            assert_eq!(
+                invoked_as_product_launcher(
+                    arg(&format!("test-home/.ovm/bin/{}", product.binary_name())).as_ref()
+                ),
+                Some(product)
+            );
+            assert_eq!(
+                invoked_as_product_launcher(arg(product.binary_name()).as_ref()),
+                Some(product)
+            );
+        }
         // The ovm binary invoked as itself is not a product launcher.
         assert_eq!(invoked_as_product_launcher(arg("ovm").as_ref()), None);
         assert_eq!(invoked_as_product_launcher(None), None);

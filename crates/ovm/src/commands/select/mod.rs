@@ -187,7 +187,8 @@ pub fn run_top(product: Option<&str>, direct_version: Option<&str>) -> Result<()
 fn parse_product(value: &str) -> Result<Product> {
     Product::parse(value).ok_or_else(|| {
         OvmError::Message(format!(
-            "Unknown product {value}. Use one of: claude, cc, codex, cx, pi."
+            "Unknown product {value}. Use one of: {}.",
+            Product::accepted_names()
         ))
     })
 }
@@ -587,7 +588,7 @@ fn parse_launch_reply(product: Product, reply: &str) -> LaunchChoice {
     let yolo_keyword = match product {
         Product::Claude => "ccy",
         Product::Codex => "cxy",
-        Product::Pi => return LaunchChoice::No,
+        Product::Pi | Product::Qm => return LaunchChoice::No,
     };
     if trimmed == yolo_keyword {
         LaunchChoice::Yolo
@@ -606,7 +607,7 @@ fn prompt_launch(product: Product) -> Result<LaunchChoice> {
     let options = match product {
         Product::Claude => "[y/n/ccy]",
         Product::Codex => "[y/n/cxy]",
-        Product::Pi => "[y/n]",
+        Product::Pi | Product::Qm => "[y/n]",
     };
     eprintln!();
     eprint!(
@@ -653,7 +654,7 @@ fn check_companion_support(product: Product, version: &str) -> Option<bool> {
                 .expect("hard-coded Codex pet version should parse");
             Some(parsed >= first_pet)
         }
-        Product::Pi => None,
+        Product::Pi | Product::Qm => None,
     }
 }
 

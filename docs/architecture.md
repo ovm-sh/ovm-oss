@@ -23,8 +23,9 @@ OVM manages multiple products, each with its own download source and storage lay
 | Claude Code | `claude`, `cc` | GCS CDN (native) + npm registry | `claude` |
 | Codex | `codex`, `cx` | npm registry + GitHub Releases (`openai/codex`) | `codex` |
 | Pi | `pi` | GitHub Releases (`earendil-works/pi`) | `pi` |
+| QM | `qm` | npm registry (`@yc-software/qm`) | `qm` |
 
-Products are defined in the `Product` enum (`crates/ovm/src/product.rs`). Adding a new product means adding a variant, a source module in `sources/`, and updating `version_manager::install_*`.
+Products are defined in the `Product` enum (`crates/ovm/src/product.rs`). Adding a new product is considerably more than that — the full path, including the parts the compiler does not check, is `docs/internal/adding-a-product.md`.
 
 A declarative plugin system for custom products (`~/.ovm/products.d/*.toml`) is planned for v0.2 — see `docs/features/backlog.md`.
 
@@ -42,13 +43,17 @@ A declarative plugin system for custom products (`~/.ovm/products.d/*.toml`) is 
 │   │   └── versions/
 │   │       ├── rust-v0.120.0/release/bin/codex
 │   │       └── dev:my-fix/dev/bin/codex
-│   └── pi/
+│   ├── pi/
+│   │   └── versions/
+│   │       └── 0.67.6/release/bundle/pi/pi   # Pi ships as a bundle
+│   └── qm/
 │       └── versions/
-│           └── 0.67.6/release/bundle/pi/pi   # Pi ships as a bundle
+│           └── 0.1.4/release/bundle/package/dist/bin/qm.js
 ├── bin/
 │   ├── claude -> ...             # Active Claude binary
 │   ├── codex  -> ...             # Active Codex binary
-│   └── pi     -> ...             # Active Pi binary
+│   ├── pi     -> ...             # Active Pi binary
+│   └── qm     -> ...             # Active QM bundle entrypoint
 ├── hooks/                        # Lifecycle hook scripts
 └── config.json
 ```
@@ -58,7 +63,7 @@ All managed products use namespaced directories under `~/.ovm/products/<name>/`.
 ### Version Sources
 
 - **Native** — pre-built platform binary (Claude via GCS)
-- **npm** — Node.js package from npm registry (Claude)
+- **npm** — Node.js package from npm registry (Claude; QM, extracted as a bundle)
 - **Release** — GitHub Release archive (Codex, Pi), with npm platform tarball fallback for Codex
 - **Dev** — local binary or symlink for development builds (Codex)
 
@@ -78,6 +83,7 @@ To avoid slow paginated GitHub API calls, version lists are served from a static
 https://ovm.sh/api/claude.json
 https://ovm.sh/api/codex.json
 https://ovm.sh/api/pi.json
+https://ovm.sh/api/qm.json
 https://ovm.sh/api/registry.json     # product index
 ```
 
@@ -115,6 +121,7 @@ crates/ovm/src/
     ├── npm.rs              # npm registry (Claude packages)
     ├── codex.rs            # GitHub Releases + npm fallback (Codex)
     ├── pi.rs               # GitHub Releases (Pi)
+    ├── qm.rs               # npm registry, bundle layout (QM)
     ├── github_releases.rs  # Release-notes fetcher
     └── registry.rs         # ovm.sh/api/ fetcher
 ```

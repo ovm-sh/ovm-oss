@@ -34,6 +34,7 @@ pub fn run(vm: &VersionManager, version: Option<&str>, below: Option<&str>) -> R
                 crate::product::Product::Claude => "2.0.24",
                 crate::product::Product::Codex => "rust-v0.118.0",
                 crate::product::Product::Pi => "0.60.0",
+                crate::product::Product::Qm => "0.1.0",
             }
         );
     }

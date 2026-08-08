@@ -97,9 +97,9 @@ pub fn run(vm: &VersionManager, path: Option<PathBuf>) -> Result<()> {
         style("·").dim(),
         style(binary.display()).dim()
     );
-    if report_path_takeover(vm) {
-        report_cleanup_hint(product, &binary);
-    } else {
+    let path_taken_over = report_path_takeover(vm);
+    report_cleanup_hint(product, &binary, path_taken_over);
+    if !path_taken_over {
         eprintln!(
             "    Keep the original install until `{}` resolves to OVM.",
             product.binary_name()
@@ -177,7 +177,7 @@ fn import_rejection(vm: &VersionManager, source: &Path, version: &str) -> Option
         return Some("a wrapper script, not a self-contained binary");
     }
     // Pi ships as a bundle; one copied file would be a broken install.
-    if product == Product::Pi {
+    if product.is_bundle() {
         return Some("part of a bundle OVM cannot copy as one file");
     }
 
@@ -315,11 +315,16 @@ struct CleanupHint {
     command: String,
 }
 
-fn report_cleanup_hint(product: Product, binary: &Path) {
+fn report_cleanup_hint(product: Product, binary: &Path, path_taken_over: bool) {
+    let timing = if path_taken_over {
+        "You can now"
+    } else {
+        "After PATH resolves to OVM, you can"
+    };
     match cleanup_hint_for(product, binary) {
         Some(hint) => {
             println!(
-                "  {} You can now remove the old {} install if you no longer want a fallback:",
+                "  {} {timing} remove the old {} install if you no longer want a fallback:",
                 style("·").dim(),
                 hint.manager
             );
@@ -327,7 +332,7 @@ fn report_cleanup_hint(product: Product, binary: &Path) {
         }
         None => {
             println!(
-                "  {} You can now remove the old install manually if you no longer want a fallback.",
+                "  {} {timing} remove the old install manually if you no longer want a fallback.",
                 style("·").dim()
             );
         }
@@ -530,9 +535,13 @@ fn consume_digits(bytes: &[u8], start: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cleanup_hint_for, extract_semver, find_foreign_binary_in_paths, CleanupHint};
-    use crate::config::OvmDirs;
+    use super::{
+        cleanup_hint_for, extract_semver, find_foreign_binary_in_paths, import_rejection,
+        CleanupHint,
+    };
+    use crate::config::{OvmConfig, OvmDirs};
     use crate::product::Product;
+    use crate::version_manager::VersionManager;
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
@@ -567,6 +576,20 @@ mod tests {
                 .expect("found foreign binary");
 
         assert_eq!(found, foreign_bin.join("codex"));
+    }
+
+    #[test]
+    fn qm_adoption_rejects_a_single_file_bundle_import() {
+        let root = tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(root.path().join(".ovm"));
+        let vm = VersionManager::with(dirs, OvmConfig::default(), Product::Qm);
+        let binary = root.path().join("foreign-qm");
+        fs::write(&binary, b"not-a-wrapper").expect("write foreign binary");
+
+        assert_eq!(
+            import_rejection(&vm, &binary, "0.1.4"),
+            Some("part of a bundle OVM cannot copy as one file")
+        );
     }
 
     #[test]

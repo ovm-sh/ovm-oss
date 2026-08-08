@@ -127,6 +127,7 @@ impl OvmConfig {
             Product::Claude => "autoUpdate.claude",
             Product::Codex => "autoUpdate.codex",
             Product::Pi => "autoUpdate.pi",
+            Product::Qm => "autoUpdate.qm",
         });
     }
 
@@ -261,6 +262,9 @@ pub struct AutoUpdateConfig {
     #[serde(default)]
     pub pi: Option<AutoUpdatePolicy>,
 
+    #[serde(default)]
+    pub qm: Option<AutoUpdatePolicy>,
+
     #[serde(default, flatten)]
     pub(crate) extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -316,11 +320,11 @@ impl CleanupRetention {
 impl AutoUpdateConfig {
     pub fn policy_for(&self, product: Product) -> AutoUpdatePolicy {
         match product {
-            Product::Claude => self.claude,
-            Product::Codex => self.codex,
-            Product::Pi => self.pi,
+            Product::Claude => self.claude.unwrap_or(self.default),
+            Product::Codex => self.codex.unwrap_or(self.default),
+            Product::Pi => self.pi.unwrap_or(self.default),
+            Product::Qm => self.qm.unwrap_or(AutoUpdatePolicy::Notify),
         }
-        .unwrap_or(self.default)
     }
 
     pub fn set_default(&mut self, policy: AutoUpdatePolicy) {
@@ -332,6 +336,7 @@ impl AutoUpdateConfig {
             Product::Claude => self.claude = Some(policy),
             Product::Codex => self.codex = Some(policy),
             Product::Pi => self.pi = Some(policy),
+            Product::Qm => self.qm = Some(policy),
         }
     }
 }
@@ -343,7 +348,7 @@ impl YoloConfig {
         match product {
             Product::Claude => self.claude,
             Product::Codex => self.codex,
-            Product::Pi => false,
+            Product::Pi | Product::Qm => false,
         }
     }
 }
@@ -401,6 +406,11 @@ pub struct ProductDirs {
     /// release. Follow-latest actions (`ovm <product> latest`, auto-update)
     /// remove it; absence means "track latest".
     pub pin: PathBuf,
+}
+
+enum RequiredBundleMember {
+    File(PathBuf),
+    Directory(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -539,10 +549,7 @@ impl ProductDirs {
 
                 release
             }
-            Product::Pi => {
-                // Pi extracts to release/bundle/pi/pi (full bundle with package.json, etc.)
-                self.pi_bundle_bin(version)
-            }
+            Product::Pi | Product::Qm => self.bundle_bin(version),
         }
     }
 
@@ -570,15 +577,66 @@ impl ProductDirs {
             .join(self.product.binary_name())
     }
 
-    /// Pi ships as a full bundle (binary + package.json + assets).
-    /// This is the directory where the tarball is extracted.
+    /// Bundle products ship an entrypoint plus runtime-required files/assets.
+    /// This is the directory where their tarball is extracted.
     pub fn release_bundle_dir(&self, version: &str) -> PathBuf {
         self.version_dir(version).join("release").join("bundle")
     }
 
-    /// Path to the pi binary inside the extracted bundle.
-    pub fn pi_bundle_bin(&self, version: &str) -> PathBuf {
-        self.release_bundle_dir(version).join("pi").join("pi")
+    pub fn bundle_bin(&self, version: &str) -> PathBuf {
+        let relative = match self.product {
+            Product::Pi => Some(Path::new("pi/pi")),
+            Product::Qm => Some(Path::new(crate::sources::qm::ENTRYPOINT_PATH)),
+            Product::Claude | Product::Codex => None,
+        }
+        .expect("bundle_bin called for a non-bundle product");
+        self.release_bundle_dir(version).join(relative)
+    }
+
+    fn required_bundle_members(&self, version: &str) -> Vec<RequiredBundleMember> {
+        let bundle = self.release_bundle_dir(version);
+        match self.product {
+            // Historical Pi releases (including 0.45.x) predate package.json
+            // in the published bundle. Retrofitting that member here would
+            // silently reclassify already-installed releases as archives.
+            Product::Pi => Vec::new(),
+            Product::Qm => crate::sources::qm::REQUIRED_FILE_PATHS
+                .iter()
+                .map(|path| RequiredBundleMember::File(bundle.join(path)))
+                .chain(
+                    crate::sources::qm::REQUIRED_DIR_PATHS
+                        .iter()
+                        .map(|path| RequiredBundleMember::Directory(bundle.join(path))),
+                )
+                .collect(),
+            Product::Claude | Product::Codex => Vec::new(),
+        }
+    }
+
+    pub(crate) fn validate_required_bundle_members(&self, version: &str) -> Result<()> {
+        for member in self.required_bundle_members(version) {
+            let (present, kind, path) = match member {
+                RequiredBundleMember::File(path) => (path.is_file(), "file", path),
+                RequiredBundleMember::Directory(path) => (path.is_dir(), "directory", path),
+            };
+            if !present {
+                return Err(OvmError::ExtractionFailed(format!(
+                    "{} bundle is missing required {kind} {}",
+                    self.product.display_name(),
+                    path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn bundle_install_is_complete(&self, version: &str) -> bool {
+        let release_root = self.version_dir(version).join("release");
+        install_source_is_complete(
+            &release_root,
+            &self.bundle_bin(version),
+            Some(&release_root.join("meta.json")),
+        ) && self.validate_required_bundle_members(version).is_ok()
     }
 
     pub fn dev_bin(&self, version: &str) -> PathBuf {
@@ -603,7 +661,7 @@ impl ProductDirs {
         let roots: &[&str] = match self.product {
             Product::Claude => &["native", "npm"],
             Product::Codex => &["release", "dev"],
-            Product::Pi => &["release"],
+            Product::Pi | Product::Qm => &["release"],
         };
         roots
             .iter()
@@ -648,13 +706,8 @@ impl ProductDirs {
                     sources.push(VersionSource::Dev);
                 }
             }
-            Product::Pi => {
-                let release_root = version_dir.join("release");
-                if install_source_is_complete(
-                    &release_root,
-                    &self.pi_bundle_bin(version),
-                    Some(&release_root.join("meta.json")),
-                ) {
+            Product::Pi | Product::Qm => {
+                if self.bundle_install_is_complete(version) {
                     sources.push(VersionSource::Release);
                 }
             }
@@ -1181,6 +1234,42 @@ mod tests {
     }
 
     #[test]
+    fn qm_notify_default_cannot_be_reenabled_by_global_on() {
+        let mut config = OvmConfig::default();
+        config.auto_update.set_default(AutoUpdatePolicy::On);
+        assert_eq!(
+            config.auto_update.policy_for(Product::Qm),
+            AutoUpdatePolicy::Notify
+        );
+
+        config
+            .auto_update
+            .set_product(Product::Qm, AutoUpdatePolicy::On);
+        assert_eq!(
+            config.auto_update.policy_for(Product::Qm),
+            AutoUpdatePolicy::On
+        );
+    }
+
+    #[test]
+    fn qm_auto_update_policy_round_trips_with_exact_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("config.json");
+        let mut config = OvmConfig::default();
+        config.set_auto_update_product(Product::Qm, AutoUpdatePolicy::Off);
+        config.save(&path).expect("save");
+
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+        assert_eq!(document["autoUpdate"]["qm"], "off");
+        let reloaded = OvmConfig::load(&path).expect("load");
+        assert_eq!(
+            reloaded.auto_update.policy_for(Product::Qm),
+            AutoUpdatePolicy::Off
+        );
+    }
+
+    #[test]
     fn cleanup_retention_parser_accepts_supported_values() {
         assert_eq!(
             CleanupRetention::parse("30"),
@@ -1237,6 +1326,118 @@ mod tests {
         assert_eq!(
             product_dirs.version_sources("dev:test"),
             vec![VersionSource::Dev]
+        );
+    }
+
+    #[test]
+    fn qm_bundle_paths_and_every_required_member_define_completeness() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(dir.path().join(".ovm"));
+        let product_dirs = dirs.product_dirs(Product::Qm);
+        let version = "0.1.4";
+        let release = product_dirs.version_dir(version).join("release");
+        let entrypoint = release.join("bundle/package/dist/bin/qm.js");
+        let package_json = release.join("bundle/package/package.json");
+        let dist = release.join("bundle/package/dist");
+
+        let seed = || {
+            std::fs::create_dir_all(entrypoint.parent().expect("entrypoint parent"))
+                .expect("create bundle");
+            std::fs::write(&entrypoint, "#!/usr/bin/env node\n").expect("entrypoint");
+            std::fs::write(&package_json, "{}").expect("package json");
+            std::fs::write(release.join("meta.json"), "{}").expect("metadata");
+            std::fs::write(release.join(".complete"), "").expect("complete");
+        };
+
+        seed();
+        assert_eq!(product_dirs.bundle_bin(version), entrypoint);
+        assert_eq!(product_dirs.resolved_binary(version), entrypoint);
+        assert_eq!(
+            product_dirs.version_sources(version),
+            vec![VersionSource::Release]
+        );
+
+        std::fs::remove_file(&entrypoint).expect("remove entrypoint");
+        assert!(!product_dirs
+            .version_sources(version)
+            .contains(&VersionSource::Release));
+        seed();
+        std::fs::remove_file(&package_json).expect("remove package json");
+        assert!(!product_dirs
+            .version_sources(version)
+            .contains(&VersionSource::Release));
+        seed();
+        std::fs::remove_dir_all(&dist).expect("remove dist");
+        assert!(!product_dirs
+            .version_sources(version)
+            .contains(&VersionSource::Release));
+    }
+
+    #[test]
+    fn qm_does_not_inherit_the_global_auto_update_default() {
+        // QM deploys infrastructure, so a plain launch must never move its
+        // active version. Every other product falls back to `default`; QM falls
+        // back to Notify, which means turning the global default on cannot
+        // silently re-enable QM updates. Without this the mechanism looks the
+        // same as the others at a glance and a refactor would quietly undo it.
+        let mut config = crate::config::AutoUpdateConfig {
+            default: AutoUpdatePolicy::On,
+            ..Default::default()
+        };
+        assert_eq!(config.policy_for(Product::Claude), AutoUpdatePolicy::On);
+        assert_eq!(config.policy_for(Product::Codex), AutoUpdatePolicy::On);
+        assert_eq!(config.policy_for(Product::Pi), AutoUpdatePolicy::On);
+        assert_eq!(
+            config.policy_for(Product::Qm),
+            AutoUpdatePolicy::Notify,
+            "a global default of `on` must not enable silent QM updates"
+        );
+
+        // Explicitly opting in still works — this is a default, not a ban.
+        config.set_product(Product::Qm, AutoUpdatePolicy::On);
+        assert_eq!(config.policy_for(Product::Qm), AutoUpdatePolicy::On);
+    }
+
+    #[test]
+    fn legacy_pi_bundle_without_package_json_is_still_complete() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(dir.path().join(".ovm"));
+        let product_dirs = dirs.product_dirs(Product::Pi);
+        let version = "0.45.3";
+        let release = product_dirs.version_dir(version).join("release");
+        let binary = release.join("bundle/pi/pi");
+
+        // Real Pi 0.45.x bundles have the entrypoint but no pi/package.json.
+        std::fs::create_dir_all(binary.parent().expect("binary parent")).expect("bundle");
+        std::fs::write(&binary, "legacy pi binary").expect("binary");
+        std::fs::write(release.join("meta.json"), "{}").expect("metadata");
+        std::fs::write(release.join(".complete"), "").expect("complete marker");
+
+        assert!(product_dirs.bundle_install_is_complete(version));
+        assert_eq!(
+            product_dirs.version_sources(version),
+            vec![VersionSource::Release]
+        );
+    }
+
+    #[test]
+    fn qm_bundle_without_package_json_is_incomplete_and_archived() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(dir.path().join(".ovm"));
+        let product_dirs = dirs.product_dirs(Product::Qm);
+        let version = "0.1.4";
+        let release = product_dirs.version_dir(version).join("release");
+        let entrypoint = release.join("bundle/package/dist/bin/qm.js");
+
+        std::fs::create_dir_all(entrypoint.parent().expect("entrypoint parent")).expect("bundle");
+        std::fs::write(&entrypoint, "#!/usr/bin/env node\n").expect("entrypoint");
+        std::fs::write(release.join("meta.json"), "{}").expect("metadata");
+        std::fs::write(release.join(".complete"), "").expect("complete marker");
+
+        assert!(!product_dirs.bundle_install_is_complete(version));
+        assert_eq!(
+            product_dirs.version_sources(version),
+            vec![VersionSource::Archived]
         );
     }
 }
