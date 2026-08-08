@@ -666,8 +666,16 @@ jobs:
     #
     # This must live on THIS workflow, not the private one: this is the pipeline
     # that publishes what users install.
+    #
+    # Gated on make_latest because the assertion is "the public installer lands
+    # THIS version", and the installer follows releases/latest. A finalize that
+    # deliberately leaves Latest unchanged (every prerelease) makes that claim
+    # unsatisfiable by design; running the job anyway produced a red run for
+    # every healthy alpha and trained operators to ignore the one check that
+    # matters most on a stable release. When Latest moves, the check is real
+    # and blocking.
     needs: [metadata, finalize]
-    if: needs.metadata.outputs.stage == 'finalize'
+    if: needs.metadata.outputs.stage == 'finalize' && needs.metadata.outputs.make_latest == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

@@ -5,6 +5,30 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3-alpha.14] - 2026-08-09
+
+### Changed
+
+- **Release qualification moved from a nightly schedule to the release cut.**
+  The scheduled nightly lane is retired; release-profile tests, the e2e
+  command matrix against the release binary, and the live macOS
+  signing-identity check now run in the Release workflow's test job on every
+  tag. The alpha train cuts releases at least as often as the nightly ran,
+  so the proof now happens exactly when an artifact users get is produced.
+- **`verify-public-install` now runs only where its claim is satisfiable.**
+  The public post-finalize check is gated on the Latest actually moving;
+  the private tag-push copy, which could never pass before promotion and
+  produced a red run for every healthy prerelease, is removed.
+
+### Fixed
+
+- The QM removal in alpha.13 missed every hand-written prose surface; two
+  independent release reviews caught them. ovm.sh's six pages, SECURITY.md's
+  in-scope list, CONTRIBUTING.md, and the benchmark feed's product allowlist
+  no longer reference QM, and stale release-process docs (a data-loss
+  "blocker" already fixed in code, a contradictory crates.io decision, an
+  outdated go-live baseline) are corrected.
+
 ## [0.0.3-alpha.13] - 2026-08-09
 
 ### Removed

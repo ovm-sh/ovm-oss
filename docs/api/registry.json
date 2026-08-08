@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-08T13:32:56Z",
+  "updated_at": "2026-08-08T15:40:39Z",
   "base_url": "https://ovm.sh/api",
   "products": [
     {
@@ -10,16 +10,16 @@
       "latest": "2.1.226",
       "version_count": 477,
       "retired_count": 0,
-      "updated_at": "2026-08-08T13:32:56Z"
+      "updated_at": "2026-08-08T15:40:39Z"
     },
     {
       "product": "cliproxyapi",
       "display_name": "CLIProxyAPI",
       "source": "github:router-for-me/CLIProxyAPI",
       "latest": "7.2.123",
-      "version_count": 558,
+      "version_count": 544,
       "retired_count": 1,
-      "updated_at": "2026-08-08T13:32:56Z"
+      "updated_at": "2026-08-08T15:40:39Z"
     },
     {
       "product": "codex",
@@ -28,7 +28,7 @@
       "latest": "rust-v0.146.0",
       "version_count": 866,
       "retired_count": 0,
-      "updated_at": "2026-08-08T13:32:56Z"
+      "updated_at": "2026-08-08T15:40:39Z"
     },
     {
       "product": "pi",
@@ -37,7 +37,7 @@
       "latest": "0.84.1",
       "version_count": 253,
       "retired_count": 0,
-      "updated_at": "2026-08-08T13:32:56Z"
+      "updated_at": "2026-08-08T15:40:39Z"
     }
   ]
 }

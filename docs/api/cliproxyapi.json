@@ -2,7 +2,7 @@
   "product": "cliproxyapi",
   "display_name": "CLIProxyAPI",
   "source": "github:router-for-me/CLIProxyAPI",
-  "updated_at": "2026-08-08T13:32:56Z",
+  "updated_at": "2026-08-08T15:40:39Z",
   "dist_tags": {
     "latest": "7.2.123"
   },
@@ -776,34 +776,6 @@
       "date": "2025-11-03"
     },
     {
-      "version": "6.3.7",
-      "date": "2025-11-03"
-    },
-    {
-      "version": "6.3.8",
-      "date": "2025-11-03"
-    },
-    {
-      "version": "6.3.9",
-      "date": "2025-11-05"
-    },
-    {
-      "version": "6.3.10",
-      "date": "2025-11-05"
-    },
-    {
-      "version": "6.3.11",
-      "date": "2025-11-06"
-    },
-    {
-      "version": "6.3.12",
-      "date": "2025-11-07"
-    },
-    {
-      "version": "6.3.13",
-      "date": "2025-11-07"
-    },
-    {
       "version": "6.3.22",
       "date": "2025-11-08",
       "verified": {
@@ -918,55 +890,6 @@
     {
       "version": "6.3.38",
       "date": "2025-11-13",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.39",
-      "date": "2025-11-13",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.40",
-      "date": "2025-11-13",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.41",
-      "date": "2025-11-14",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.42",
-      "date": "2025-11-14",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.43",
-      "date": "2025-11-14",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.44",
-      "date": "2025-11-16",
-      "verified": {
-        "macos-auth": true
-      }
-    },
-    {
-      "version": "6.3.45",
-      "date": "2025-11-16",
       "verified": {
         "macos-auth": true
       }
