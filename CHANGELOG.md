@@ -5,6 +5,37 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1-alpha.1] - 2026-08-09
+
+### Added
+
+- **Guided claudex onboarding.** `ovm claudex setup` is now a complete guided
+  path: it installs Claude Code inline when it's missing (check-then-do, from
+  the verified registry), stages the proxy, checks for an existing Codex OAuth
+  grant before prompting, offers the Codex CLI as a clearly-optional extra
+  (claudex needs your ChatGPT account, never the codex binary), and ends by
+  offering to launch the session right there. The installer grew a matching
+  entry point: `curl -fsSL https://ovm.sh/install | sh -s -- --claudex` chains
+  straight into the guided setup, re-attaching the terminal for prompts; on
+  machines with no usable terminal it prints the command to run later instead
+  of failing an install that already succeeded, and it releases the
+  self-operation lock before chaining so a launched session never blocks
+  `ovm self` operations.
+- **The claudex launch banner holds for a beat on first run** — long enough to
+  read `history isolated → ~/.ovm/claudex/claude`, which is the one line a new
+  user needs to trust the setup. Later launches stay instant; scripts and
+  pipes never hold; `OVM_CLAUDEX_BANNER_HOLD_MS` overrides in both directions.
+
+### Changed
+
+- **The registry gate no longer holds a release that runs.** A Codex version
+  whose behavioral qualification passes is admitted even when the static
+  schema classifier disagrees; the objection is published as a `gate-review`
+  detection instead of parking the release behind a hand-written adjudication
+  (0.145.0, 0.146.0, and 0.147.0 each needed the same waiver for a
+  permanently-disagreeing ladder rung). Behavioral failures, probe failures,
+  and never-qualified versions are withheld exactly as before.
+
 ## [0.1.0] - 2026-08-09
 
 The first stable release. OVM installs, pins, switches, and launches versions

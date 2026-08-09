@@ -12,7 +12,16 @@ use std::process::Command;
 
 pub const ORIGIN_TWEET: &str = "https://x.com/thsottiaux/status/2076119366647894371";
 
+/// The launch path's entry: guided setup without the final launch offer,
+/// because `claudex`'s own first-run flow continues into the launch itself.
 pub fn run() -> Result<()> {
+    run_guided(false)
+}
+
+/// `ovm claudex setup` proper: the full guided path, ending with an offer to
+/// launch right away so onboarding hands the user a running session, not a
+/// list of next steps.
+pub fn run_guided(offer_launch: bool) -> Result<()> {
     print_intro();
     if !confirm("Proceed?")? {
         eprintln!("  {} Cancelled — nothing was changed.", style("✗").dim());
@@ -34,6 +43,8 @@ pub fn run() -> Result<()> {
         style("✓").green(),
         display(&dirs.config_file())
     );
+
+    ensure_claude_installed()?;
 
     seed_claude_home(&dirs, &config)?;
     crate::feedback::install_session_start_hook(&dirs)?;
@@ -72,13 +83,77 @@ pub fn run() -> Result<()> {
         },
     };
     offer_codex_login(&dirs, &proxy_binary)?;
+    offer_codex_cli()?;
 
     eprintln!();
     eprintln!(
-        "  {} Done. Run {} to start.",
+        "  {} Done. Launch commands: {} · {} (yolo) · {} (fast).",
         style("(≈^.^≈)").green(),
-        style("claudex").cyan().bold()
+        style("claudex").cyan().bold(),
+        style("ccxy").cyan(),
+        style("ccxf").cyan()
     );
+    if offer_launch && confirm("Launch claudex now?")? {
+        let status = Command::new("ovm").arg("claudex").status()?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+/// Step: Claude Code itself. claudex layers on an installed Claude Code, and a
+/// guided setup that ends with "now go install the harness yourself" is not
+/// guided. Check-then-do: already present → report and move on; absent →
+/// offer `ovm install claude` (the verified-registry path) right here.
+fn ensure_claude_installed() -> Result<()> {
+    if let Some(version) = crate::launch::active_claude_version() {
+        eprintln!(
+            "  {} Claude Code {} installed",
+            style("✓").green(),
+            style(&version).green()
+        );
+        return Ok(());
+    }
+    if !confirm("Claude Code isn't installed — install the latest verified release now?")? {
+        eprintln!("    Skipped — claudex needs it. Run `ovm install claude`, then re-run setup.");
+        return Ok(());
+    }
+    let status = Command::new("ovm").args(["install", "claude"]).status()?;
+    if !status.success() {
+        return Err(ClaudexError::Message(
+            "Claude Code install did not complete. Run: ovm install claude, then re-run setup."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Step: the Codex CLI — optional, and clearly labeled as such. claudex needs
+/// your ChatGPT/Codex ACCOUNT (the proxy signs in with it), never the codex
+/// binary; but people arriving here often want both toolchains, so offer it
+/// once. Declining, failing, or a piped stdin all leave setup successful.
+fn offer_codex_cli() -> Result<()> {
+    let installed = Command::new("ovm")
+        .args(["current", "codex"])
+        .output()
+        .map(|out| out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty())
+        .unwrap_or(false);
+    if installed {
+        eprintln!(
+            "  {} Codex CLI already installed (not required for claudex)",
+            style("✓").green()
+        );
+        return Ok(());
+    }
+    if !confirm_default_no("Also install the Codex CLI? (optional — claudex doesn't need it)")? {
+        return Ok(());
+    }
+    let status = Command::new("ovm").args(["install", "codex"]).status()?;
+    if !status.success() {
+        eprintln!(
+            "  {} Codex CLI install did not complete — claudex is unaffected. Retry: ovm install codex",
+            style("!").yellow()
+        );
+    }
     Ok(())
 }
 
@@ -101,13 +176,14 @@ fn print_intro() {
             .yellow()
     );
     eprintln!();
-    eprintln!("  Setup will:");
-    eprintln!("    1. Configure the CLIProxyAPI sidecar (localhost-only, random local key)");
-    eprintln!("    2. Connect your Codex account via browser OAuth");
-    eprintln!("    3. Create an ISOLATED Claude home under ~/.ovm/claudex/claude —");
+    eprintln!("  Setup will (each step checks before it does anything):");
+    eprintln!("    1. Install Claude Code if it isn't already (verified registry)");
+    eprintln!("    2. Configure the CLIProxyAPI sidecar (localhost-only, random local key)");
+    eprintln!("    3. Connect your Codex account via browser OAuth");
+    eprintln!("    4. Create an ISOLATED Claude home under ~/.ovm/claudex/claude —");
     eprintln!("       your existing claude history, settings, and login stay untouched,");
     eprintln!("       and /resume never mixes Anthropic and GPT sessions");
-    eprintln!("    4. Seed infinite history retention and the GPT-5.6 model registry");
+    eprintln!("    5. Seed infinite history retention and the GPT-5.6 model registry");
     eprintln!("       (/model switches between Sol, Terra, and Luna)");
     eprintln!();
     eprintln!("  Launch commands (y = yolo, f = fast/priority tier — stackable):");
@@ -128,6 +204,21 @@ fn confirm(question: &str) -> Result<bool> {
     std::io::stdin().read_line(&mut input)?;
     let answer = input.trim().to_lowercase();
     Ok(answer.is_empty() || answer == "y" || answer == "yes")
+}
+
+/// A prompt whose safe answer is "no": optional extras must not install
+/// themselves in unattended runs, so a non-terminal defaults to declining —
+/// the mirror of `confirm`, whose steps are required and default to yes.
+fn confirm_default_no(question: &str) -> Result<bool> {
+    if !console::Term::stderr().is_term() {
+        return Ok(false);
+    }
+    eprint!("  {} {} [y/N] ", style("?").yellow().bold(), question);
+    std::io::stderr().flush()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let answer = input.trim().to_lowercase();
+    Ok(answer == "y" || answer == "yes")
 }
 
 /// CLIProxyAPI YAML: bind localhost only, our key, tokens inside our dir.

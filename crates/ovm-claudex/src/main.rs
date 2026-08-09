@@ -41,7 +41,7 @@ fn main() {
     // the launch path so `claudex --continue`, `claudex -p "…"` etc. behave
     // exactly like the corresponding `claude` invocation.
     let result = match args.first().map(String::as_str) {
-        Some("setup") => setup::run(),
+        Some("setup") => setup::run_guided(true),
         Some("doctor") => doctor::run(),
         Some("feedback") => codex_feedback::run(&args[1..]),
         Some("feedback-id") => feedback::print_feedback_id(args.get(1).map(String::as_str)),

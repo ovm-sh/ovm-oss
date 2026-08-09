@@ -7,7 +7,9 @@ use crate::config::ClaudexConfig;
 use crate::paths::{display, ClaudexDirs};
 use crate::{proxy, ClaudexError, Result};
 use console::style;
+use std::io::IsTerminal;
 use std::process::Command;
+use std::time::Duration;
 
 pub fn run(args: &[String]) -> Result<()> {
     // `--fast` selects the `<model>-fast` proxy aliases (OpenAI priority
@@ -104,6 +106,9 @@ pub fn run(args: &[String]) -> Result<()> {
         &proxy_label,
         fast,
     );
+    if let Some(hold) = banner_hold(&dirs) {
+        std::thread::sleep(hold);
+    }
 
     let claude_args = build_claude_args(&config, args, fast)?;
 
@@ -135,7 +140,7 @@ pub fn run(args: &[String]) -> Result<()> {
 }
 
 /// Active Claude Code version via OVM's script-friendly interface.
-fn active_claude_version() -> Option<String> {
+pub(crate) fn active_claude_version() -> Option<String> {
     let output = Command::new("ovm")
         .args(["current", "claude"])
         .output()
@@ -215,6 +220,44 @@ fn print_banner(
         eprintln!("{}  {}", style(face).magenta(), line);
     }
     eprintln!();
+}
+
+/// How long the banner stays readable before Claude Code's TUI paints over it.
+///
+/// On the FIRST launch in this isolated home the banner is the one moment the
+/// user can see that their history is isolated — hold it a beat. Every later
+/// launch skips the pause so the daily path stays instant. The heuristic for
+/// "first": Claude Code has not yet written a session ledger into the isolated
+/// home. OVM_CLAUDEX_BANNER_HOLD_MS overrides in both directions (0 disables,
+/// any value forces that hold — useful for recording demos); a non-terminal
+/// stderr never holds, so scripts and pipes are unaffected.
+fn banner_hold(dirs: &ClaudexDirs) -> Option<Duration> {
+    let override_ms = std::env::var("OVM_CLAUDEX_BANNER_HOLD_MS").ok();
+    let first_launch = !dirs.claude_home().join("history.jsonl").exists();
+    banner_hold_policy(
+        override_ms.as_deref(),
+        std::io::stderr().is_terminal(),
+        first_launch,
+    )
+}
+
+fn banner_hold_policy(
+    override_ms: Option<&str>,
+    stderr_is_tty: bool,
+    first_launch: bool,
+) -> Option<Duration> {
+    if let Some(raw) = override_ms {
+        return raw
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|ms| *ms > 0)
+            .map(Duration::from_millis);
+    }
+    if !stderr_is_tty {
+        return None;
+    }
+    first_launch.then(|| Duration::from_millis(2500))
 }
 
 /// The `ovm` argument list: `cc`, the pinned Claude version when one is set,
@@ -372,6 +415,29 @@ mod tests {
 
     fn env_value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
         env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn banner_holds_only_on_the_first_interactive_launch() {
+        // First launch at a terminal: hold so "history isolated" is readable.
+        assert_eq!(
+            banner_hold_policy(None, true, true),
+            Some(Duration::from_millis(2500))
+        );
+        // Every later launch is instant; pipes and scripts never hold.
+        assert_eq!(banner_hold_policy(None, true, false), None);
+        assert_eq!(banner_hold_policy(None, false, true), None);
+    }
+
+    #[test]
+    fn banner_hold_override_wins_in_both_directions() {
+        assert_eq!(
+            banner_hold_policy(Some("4000"), false, false),
+            Some(Duration::from_millis(4000))
+        );
+        assert_eq!(banner_hold_policy(Some("0"), true, true), None);
+        // Garbage in the override disables rather than panicking or holding.
+        assert_eq!(banner_hold_policy(Some("soon"), true, true), None);
     }
 
     #[test]

@@ -1370,7 +1370,22 @@ mod tests {
             Err(TryLockError::WouldBlock)
         ));
         assert!(child.wait().unwrap().success());
-        FileExt::try_lock(&contender).expect("child exit releases inherited lease");
+        // The lease fd is inheritable process-wide for the moment between
+        // make_inheritable and spawn, so a child spawned CONCURRENTLY by a
+        // parallel test can briefly hold a duplicate of it (observed thrice,
+        // 2026-08-09, under full-suite load). That is a harness artifact —
+        // the real launcher execs immediately after make_inheritable — so
+        // poll for the release instead of asserting on the first try.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match FileExt::try_lock(&contender) {
+                Ok(()) => break,
+                Err(TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => panic!("child exit releases inherited lease: {error:?}"),
+            }
+        }
     }
 
     #[test]

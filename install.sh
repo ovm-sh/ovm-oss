@@ -1,6 +1,7 @@
 #!/bin/sh
 # OVM direct installer — installs a verified, self-managed binary bundle.
 # Usage: curl -fsSL https://raw.githubusercontent.com/ovm-sh/ovm-oss/main/install.sh | sh
+#        … | sh -s -- --claudex   additionally runs the guided claudex setup
 set -eu
 # Fail a pipeline if any stage fails, not just the last — so a broken `curl` in
 # a `curl | grep | cut` can't be masked by a succeeding downstream command.
@@ -22,6 +23,20 @@ MANIFEST_NAME="ovm-bundle-v1.tsv"
 API_BASE="${OVM_INSTALL_API_BASE:-https://api.github.com}"
 ASSET_BASE="${OVM_INSTALL_ASSET_BASE:-https://github.com}"
 INSTALL_DIR="${OVM_INSTALL_DIR:-$HOME/.ovm/bin}"
+
+# Options. The installer stays zero-argument for the plain path; --claudex
+# chains into the guided claudex onboarding after a successful install.
+CLAUDEX_SETUP=0
+for arg in "$@"; do
+    case "$arg" in
+        --claudex) CLAUDEX_SETUP=1 ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: curl -fsSL https://ovm.sh/install | sh -s -- [--claudex]" >&2
+            exit 2
+            ;;
+    esac
+done
 SELF_ROOT="$HOME/.ovm/self"
 VERSIONS_DIR="$SELF_ROOT/versions"
 CURRENT_LINK="$SELF_ROOT/current"
@@ -72,6 +87,15 @@ cleanup() {
     if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
         rm -rf "${TMP_DIR:?}"
     fi
+    release_operation_lock
+    exit "$cleanup_status"
+}
+
+# Idempotent: every branch guards on state, so cleanup can call it after an
+# explicit early release. The lock must not outlive the install itself — the
+# --claudex chain can hand the terminal to a long-lived session, and holding
+# the self-operation lock across it would block every `ovm self` op meanwhile.
+release_operation_lock() {
     if [ "$LOCK_PIPE_OPEN" = "1" ]; then
         exec 9>&-
         LOCK_PIPE_OPEN=0
@@ -81,9 +105,14 @@ cleanup() {
         wait "$LOCK_HELPER_PID" 2>/dev/null || true
         LOCK_HELPER_PID=""
     fi
-    [ -n "$LOCK_FIFO" ] && rm -f "$LOCK_FIFO"
-    [ -n "$LOCK_READY" ] && rm -f "$LOCK_READY"
-        exit "$cleanup_status"
+    if [ -n "$LOCK_FIFO" ]; then
+        rm -f "$LOCK_FIFO"
+        LOCK_FIFO=""
+    fi
+    if [ -n "$LOCK_READY" ]; then
+        rm -f "$LOCK_READY"
+        LOCK_READY=""
+    fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -972,3 +1001,27 @@ configure_path "$INSTALL_DIR"
 echo "Verify with:"
 echo "  ovm --version"
 echo "  ovm self current"
+
+if [ "$CLAUDEX_SETUP" = 1 ]; then
+    echo ""
+    # Guided claudex onboarding. The install above is COMPLETE, so two rules:
+    # release the self-operation lock first (setup can hand the terminal to a
+    # long-lived session, and `ovm self` ops must not block behind it), and
+    # never let a setup failure fail the installer — a declined OAuth is not a
+    # broken install. Under `curl … | sh` stdin is the pipe, which can't
+    # answer prompts — re-attach the terminal when there is one. The probe
+    # actually OPENS /dev/tty: on CI runners and in containers the node exists
+    # but has no controlling terminal, so `-r` alone would pass and the
+    # redirect below would then kill a script whose install already succeeded.
+    release_operation_lock
+    if (exec < /dev/tty) 2>/dev/null; then
+        "$INSTALL_DIR/$BINARY" claudex setup < /dev/tty || {
+            echo ""
+            echo "The guided claudex setup did not finish — the OVM install itself succeeded."
+            echo "Pick it back up anytime with:  ovm claudex setup"
+        }
+    else
+        echo "No terminal available for the guided claudex setup."
+        echo "Run it when you have one:  ovm claudex setup"
+    fi
+fi
