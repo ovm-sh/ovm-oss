@@ -5,6 +5,19 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1-alpha.2] - 2026-08-09
+
+### Fixed
+
+- The guided setup's inline Claude Code install invoked `ovm install claude`
+  without the required version argument, so on a machine with no Claude Code
+  it failed — and its error message recommended the same broken command.
+  Caught by the first end-to-end run of the guided journey in a pristine
+  container. It now runs `ovm install claude latest` and then activates it
+  with `ovm use claude latest` (install deliberately never switches, and a
+  fresh machine has nothing active). The optional Codex CLI offer had the
+  identical latent bug and got the identical fix.
+
 ## [0.1.1-alpha.1] - 2026-08-09
 
 ### Added

@@ -114,13 +114,28 @@ fn ensure_claude_installed() -> Result<()> {
         return Ok(());
     }
     if !confirm("Claude Code isn't installed — install the latest verified release now?")? {
-        eprintln!("    Skipped — claudex needs it. Run `ovm install claude`, then re-run setup.");
+        eprintln!(
+            "    Skipped — claudex needs it. Run `ovm install claude latest && ovm use claude latest`, then re-run setup."
+        );
         return Ok(());
     }
-    let status = Command::new("ovm").args(["install", "claude"]).status()?;
+    // `install` deliberately never switches, and a fresh machine has nothing
+    // active — so the guided path does both halves explicitly.
+    let status = Command::new("ovm")
+        .args(["install", "claude", "latest"])
+        .status()?;
     if !status.success() {
         return Err(ClaudexError::Message(
-            "Claude Code install did not complete. Run: ovm install claude, then re-run setup."
+            "Claude Code install did not complete. Run: ovm install claude latest, then re-run setup."
+                .into(),
+        ));
+    }
+    let status = Command::new("ovm")
+        .args(["use", "claude", "latest"])
+        .status()?;
+    if !status.success() {
+        return Err(ClaudexError::Message(
+            "Claude Code installed but could not be activated. Run: ovm use claude latest, then re-run setup."
                 .into(),
         ));
     }
@@ -147,10 +162,18 @@ fn offer_codex_cli() -> Result<()> {
     if !confirm_default_no("Also install the Codex CLI? (optional — claudex doesn't need it)")? {
         return Ok(());
     }
-    let status = Command::new("ovm").args(["install", "codex"]).status()?;
-    if !status.success() {
+    let status = Command::new("ovm")
+        .args(["install", "codex", "latest"])
+        .status()?;
+    if status.success() {
+        // Activate it too: an installed-but-never-switched codex leaves `cx`
+        // dead on a fresh machine, which reads as a broken install.
+        let _ = Command::new("ovm")
+            .args(["use", "codex", "latest"])
+            .status();
+    } else {
         eprintln!(
-            "  {} Codex CLI install did not complete — claudex is unaffected. Retry: ovm install codex",
+            "  {} Codex CLI install did not complete — claudex is unaffected. Retry: ovm install codex latest",
             style("!").yellow()
         );
     }
