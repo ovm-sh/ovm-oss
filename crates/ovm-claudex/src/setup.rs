@@ -93,6 +93,11 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
         style("ccxy").cyan(),
         style("ccxf").cyan()
     );
+    eprintln!(
+        "  {} there's a story behind the cats — {}",
+        style("◇").magenta(),
+        style("ovm story").magenta().bold()
+    );
     if offer_launch && confirm("Launch claudex now?")? {
         let status = Command::new("ovm").arg("claudex").status()?;
         std::process::exit(status.code().unwrap_or(1));

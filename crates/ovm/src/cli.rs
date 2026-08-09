@@ -207,6 +207,13 @@ pub enum Commands {
     /// Show installed/archived counts, active version, and disk usage per product
     Stats,
 
+    /// A tale of two cats and an echo
+    Story {
+        /// Play straight through without waiting for input
+        #[arg(long)]
+        fast: bool,
+    },
+
     /// Install bare launch shortcuts (ccy, cxy, ccx, ccxy, claudex) as ~/.local/bin shims — no shell rc edits
     Shortcuts {
         /// Install without prompting

@@ -5,6 +5,20 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1-alpha.3] - 2026-08-10
+
+### Added
+
+- **`ovm story` — a tale of two cats and an echo.** The interactive terminal
+  story behind OVM's cats ships with the binary: where Quelpaw came from
+  (Claude Code's `/buddy`, arrived 2.1.80, removed 2.1.97 without a changelog
+  line), how Mochi got here, and what Echo really is. The story only hatches
+  when the user types `/buddy` at the title screen; `--fast` (or a non-tty)
+  plays straight through. One chapter pause can open mochiexists.com with a
+  keypress. Previously a local prototype outside the install loop.
+- The installer's closing lines and the guided claudex setup now invite the
+  story: "there's a story behind the cats — `ovm story`".
+
 ## [0.1.1-alpha.2] - 2026-08-09
 
 ### Fixed

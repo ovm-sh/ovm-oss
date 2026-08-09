@@ -2,7 +2,7 @@
   "product": "codex",
   "display_name": "Codex",
   "source": "github:openai/codex",
-  "updated_at": "2026-08-09T10:51:00Z",
+  "updated_at": "2026-08-09T19:04:19Z",
   "dist_tags": {
     "latest": "rust-v0.147.0",
     "latest_prerelease": ""

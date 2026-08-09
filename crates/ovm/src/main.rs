@@ -258,6 +258,7 @@ fn run() -> Result<()> {
             commands::install::run(&VersionManager::new(product)?, request)
         }
         Commands::Stats => commands::stats::run(),
+        Commands::Story { fast } => commands::story::run(fast),
         Commands::Select { product, version } => {
             commands::select::run_top(product.as_deref(), version.as_deref())
         }

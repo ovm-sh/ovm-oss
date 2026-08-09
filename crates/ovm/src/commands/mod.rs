@@ -21,6 +21,7 @@ pub mod self_manage;
 pub mod self_update;
 pub mod shortcuts;
 pub mod stats;
+pub mod story;
 pub mod uninstall;
 pub mod update;
 pub mod update_picker;

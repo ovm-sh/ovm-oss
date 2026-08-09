@@ -32,7 +32,7 @@ fn bare_ovm_shows_short_help() {
 
     assert_eq!(banner.len(), 3);
     assert!(banner[0].contains("ovm (open version manager)"));
-    assert!(banner[1].contains("built by mochi and quelpaw"));
+    assert!(banner[1].contains("built by mochi, echo and quelpaw"));
     assert!(banner[2].contains("tiny paws for big version jumps"));
     assert!(stdout.contains("Common:"));
     assert!(stdout.contains("Run `ovm help`"));

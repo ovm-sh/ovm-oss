@@ -40,7 +40,7 @@ fn print_banner() {
             style("(open version manager)").dim(),
             style(concat!("v", env!("CARGO_PKG_VERSION"))).cyan()
         ),
-        style("built by mochi and quelpaw")
+        style("built by mochi, echo and quelpaw")
             .dim()
             .italic()
             .to_string(),

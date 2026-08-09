@@ -1001,6 +1001,8 @@ configure_path "$INSTALL_DIR"
 echo "Verify with:"
 echo "  ovm --version"
 echo "  ovm self current"
+echo ""
+echo "There's a story behind the cats:  ovm story"
 
 if [ "$CLAUDEX_SETUP" = 1 ]; then
     echo ""
