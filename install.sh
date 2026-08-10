@@ -1017,7 +1017,10 @@ if [ "$CLAUDEX_SETUP" = 1 ]; then
     # redirect below would then kill a script whose install already succeeded.
     release_operation_lock
     if (exec < /dev/tty) 2>/dev/null; then
-        "$INSTALL_DIR/$BINARY" claudex setup < /dev/tty || {
+        # configure_path updates future shells, not this installer process. Put
+        # the fresh control plane on PATH for setup and every child it launches
+        # (`ovm install`, `ovm use`, and the generated shims all invoke `ovm`).
+        PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" claudex setup < /dev/tty || {
             echo ""
             echo "The guided claudex setup did not finish — the OVM install itself succeeded."
             echo "Pick it back up anytime with:  ovm claudex setup"
