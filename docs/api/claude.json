@@ -2,7 +2,7 @@
   "product": "claude",
   "display_name": "Claude Code",
   "source": "npm:@anthropic-ai/claude-code",
-  "updated_at": "2026-08-09T19:04:19Z",
+  "updated_at": "2026-08-10T05:49:31Z",
   "dist_tags": {
     "stable": "2.1.220",
     "latest": "2.1.226",
@@ -1177,7 +1177,6 @@
       "version": "2.0.57",
       "date": "2025-12-03",
       "verified": {
-        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1253,7 +1252,6 @@
       "version": "2.0.67",
       "date": "2025-12-11",
       "verified": {
-        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1405,8 +1403,7 @@
       "version": "2.1.8",
       "date": "2026-01-15",
       "verified": {
-        "linux-auth": true,
-        "macos-auth": true
+        "linux-auth": true
       }
     },
     {
@@ -1491,17 +1488,12 @@
     },
     {
       "version": "2.1.20",
-      "date": "2026-01-27",
-      "verified": {
-        "linux-auth": true,
-        "macos-auth": true
-      }
+      "date": "2026-01-27"
     },
     {
       "version": "2.1.21",
       "date": "2026-01-28",
       "verified": {
-        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1509,25 +1501,16 @@
       "version": "2.1.22",
       "date": "2026-01-28",
       "verified": {
-        "linux-auth": true,
         "macos-auth": true
       }
     },
     {
       "version": "2.1.23",
-      "date": "2026-01-29",
-      "verified": {
-        "linux-auth": true,
-        "macos-auth": true
-      }
+      "date": "2026-01-29"
     },
     {
       "version": "2.1.25",
-      "date": "2026-01-29",
-      "verified": {
-        "linux-auth": true,
-        "macos-auth": true
-      }
+      "date": "2026-01-29"
     },
     {
       "version": "2.1.26",
@@ -1537,7 +1520,6 @@
       "version": "2.1.27",
       "date": "2026-01-30",
       "verified": {
-        "linux-auth": true,
         "macos-auth": true
       }
     },
@@ -1645,21 +1627,24 @@
       "version": "2.1.42",
       "date": "2026-02-13",
       "verified": {
-        "linux-auth": true
+        "linux-auth": true,
+        "macos-auth": true
       }
     },
     {
       "version": "2.1.44",
       "date": "2026-02-16",
       "verified": {
-        "linux-auth": true
+        "linux-auth": true,
+        "macos-auth": true
       }
     },
     {
       "version": "2.1.45",
       "date": "2026-02-17",
       "verified": {
-        "linux-auth": true
+        "linux-auth": true,
+        "macos-auth": true
       }
     },
     {
@@ -1698,8 +1683,7 @@
       "version": "2.1.51",
       "date": "2026-02-23",
       "verified": {
-        "linux-auth": true,
-        "macos-auth": true
+        "linux-auth": true
       }
     },
     {
@@ -1814,7 +1798,8 @@
       "version": "2.1.69",
       "date": "2026-03-04",
       "verified": {
-        "linux-auth": true
+        "linux-auth": true,
+        "macos-auth": true
       }
     },
     {

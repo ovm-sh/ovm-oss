@@ -5,6 +5,38 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-10
+
+The guided Claudex journey and cat story qualified across three alpha releases
+are now the stable `0.1.1` experience.
+
+### Added
+
+- **One-command guided Claudex onboarding.** Running
+  `curl -fsSL https://ovm.sh/install | sh -s -- --claudex` can take a pristine
+  machine through installing and activating the latest verified Claude Code,
+  staging the local CLIProxyAPI sidecar, connecting a ChatGPT/Codex account,
+  optionally installing the Codex CLI, and launching Claude Code on GPT-5.6.
+  Claudex keeps its history isolated under `~/.ovm/claudex/claude`, and its
+  first-launch banner pauses long enough to make that boundary visible.
+- **`ovm story` — a tale of two cats and an echo.** The interactive terminal
+  story begins when the user types `/buddy`; `--fast` and non-interactive runs
+  play it straight through. The installer and Claudex setup invite new users
+  to discover it after setup.
+
+### Changed
+
+- Codex releases that pass behavioral qualification are no longer withheld
+  solely because the static schema classifier disagrees. The objection is
+  published as a `gate-review` detection; behavioral and probe failures still
+  veto the release.
+
+### Fixed
+
+- Fresh-machine guided setup now supplies the required `latest` version to its
+  Claude Code and optional Codex CLI install commands, then explicitly activates
+  Claude Code before launching Claudex.
+
 ## [0.1.1-alpha.3] - 2026-08-10
 
 ### Added
