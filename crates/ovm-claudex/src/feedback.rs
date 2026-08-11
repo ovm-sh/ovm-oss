@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SESSION_HOOK_COMMAND: &str = "ovm claudex __session-start";
+const SESSION_END_HOOK_COMMAND: &str = "ovm claudex __session-end";
 const FEEDBACK_ID_ENV: &str = "CLAUDEX_FEEDBACK_ID";
 const CLAUDE_SESSION_ID_ENV: &str = "CLAUDE_CODE_SESSION_ID";
 
@@ -61,9 +62,9 @@ struct CodexAssociation {
     upstream_session_id: Option<String>,
 }
 
-/// Install the isolated-home SessionStart hook. Existing hooks are preserved,
-/// and repeated setup/launches do not duplicate our command.
-pub fn install_session_start_hook(dirs: &ClaudexDirs) -> Result<()> {
+/// Install the isolated-home session hooks. Existing hooks are preserved,
+/// and repeated setup/launches do not duplicate our commands.
+pub fn install_session_hooks(dirs: &ClaudexDirs) -> Result<()> {
     let path = dirs.claude_home().join("settings.json");
     let mut value: Value = match std::fs::read_to_string(&path) {
         Ok(contents) => serde_json::from_str(&contents)?,
@@ -77,7 +78,19 @@ pub fn install_session_start_hook(dirs: &ClaudexDirs) -> Result<()> {
         ))
     })?;
 
-    if add_session_start_hook(settings)? {
+    let added_start = add_session_hook(
+        settings,
+        "SessionStart",
+        "startup|resume|clear|compact",
+        SESSION_HOOK_COMMAND,
+    )?;
+    // The sign-off moved to the launcher itself: SessionEnd does not fire when
+    // an interactive session ends, so the hook could never deliver it. Remove
+    // any copy an earlier version installed, or Claude Code reports it as a
+    // failing hook once the subcommand is gone.
+    let pruned_end = prune_session_hook(settings, "SessionEnd", SESSION_END_HOOK_COMMAND);
+
+    if added_start || pruned_end {
         let mut contents = serde_json::to_string_pretty(&value)?;
         contents.push('\n');
         write_atomic(&path, &contents, None)?;
@@ -85,43 +98,68 @@ pub fn install_session_start_hook(dirs: &ClaudexDirs) -> Result<()> {
     Ok(())
 }
 
-fn add_session_start_hook(settings: &mut Map<String, Value>) -> Result<bool> {
+fn add_session_hook(
+    settings: &mut Map<String, Value>,
+    event: &str,
+    matcher: &str,
+    command: &str,
+) -> Result<bool> {
     let hooks = settings
         .entry("hooks".to_string())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or_else(|| ClaudexError::Message("settings.json `hooks` must be an object".into()))?;
-    let session_start = hooks
-        .entry("SessionStart".to_string())
+    let groups = hooks
+        .entry(event.to_string())
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
         .ok_or_else(|| {
-            ClaudexError::Message("settings.json `hooks.SessionStart` must be an array".into())
+            ClaudexError::Message(format!("settings.json `hooks.{event}` must be an array"))
         })?;
 
-    if session_start.iter().any(group_contains_our_hook) {
+    if groups
+        .iter()
+        .any(|group| group_contains_command(group, command))
+    {
         return Ok(false);
     }
 
-    session_start.push(json!({
-        "matcher": "startup|resume|clear|compact",
+    groups.push(json!({
+        "matcher": matcher,
         "hooks": [{
             "type": "command",
-            "command": SESSION_HOOK_COMMAND,
+            "command": command,
             "timeout": 5
         }]
     }));
     Ok(true)
 }
 
-fn group_contains_our_hook(group: &Value) -> bool {
+/// Drop a hook we previously installed. Returns whether anything changed.
+fn prune_session_hook(settings: &mut Map<String, Value>, event: &str, command: &str) -> bool {
+    let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let Some(groups) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let before = groups.len();
+    groups.retain(|group| !group_contains_command(group, command));
+    let removed = before != groups.len();
+    if groups.is_empty() {
+        hooks.remove(event);
+    }
+    removed
+}
+
+fn group_contains_command(group: &Value, command: &str) -> bool {
     group
         .get("hooks")
         .and_then(Value::as_array)
         .is_some_and(|hooks| {
-            hooks.iter().any(|hook| {
-                hook.get("command").and_then(Value::as_str) == Some(SESSION_HOOK_COMMAND)
-            })
+            hooks
+                .iter()
+                .any(|hook| hook.get("command").and_then(Value::as_str) == Some(command))
         })
 }
 
@@ -142,6 +180,37 @@ pub fn session_start_hook() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The most recently written history session in the isolated home.
+///
+/// Claude Code names each transcript `<session-id>.jsonl`, so the newest file
+/// names the session that just ended — including after a `/clear`, which starts
+/// a new id mid-run and is exactly the one a resume should land on.
+pub(crate) fn latest_session_id(dirs: &ClaudexDirs) -> Option<String> {
+    let projects = dirs.claude_home().join("projects");
+    let mut newest: Option<(SystemTime, String)> = None;
+    for project in std::fs::read_dir(projects).ok()?.flatten() {
+        let Ok(entries) = std::fs::read_dir(project.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
+                newest = Some((modified, stem.to_string()));
+            }
+        }
+    }
+    newest.map(|(_, id)| id)
 }
 
 /// Print the stable correlation ID for the current live session. An explicit
@@ -481,17 +550,89 @@ mod tests {
             }]}),
         );
 
-        assert!(add_session_start_hook(&mut settings).expect("add"));
-        assert!(!add_session_start_hook(&mut settings).expect("idempotent"));
+        let add = |settings: &mut Map<String, Value>| {
+            add_session_hook(settings, "SessionStart", "startup", SESSION_HOOK_COMMAND)
+        };
+        assert!(add(&mut settings).expect("add"));
+        assert!(!add(&mut settings).expect("idempotent"));
 
         let groups = settings["hooks"]["SessionStart"]
             .as_array()
             .expect("groups");
         assert_eq!(groups.len(), 2);
-        assert!(groups.iter().any(group_contains_our_hook));
+        assert!(groups
+            .iter()
+            .any(|group| group_contains_command(group, SESSION_HOOK_COMMAND)));
         assert!(groups
             .iter()
             .any(|group| { group["hooks"][0]["command"].as_str() == Some("existing-hook") }));
+    }
+
+    /// An earlier version installed a SessionEnd hook to print the sign-off.
+    /// SessionEnd never fires when an interactive session ends, so the sign-off
+    /// moved into the launcher — and the stale hook has to be removed, or
+    /// Claude Code reports it as failing once the subcommand is gone.
+    #[test]
+    fn a_previously_installed_session_end_hook_is_pruned() {
+        let mut settings = Map::new();
+        add_session_hook(
+            &mut settings,
+            "SessionStart",
+            "startup",
+            SESSION_HOOK_COMMAND,
+        )
+        .expect("start");
+        add_session_hook(
+            &mut settings,
+            "SessionEnd",
+            "other",
+            SESSION_END_HOOK_COMMAND,
+        )
+        .expect("stale end hook");
+
+        assert!(prune_session_hook(
+            &mut settings,
+            "SessionEnd",
+            SESSION_END_HOOK_COMMAND
+        ));
+        assert!(
+            settings["hooks"].get("SessionEnd").is_none(),
+            "an emptied SessionEnd list must be removed, not left as []"
+        );
+        assert!(
+            group_contains_command(&settings["hooks"]["SessionStart"][0], SESSION_HOOK_COMMAND),
+            "pruning SessionEnd must not disturb SessionStart"
+        );
+        // Idempotent: a home that never had the hook reports no change, so the
+        // launcher does not rewrite settings.json on every single launch.
+        assert!(!prune_session_hook(
+            &mut settings,
+            "SessionEnd",
+            SESSION_END_HOOK_COMMAND
+        ));
+    }
+
+    /// A foreign SessionEnd hook is somebody else's; pruning ours leaves it.
+    #[test]
+    fn pruning_preserves_hooks_we_did_not_install() {
+        let mut settings = Map::new();
+        settings.insert(
+            "hooks".into(),
+            json!({"SessionEnd": [{
+                "matcher": "other",
+                "hooks": [{"type": "command", "command": "their-own-hook"}]
+            }]}),
+        );
+
+        assert!(!prune_session_hook(
+            &mut settings,
+            "SessionEnd",
+            SESSION_END_HOOK_COMMAND
+        ));
+        assert_eq!(
+            settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"],
+            "their-own-hook"
+        );
     }
 
     #[test]

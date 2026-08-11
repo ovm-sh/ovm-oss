@@ -59,6 +59,31 @@ pub enum SelfCommands {
 
     /// Restore the previous standalone control-plane executable
     RepairControl,
+
+    /// Remove OVM itself: the installer's shell PATH block, the `~/.ovm/bin`
+    /// launchers, and OVM's own snapshots
+    #[command(
+        long_about = "Remove OVM itself — the reverse of the direct installer.\n\
+        \n\
+        Removes the `# >>> ovm >>>` PATH block the installer appended to your shell \
+        profiles (nothing else in those files is touched), the launchers and side-binary \
+        shims in ~/.ovm/bin, and OVM's own snapshots under ~/.ovm/self.\n\
+        \n\
+        Installed Claude/Codex/Pi versions and your config are KEPT, so a reinstall \
+        picks up where you left off. `--purge` removes the whole ~/.ovm tree instead.\n\
+        \n\
+        Asks for a typed confirmation; `--yes` skips it. A non-interactive shell \
+        without `--yes` refuses rather than assuming consent."
+    )]
+    Uninstall {
+        /// Also remove every managed product install and OVM's config (the whole ~/.ovm tree)
+        #[arg(long)]
+        purge: bool,
+
+        /// Skip the typed confirmation
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

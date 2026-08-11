@@ -767,6 +767,13 @@ struct PidRecord {
     /// shared session lock for every client lifetime.
     #[serde(default)]
     session_guarded: bool,
+    /// Unix mtime of the pidfile this record was read from — populated at
+    /// read time, never serialized. Legacy bare-pid records carry no
+    /// `started`, so the file's write time is the only anchor available to
+    /// catch a recycled PID (the record cannot describe a process that
+    /// began after the record itself was written).
+    #[serde(skip)]
+    recorded_at: u64,
 }
 
 fn now_unix() -> u64 {
@@ -787,6 +794,7 @@ fn write_pid_record(
         binary: binary.to_path_buf(),
         started: now_unix(),
         session_guarded,
+        recorded_at: 0,
     };
     crate::config::write_atomic(
         &dirs.proxy_pid_file(),
@@ -795,10 +803,31 @@ fn write_pid_record(
     )
 }
 
-/// Read the pidfile, tolerating the legacy bare-pid format.
+/// Read the pidfile, tolerating the legacy bare-pid format. The file's
+/// mtime rides along so the identity check has an anchor even when the
+/// record itself predates start-time tracking.
 fn read_pid_record(path: &std::path::Path) -> Option<PidRecord> {
-    let contents = std::fs::read_to_string(path).ok()?;
-    if let Ok(record) = serde_json::from_str::<PidRecord>(&contents) {
+    use std::io::Read;
+    // One open serves both the contents and the mtime anchor. Read-by-path
+    // then stat-by-path could pair pid P from one write with the fresh mtime
+    // of an atomic replacement written in between — and that fresh anchor
+    // could then authorize signalling a recycled P.
+    let mut file = std::fs::File::open(path).ok()?;
+    let before = file.metadata().ok()?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    let after = file.metadata().ok()?;
+    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+        return None;
+    }
+    let recorded_at = after
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut record) = serde_json::from_str::<PidRecord>(&contents) {
+        record.recorded_at = recorded_at;
         return Some(record);
     }
     let pid: u32 = contents.trim().parse().ok()?;
@@ -807,6 +836,7 @@ fn read_pid_record(path: &std::path::Path) -> Option<PidRecord> {
         binary: PathBuf::from("cliproxyapi"),
         started: 0,
         session_guarded: false,
+        recorded_at,
     })
 }
 
@@ -898,22 +928,37 @@ fn pid_matches_record(record: &PidRecord) -> Option<bool> {
         }
     }
 
+    // Fail closed: a start time that can't be verified means "cannot
+    // confirm identity" — this path guards a kill(), so an unparseable
+    // etime must never silently pass.
+    let elapsed = match ps_field(record.pid, "etime") {
+        PsField::Value(value) => parse_etime(&value)?,
+        // ps failed, pid vanished, or unparseable — cannot verify the
+        // start time, so fail closed rather than signal a stale match.
+        _ => return None,
+    };
+    let implied_start = now_unix().saturating_sub(elapsed);
+
     if record.started > 0 {
-        // Fail closed: a recorded start time that can't be verified means
-        // "cannot confirm identity" — this path guards a kill(), so an
-        // unparseable etime must never silently pass.
-        let elapsed = match ps_field(record.pid, "etime") {
-            PsField::Value(value) => parse_etime(&value)?,
-            // ps failed, pid vanished, or unparseable — cannot verify the
-            // start time, so fail closed rather than signal a stale match.
-            _ => return None,
-        };
-        let implied_start = now_unix().saturating_sub(elapsed);
         let drift = implied_start.abs_diff(record.started);
         // 90s tolerance: coarse etime granularity + clock slew.
         return Some(drift <= 90);
     }
-    Some(true)
+
+    // Legacy bare-pid record: no spawn time was written, so the name match
+    // above is the only positive evidence — and any same-name process on a
+    // recycled PID would pass it. The record cannot describe a process that
+    // began after the record itself was written, so a start time measurably
+    // past the pidfile's mtime means the PID was reused. Same 90s tolerance.
+    Some(!legacy_pid_was_recycled(record.recorded_at, implied_start))
+}
+
+/// A legacy record (no recorded spawn time) cannot belong to a process that
+/// started after the record was written. `recorded_at == 0` means the file
+/// mtime was unreadable — no anchor, keep the historical name-only verdict
+/// rather than breaking every adopted proxy.
+fn legacy_pid_was_recycled(recorded_at: u64, implied_start: u64) -> bool {
+    recorded_at > 0 && implied_start > recorded_at + 90
 }
 
 fn version_from_managed_path(dirs: &ClaudexDirs, path: &std::path::Path) -> Option<String> {
@@ -959,6 +1004,22 @@ pub fn activate_pending_update(
     let Some(pending) = crate::install::load_pending_update(dirs)? else {
         return Ok(false);
     };
+    // An automatic pending update that carries no registry provenance can only
+    // be a leftover an older OVM staged through the upstream fallback (or a
+    // tampered file): the current automatic path stages `verified: true` by
+    // construction. Activating it would defeat the deep-lane gate, so discard
+    // it and stand down. An explicit `ovm claudex update` re-stages a fresh,
+    // vouched record when the registry can still vouch for a newer build.
+    if pending.automatic && !pending.verified {
+        crate::install::clear_pending_update(dirs)?;
+        eprintln!(
+            "  {} A previously staged cliproxyapi {} was discarded: it predates OVM's registry-approved update gate. Run {} to install a registry-approved version.",
+            style("!").yellow(),
+            style(&pending.version).dim(),
+            style("ovm claudex update").cyan()
+        );
+        return Ok(false);
+    }
     if config.pin.is_some() {
         eprintln!(
             "  {} cliproxyapi {} is installed but remains staged because the Claude/proxy pair is pinned.",
@@ -1055,6 +1116,7 @@ pub fn activate_pending_update(
 /// signal.
 pub fn stop_command() -> Result<()> {
     let dirs = ClaudexDirs::new()?;
+    let _lock = crate::install::acquire_update_lock(&dirs)?;
     stop(&dirs)?;
     // Sessions exec into Claude and outlive the proxy by design (updates
     // restart it underneath them) — but after an operator stop they are
@@ -1216,6 +1278,39 @@ mod tests {
         assert!(
             stdout.contains("PATHSET=[yes]"),
             "PATH must be forwarded so the sidecar can run: {stdout}"
+        );
+    }
+
+    #[test]
+    fn unverified_automatic_pending_update_is_discarded_not_activated() {
+        // A pending update an older OVM staged automatically through the
+        // upstream fallback carries no registry provenance (`verified: false`).
+        // Activation must discard it rather than trust that leftover, closing
+        // the hole where the deep-lane gate stands down for NEW checks but a
+        // stale record activates anyway.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dirs = ClaudexDirs::at(temp.path().to_path_buf());
+        dirs.ensure_layout().expect("layout");
+        let binary = dirs.proxy_versions_dir().join("7.2.70").join("cliproxyapi");
+        touch_executable(&binary);
+
+        let pending = crate::install::PendingUpdate {
+            version: "7.2.70".into(),
+            binary,
+            automatic: true,
+            verified: false,
+        };
+        let mut json = serde_json::to_string(&pending).unwrap();
+        json.push('\n');
+        std::fs::write(dirs.proxy_pending_update(), json).unwrap();
+
+        let activated = activate_pending_update(&dirs, &ClaudexConfig::default(), false).unwrap();
+        assert!(!activated, "unverified automatic update must not activate");
+        assert!(
+            crate::install::load_pending_update(&dirs)
+                .unwrap()
+                .is_none(),
+            "the stale pending record must be discarded"
         );
     }
 
@@ -1422,6 +1517,7 @@ mod tests {
             binary: PathBuf::from("/x/bin/cliproxyapi"),
             started: 0,
             session_guarded: false,
+            recorded_at: 0,
         };
         assert_eq!(pid_matches_record(&record), Some(false));
 
@@ -1431,8 +1527,41 @@ mod tests {
             binary: PathBuf::from("/x/bin/cliproxyapi"),
             started: 0,
             session_guarded: false,
+            recorded_at: 0,
         };
         assert_eq!(pid_matches_record(&dead), Some(false));
+    }
+
+    #[test]
+    fn legacy_record_mtime_defeats_pid_reuse() {
+        // A legacy bare-pid record has no spawn time; the pidfile's mtime is
+        // the anchor. A record written long before the process started can
+        // only mean the PID was recycled.
+        let exe = std::env::current_exe().unwrap();
+        let record = PidRecord {
+            pid: std::process::id(),
+            binary: exe.clone(),
+            started: 0,
+            session_guarded: false,
+            recorded_at: 1_000, // 1970 — this process started far later
+        };
+        assert_eq!(pid_matches_record(&record), Some(false));
+
+        // A record as fresh as the process keeps matching.
+        let record = PidRecord {
+            pid: std::process::id(),
+            binary: exe,
+            started: 0,
+            session_guarded: false,
+            recorded_at: now_unix(),
+        };
+        assert_eq!(pid_matches_record(&record), Some(true));
+
+        // Boundary behavior of the pure rule: unreadable mtime (0) keeps the
+        // historical name-only verdict; inside tolerance passes; past it fails.
+        assert!(!legacy_pid_was_recycled(0, now_unix()));
+        assert!(!legacy_pid_was_recycled(1_000, 1_090));
+        assert!(legacy_pid_was_recycled(1_000, 1_091));
     }
 
     #[test]
@@ -1445,6 +1574,7 @@ mod tests {
             binary: exe.clone(),
             started: 1, // 1970 — nothing running now started then
             session_guarded: false,
+            recorded_at: 0,
         };
         assert_eq!(pid_matches_record(&record), Some(false));
 
@@ -1454,6 +1584,7 @@ mod tests {
             binary: exe,
             started: now_unix(),
             session_guarded: false,
+            recorded_at: 0,
         };
         assert_eq!(pid_matches_record(&record), Some(true));
     }
@@ -1472,6 +1603,7 @@ mod tests {
             binary: PathBuf::from("/bin/sleep"),
             started: now_unix(),
             session_guarded: false,
+            recorded_at: 0,
         };
         assert_eq!(pid_matches_record(&record), Some(true));
 

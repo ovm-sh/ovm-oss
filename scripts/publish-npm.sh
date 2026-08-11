@@ -134,6 +134,122 @@ publish_pkg() {
     fi
 }
 
+# Resumable publishing: npm refuses to republish an existing version, so a
+# rerun after a partial failure would die at the first already-published
+# package and strand the rest. An exact-version hit on the registry is
+# skipped instead. (`npm view` exits non-zero when the version is absent;
+# a network failure also exits non-zero, which then fails loudly at the
+# publish itself rather than silently skipping.)
+already_published() {
+    npm view "$1@${VERSION}" version >/dev/null 2>&1
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1 # pipefail-safe: cut consumes the single line sha256sum writes
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1 # pipefail-safe: cut consumes the single line shasum writes
+    fi
+}
+
+# Canonical metadata and content for every entry. Comparing only regular-file
+# bytes would accept a package that changed an executable bit, symlink target,
+# or entry type while retaining the same file payloads.
+digest_tree() {
+    node - "$1" <<'NODE'
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = process.argv[2];
+const rows = [];
+
+function walk(relative) {
+  const directory = path.join(root, relative);
+  for (const name of fs.readdirSync(directory).sort()) {
+    const child = path.posix.join(relative, name);
+    const fullPath = path.join(root, child);
+    const stat = fs.lstatSync(fullPath);
+    const mode = (stat.mode & 0o7777).toString(8).padStart(4, '0');
+    if (stat.isSymbolicLink()) {
+      rows.push(`link ${mode} ${child} -> ${fs.readlinkSync(fullPath)}`);
+    } else if (stat.isDirectory()) {
+      rows.push(`dir  ${mode} ${child}`);
+      walk(child);
+    } else if (stat.isFile()) {
+      const digest = crypto.createHash('sha256').update(fs.readFileSync(fullPath)).digest('hex');
+      rows.push(`file ${mode} ${digest} ${child}`);
+    } else {
+      rows.push(`other ${mode} ${child}`);
+    }
+  }
+}
+
+walk('');
+process.stdout.write(`${rows.join('\n')}\n`);
+NODE
+}
+
+# A matching version number is not a matching artifact. Skipping on the
+# number alone means a rerun from a different tree reports success while the
+# registry keeps serving the first upload's bytes — the release then claims
+# to ship something nobody published. Prove the published tarball is the one
+# this run would have produced, and fail loudly when it is not.
+require_published_matches() {
+    package=$1
+    package_dir=$2
+    compare_dir=$(mktemp -d "${TMPDIR:-/tmp}/ovm-npm-resume.XXXXXX")
+    mkdir -p "$compare_dir/published" "$compare_dir/local"
+
+    integrity=$(npm view "${package}@${VERSION}" dist.integrity 2>/dev/null || true)
+    echo "    registry integrity: ${integrity:-unreported}"
+
+    npm pack "${package}@${VERSION}" --pack-destination "$compare_dir/published" \
+        >/dev/null 2>&1 || {
+        echo "ERROR: could not download the published ${package}@${VERSION} tarball to compare against" >&2
+        rm -rf "$compare_dir"
+        return 1
+    }
+    (cd "$package_dir" && npm pack --pack-destination "$compare_dir/local" >/dev/null 2>&1) || {
+        echo "ERROR: could not pack $package_dir to compare against the registry" >&2
+        rm -rf "$compare_dir"
+        return 1
+    }
+
+    published_tarball=$(find "$compare_dir/published" -name '*.tgz' -type f)
+    local_tarball=$(find "$compare_dir/local" -name '*.tgz' -type f)
+    if [ ! -f "$published_tarball" ] || [ ! -f "$local_tarball" ]; then
+        echo "ERROR: expected exactly one packed tarball on each side for $package" >&2
+        rm -rf "$compare_dir"
+        return 1
+    fi
+
+    if [ "$(sha256_of "$published_tarball")" = "$(sha256_of "$local_tarball")" ]; then
+        echo "    ${package}@${VERSION} on the registry is byte-identical to this build."
+        rm -rf "$compare_dir"
+        return 0
+    fi
+
+    # Tarball bytes can differ for reasons that are not content (packer
+    # version, gzip settings), so fall through to the contents themselves
+    # before calling it a mismatch.
+    mkdir -p "$compare_dir/published-tree" "$compare_dir/local-tree"
+    tar xzf "$published_tarball" -C "$compare_dir/published-tree"
+    tar xzf "$local_tarball" -C "$compare_dir/local-tree"
+    digest_tree "$compare_dir/published-tree" > "$compare_dir/published.sums"
+    digest_tree "$compare_dir/local-tree" > "$compare_dir/local.sums"
+    if ! diff -u "$compare_dir/published.sums" "$compare_dir/local.sums"; then
+        echo "ERROR: ${package}@${VERSION} is already on the registry but its contents" >&2
+        echo "       differ from what this run built. Refusing to report a publish that" >&2
+        echo "       did not happen — publish a new version instead." >&2
+        rm -rf "$compare_dir"
+        return 1
+    fi
+    echo "    ${package}@${VERSION} on the registry has identical contents (tarball bytes differ)."
+    rm -rf "$compare_dir"
+    return 0
+}
+
 # Publish platform packages first
 for platform in $PLATFORMS; do
     pkg_dir="npm/ovm-${platform}"
@@ -163,6 +279,11 @@ for platform in $PLATFORMS; do
     sed -i.bak "s/\"version\": \"0.0.0\"/\"version\": \"${VERSION}\"/" "$pkg_dir/package.json"
     rm -f "$pkg_dir/package.json.bak"
 
+    if already_published "@mochiexists/ovm-${platform}"; then
+        echo "  @mochiexists/ovm-${platform}@${VERSION} is already on the registry; verifying rather than skipping."
+        require_published_matches "@mochiexists/ovm-${platform}" "$pkg_dir"
+        continue
+    fi
     echo "  Publishing @mochiexists/ovm-${platform}@${VERSION}..."
     cd "$pkg_dir" && publish_pkg && cd -
 done
@@ -177,7 +298,12 @@ for platform in $PLATFORMS; do
     rm -f npm/ovm/package.json.bak
 done
 
-echo "  Publishing @mochiexists/ovm@${VERSION}..."
-cd npm/ovm && publish_pkg && cd -
+if already_published "@mochiexists/ovm"; then
+    echo "  @mochiexists/ovm@${VERSION} is already on the registry; verifying rather than skipping."
+    require_published_matches "@mochiexists/ovm" npm/ovm
+else
+    echo "  Publishing @mochiexists/ovm@${VERSION}..."
+    cd npm/ovm && publish_pkg && cd -
+fi
 
 echo "Done."

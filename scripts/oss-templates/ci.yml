@@ -57,8 +57,21 @@ jobs:
           bash tests/scripts/codex-migration-manifest.sh
           bash tests/scripts/codex-schema-workflow.sh
           bash tests/scripts/sync-codex-migration-manifest.sh
+          bash tests/scripts/canary-missing-version.sh
           bash tests/scripts/export-oss.sh
           bash tests/scripts/update-registry-smoke.sh
+
+  hygiene:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # The release workflow gates on this workflow being green, so a workflow
+      # file that no longer parses (or an expression that silently evaluates to
+      # empty) must fail here rather than at release time.
+      - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
 
   e2e:
     name: E2E command matrix (${{ matrix.os }})

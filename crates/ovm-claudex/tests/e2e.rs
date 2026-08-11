@@ -130,6 +130,15 @@ fn fake_release_server(version: &'static str, archive: Vec<u8>) -> ReleaseServer
             .next()
             .and_then(|line| line.split_whitespace().nth(1))
             .unwrap_or("");
+        // The OVM registry's verdict: auto-updates only act on versions the
+        // registry vouches for, so the mock vouches for its own release.
+        if path.ends_with("/registry.json") {
+            return http_response(
+                "application/json",
+                format!(r#"{{"products":[{{"product":"cliproxyapi","latest":"{version}"}}]}}"#)
+                    .as_bytes(),
+            );
+        }
         if path.ends_with("/releases/latest") {
             counters.0.fetch_add(1, Ordering::SeqCst);
             return http_response(
@@ -371,6 +380,28 @@ fn fake_ovm(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::
 }
 
 #[test]
+fn version_flag_answers_on_a_bare_machine() {
+    // The release smoke runs every bundle binary with --version on a machine
+    // with no proxy and no claude install; --version must never fall through
+    // to the launch path.
+    let temp = tempfile::tempdir().unwrap();
+    for flag in ["--version", "-V"] {
+        let output = Command::cargo_bin("ovm-claudex")
+            .unwrap()
+            .arg(flag)
+            .env("OVM_CLAUDEX_HOME", temp.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{flag} must succeed before setup");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(concat!("claudex ", env!("CARGO_PKG_VERSION"))),
+            "{flag} must print the claudex version, got: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn doctor_fails_clearly_before_setup() {
     let temp = tempfile::tempdir().unwrap();
     let output = Command::cargo_bin("ovm-claudex")
@@ -525,8 +556,8 @@ fn launch_prepares_newer_managed_proxy_once_without_interrupting_legacy_daemon()
             .env("PATH", &path_env)
             .env("OVM_GITHUB_API_URL", &releases.base_url)
             .env("OVM_CLAUDEX_DOWNLOAD_URL", &releases.base_url)
-            // The mock has no /registry.json (404) — the registry lookup must
-            // fail open onto the GitHub releases path this test asserts on.
+            // The mock's /registry.json vouches for 7.2.74; the automatic
+            // path acts only on that verdict.
             .env("OVM_CLAUDEX_REGISTRY_URL", &releases.base_url)
             .output()
             .unwrap();
@@ -554,7 +585,10 @@ fn launch_prepares_newer_managed_proxy_once_without_interrupting_legacy_daemon()
     )
     .unwrap();
     assert_eq!(pending["version"], "7.2.74");
-    assert_eq!(releases.latest_requests.load(Ordering::SeqCst), 1);
+    // The registry answered, so the automatic path must never have consulted
+    // upstream's releases/latest; one download proves the second launch used
+    // the fresh update cache instead of re-fetching.
+    assert_eq!(releases.latest_requests.load(Ordering::SeqCst), 0);
     assert_eq!(releases.asset_requests.load(Ordering::SeqCst), 1);
     assert_eq!(releases.checksum_requests.load(Ordering::SeqCst), 1);
 }
@@ -787,6 +821,75 @@ fn failed_proxy_activation_rolls_back_current_and_restarts_previous_binary() {
     );
     assert!(temp.path().join("proxy/pending-update.json").is_file());
 
+    let _ = std::process::Command::new("kill")
+        .arg(pid_record["pid"].as_u64().unwrap().to_string())
+        .status();
+}
+
+/// Without a registry verdict, the automatic path must stand down — even when
+/// upstream GitHub is reachable and offers a newer release. Upstream's own
+/// latest + its same-publisher checksum is not independent provenance for a
+/// binary that will hold provider OAuth data; only explicit installs may take
+/// that fallback (and they say so).
+#[test]
+#[cfg(unix)]
+fn auto_update_stands_down_when_the_registry_cannot_vouch() {
+    let _serial = serialize_process_test();
+    let temp = tempfile::tempdir().unwrap();
+    let proxy_port = unused_local_port();
+    seeded_home(temp.path(), proxy_port);
+    std::fs::create_dir_all(temp.path().join("proxy")).unwrap();
+    std::fs::write(
+        temp.path().join("proxy/config.yaml"),
+        format!("port: {proxy_port}\napi-keys:\n  - \"e2e-key\"\n"),
+    )
+    .unwrap();
+    let (bin, _, _) = fake_ovm(temp.path());
+    let path_env = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let old_binary = temp.path().join("proxy/versions/7.2.72/cliproxyapi");
+    compile_fake_proxy(&old_binary);
+    std::os::unix::fs::symlink(&old_binary, temp.path().join("proxy/current")).unwrap();
+    let releases = fake_release_server(
+        "7.2.74",
+        proxy_tarball(&std::fs::read(&old_binary).unwrap()),
+    );
+
+    let output = Command::cargo_bin("ovm-claudex")
+        .unwrap()
+        .args(["-p", "hello"])
+        .env("OVM_CLAUDEX_HOME", temp.path())
+        .env("PATH", path_env)
+        .env("OVM_GITHUB_API_URL", &releases.base_url)
+        .env("OVM_CLAUDEX_DOWNLOAD_URL", &releases.base_url)
+        // Dead port: the registry cannot answer, so nothing is verified.
+        .env("OVM_CLAUDEX_REGISTRY_URL", "http://127.0.0.1:1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "launch must proceed on the current proxy: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::canonicalize(temp.path().join("proxy/current")).unwrap(),
+        std::fs::canonicalize(&old_binary).unwrap(),
+        "auto-update must not activate an upstream-vouched build"
+    );
+    assert!(
+        !temp.path().join("proxy/versions/7.2.74").exists(),
+        "no unverified version may even be staged automatically"
+    );
+    assert!(!temp.path().join("proxy/pending-update.json").exists());
+
+    let pid_record: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(temp.path().join("proxy/cliproxyapi.pid")).unwrap(),
+    )
+    .unwrap();
     let _ = std::process::Command::new("kill")
         .arg(pid_record["pid"].as_u64().unwrap().to_string())
         .status();
@@ -1033,16 +1136,16 @@ fn launch_fails_open_when_release_lookup_is_offline() {
         .env("OVM_CLAUDEX_HOME", temp.path())
         .env("PATH", path_env)
         .env("OVM_GITHUB_API_URL", "http://127.0.0.1:1")
-        // Point the registry at the same dead port so the lookup fails open
-        // to the (also offline) GitHub path instead of reaching real ovm.sh.
+        // Registry dead too: with no verdict available the automatic path
+        // stands down quietly and the launch proceeds on the installed proxy.
         .env("OVM_CLAUDEX_REGISTRY_URL", "http://127.0.0.1:1")
         .output()
         .unwrap();
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("continuing with the installed proxy"),
-        "{stderr}"
+        !stderr.contains("Prepared cliproxyapi"),
+        "offline launch must not stage an update: {stderr}"
     );
 }
 

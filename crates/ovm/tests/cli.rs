@@ -38,6 +38,63 @@ fn bare_ovm_shows_short_help() {
     assert!(stdout.contains("Run `ovm help`"));
 }
 
+/// `ovm help` is hand-written, so a command added to the clap enum appears in
+/// `ovm --help` and nowhere a human would look. `ovm story` shipped as a
+/// headline feature in 0.1.1, was advertised by the installer, and was absent
+/// from `ovm help` entirely — nothing failed, it was simply undiscoverable.
+/// Every non-hidden subcommand must be named in the hand-written overview.
+#[test]
+fn every_command_is_documented_in_the_written_help() {
+    let clap_help = ovm()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let clap_help = String::from_utf8_lossy(&clap_help).to_string();
+    let written = ovm()
+        .arg("help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let written = console::strip_ansi_codes(&String::from_utf8_lossy(&written)).to_string();
+
+    // Commands clap advertises, which already excludes `hide = true` ones.
+    let commands: Vec<String> = clap_help
+        .lines()
+        .skip_while(|line| !line.starts_with("Commands:"))
+        .skip(1)
+        .take_while(|line| line.starts_with("  ") || line.trim().is_empty())
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|word| word.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        commands.len() > 10,
+        "parsed only {} commands from `ovm --help`; the parser has drifted:\n{clap_help}",
+        commands.len()
+    );
+
+    // `list` is documented under its `ls` alias, which is what users type.
+    let documented_as_alias = |command: &str| command == "list" && written.contains(" ls ");
+
+    let missing: Vec<&String> = commands
+        .iter()
+        .filter(|command| {
+            !written.contains(&format!("  {command} ")) && !documented_as_alias(command)
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these commands exist but `ovm help` never mentions them: {missing:?}\n\
+         Add them to crates/ovm/src/commands/help.rs — a command users cannot \
+         find is a command that does not ship.\n{written}"
+    );
+}
+
 /// The bare-`ovm` screen is the first thing a new user sees, and it grew to ~25
 /// commands, 11 launch shortcuts and 18 examples before anyone noticed. This
 /// ceiling is what stops it creeping back: anything new belongs in `ovm help`.
@@ -893,18 +950,32 @@ fn bundled_plugin_dispatches_via_sibling_when_absent_from_path() {
 }
 
 #[test]
-fn ls_remote_flag_hits_registry_or_fallback() {
-    // This test requires network (to hit either the registry or upstream).
-    // Skip if OVM_SKIP_NETWORK_TESTS is set.
-    if std::env::var("OVM_SKIP_NETWORK_TESTS").is_ok() {
-        return;
-    }
-    // We don't assert on content — just that it exits successfully if the network is up.
-    // Failure here is acceptable since we can't guarantee network access.
-    let _ = ovm()
+fn ls_remote_lists_registry_versions() {
+    // A local registry mock instead of the live network: the old form of this
+    // test asserted nothing (any exit code passed), which proved nothing.
+    let mut server = mockito::Server::new();
+    let _mock = server
+        .mock("GET", "/claude.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+                "versions": [
+                    {"version": "2.1.90", "date": "2026-03-29"},
+                    {"version": "2.1.91", "date": "2026-04-01"}
+                ]
+            }"#,
+        )
+        .create();
+
+    ovm()
+        .env("OVM_REGISTRY_BASE_URL", server.url())
         .args(["ls", "claude", "--remote"])
         .timeout(std::time::Duration::from_secs(15))
-        .assert();
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2.1.90"))
+        .stdout(predicate::str::contains("2.1.91"));
 }
 
 /// `ovm ls codex | head` must not panic.

@@ -2,7 +2,7 @@
   "product": "cliproxyapi",
   "display_name": "CLIProxyAPI",
   "source": "github:router-for-me/CLIProxyAPI",
-  "updated_at": "2026-08-10T05:49:31Z",
+  "updated_at": "2026-08-10T20:29:29Z",
   "dist_tags": {
     "latest": "7.2.123"
   },
@@ -354,34 +354,6 @@
     {
       "version": "5.1.18",
       "date": "2025-09-10"
-    },
-    {
-      "version": "5.1.19",
-      "date": "2025-09-10"
-    },
-    {
-      "version": "5.1.20",
-      "date": "2025-09-11"
-    },
-    {
-      "version": "5.1.21",
-      "date": "2025-09-11"
-    },
-    {
-      "version": "5.1.22",
-      "date": "2025-09-11"
-    },
-    {
-      "version": "5.1.23",
-      "date": "2025-09-12"
-    },
-    {
-      "version": "5.1.24",
-      "date": "2025-09-12"
-    },
-    {
-      "version": "5.1.25",
-      "date": "2025-09-13"
     },
     {
       "version": "6.3.54",

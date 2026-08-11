@@ -53,6 +53,14 @@ fn main() {
             print_help();
             Ok(())
         }
+        // Answered here rather than passed through: launch would need a
+        // configured proxy and claude install just to print a number, and
+        // the release smoke runs every bundle binary with --version on a
+        // bare machine.
+        Some("--version") | Some("-V") => {
+            println!("claudex {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Some("launch") => launch::run(&args[1..]),
         _ => launch::run(&args),
     };
@@ -71,15 +79,39 @@ fn print_help() {
     println!();
     println!("Usage: ovm claudex [command] [claude args…]");
     println!();
+    // One gutter width for every row: `feedback-id` is the longest name, and
+    // hand-spaced columns had already drifted out of alignment.
     println!("Commands:");
-    println!("  setup    Interactive first-time setup (proxy, OAuth, isolated Claude home)");
-    println!("  launch   Launch Claude Code against the proxy (default when no command given)");
-    println!("  doctor   Check proxy, config, and isolation health");
-    println!("  feedback Preview or explicitly send correlated native Codex feedback");
-    println!("  feedback-id  Print this history session's local feedback correlation ID");
-    println!("  stop     Stop the background proxy");
-    println!("  uninstall  Stop the proxy and remove shims (--purge deletes all data)");
-    println!("  update   Install/update the managed proxy binary (optionally: update <version>)");
+    for (command, blurb) in [
+        (
+            "setup",
+            "Interactive first-time setup (proxy, OAuth, isolated Claude home)",
+        ),
+        (
+            "launch",
+            "Launch Claude Code against the proxy (default when no command given)",
+        ),
+        ("doctor", "Check proxy, config, and isolation health"),
+        (
+            "feedback",
+            "Preview or explicitly send correlated native Codex feedback",
+        ),
+        (
+            "feedback-id",
+            "Print this history session's local feedback correlation ID",
+        ),
+        ("stop", "Stop the background proxy"),
+        (
+            "uninstall",
+            "Stop the proxy and remove shims (--purge deletes all data)",
+        ),
+        (
+            "update",
+            "Install/update the managed proxy binary (optionally: update <version>)",
+        ),
+    ] {
+        println!("  {command:<12} {blurb}");
+    }
     println!();
     println!("Anything else is passed through to Claude Code, e.g. `claudex --continue`.");
     println!("Launch flags: --fast (priority tier), --yolo (skip permissions).");

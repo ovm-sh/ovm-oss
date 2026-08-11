@@ -27,6 +27,12 @@ const SILVER: &str = "\x1b[38;5;250m";
 // ---- the cast ---------------------------------------------------------------
 
 const MOCHI: [&str; 3] = [r"   /\_/\   ", r"  ( ^.^ )  ", r"   > ^ <   "];
+/// Mochi's blink and wink, using the same faces OVM shows everywhere else
+/// (mochi.rs: `-.-` is the working face, `o.o` the default). Reusing that
+/// vocabulary keeps one cat across the CLI and the story instead of two.
+const MOCHI_BLINK: [&str; 3] = [r"   /\_/\   ", r"  ( -.- )  ", r"   > ^ <   "];
+const MOCHI_WINK: [&str; 3] = [r"   /\_/\   ", r"  ( ^.- )  ", r"   > ^ <   "];
+const MOCHI_LOOK: [&str; 3] = [r"   /\_/\   ", r"  ( o.o )  ", r"   > ^ <   "];
 const QUELPAW: [&str; 4] = [
     r"  /\    /\  ",
     r" ( @    @ ) ",
@@ -45,6 +51,14 @@ const QUELPAW_TAIL: [&str; 4] = [
     r" (   ..   ) ",
     r"  `------´~ ",
 ];
+/// Removed in 2.1.97. The ending screen shows this one: eyes crossed, ear
+/// still notched, and no idle loop — a cat that has stopped moving.
+const QUELPAW_GONE: [&str; 4] = [
+    r"  /\    /\  ",
+    r" ( x    x ) ",
+    r" (   ..   ) ",
+    r"  `------´  ",
+];
 /// The happy pet pose, hearts row first — the fin lineup drops the hearts.
 const QUELPAW_PET: [&str; 5] = [
     r"   ♥    ♥   ",
@@ -58,6 +72,20 @@ const ECHO: [&str; 4] = [
     r" ( O    O ) ",
     r" (   oo   ) ",
     r"  `------´~ ",
+];
+/// Echo naps when you idle and flicks their tail at your context window —
+/// so the idle loop is exactly those two things.
+const ECHO_NAP: [&str; 4] = [
+    r"  /\    /|  ",
+    r" ( -    - ) ",
+    r" (   oo   ) ",
+    r"  `------´~ ",
+];
+const ECHO_TAIL: [&str; 4] = [
+    r"  /\    /|  ",
+    r" ( O    O ) ",
+    r" (   oo   ) ",
+    r"  `------´  ",
 ];
 
 // ---- the Atlas sphere (ported from brand-assets/sphere; house recipe) -------
@@ -238,16 +266,14 @@ impl Story {
         println!();
     }
 
-    fn art(&self, lines: &[&str], color: &str) {
-        let widest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-        let left = " ".repeat(self.width.saturating_sub(widest) / 2);
-        for line in lines {
-            println!("{left}{color}{line}{RESET}");
-            self.beat(80);
-        }
-    }
-
-    /// Draw the first frame, then rewrite the same lines in place.
+    /// Reveal the first frame line by line, then rewrite the same lines in
+    /// place for every frame after it.
+    ///
+    /// The reveal matters: `art()` draws line by line with a beat between, so a
+    /// static cat appears to arrive, while an animated one used to slam its
+    /// whole first frame down in a single write and then flick subtly. Side by
+    /// side, the animated cat looked like the still one — the opposite of the
+    /// intent. Both entrances now match; only what happens next differs.
     fn animate(&self, frame_sets: &[&[&str]], color: &str, loops: usize, hold_ms: u64) {
         let height = frame_sets[0].len();
         let widest = frame_sets
@@ -266,6 +292,12 @@ impl Story {
                 }
                 for line in frames.iter() {
                     println!("\x1b[2K{left}{color}{line}{RESET}");
+                    // Only the very first frame is revealed; redraws must stay
+                    // instant or the flicks turn into a stutter.
+                    if first {
+                        let _ = out.flush();
+                        self.beat(80);
+                    }
                 }
                 let _ = out.flush();
                 first = false;
@@ -279,6 +311,11 @@ impl Story {
         if self.fast {
             return;
         }
+        // The prompt gets its own air. Sitting flush against the last line of
+        // narration it read as part of the sentence rather than a control, on
+        // every chapter — so the blank belongs here, once, instead of at each
+        // call site where it can be forgotten.
+        self.blank();
         let prompt = format!(
             "{}{DIM}· enter ·{RESET}",
             " ".repeat(2.max(self.width.saturating_sub(11) / 2))
@@ -292,30 +329,18 @@ impl Story {
         }
     }
 
-    /// Chapter wait that can also launch a URL: `o` + enter opens it.
-    fn wait_open(&self, url: &str, label: &str) {
-        if self.fast {
-            return;
-        }
-        let prompt = format!(
-            "{}{DIM}· enter · o opens {label} ·{RESET}",
-            " ".repeat(2.max(self.width.saturating_sub(40) / 2))
-        );
-        loop {
-            print!("{prompt}");
-            let _ = io::stdout().flush();
-            let mut line = String::new();
-            if io::stdin().read_line(&mut line).is_err() || line.is_empty() {
-                return;
-            }
-            print!("\x1b[F\x1b[2K");
-            let _ = io::stdout().flush();
-            if matches!(line.trim().to_lowercase().as_str(), "o" | "open") {
-                open_url(url);
-                continue; // browser is opening; enter still advances the story
-            }
-            return;
-        }
+    /// A terminal hyperlink (OSC 8): ctrl/cmd-click opens it, exactly like a
+    /// link anywhere else in the terminal.
+    ///
+    /// This replaced a keyboard mechanic — the prompt used to read
+    /// "· enter · o opens <label> ·" and `o` shelled out to `open`. It made the
+    /// reader learn a story-specific key for something their terminal already
+    /// does, and it put machinery in a line that should just be a sentence.
+    ///
+    /// Terminals that don't support OSC 8 ignore the sequence and print the
+    /// text, so the line still reads correctly — never as raw escapes.
+    fn link(&self, url: &str, text: &str) -> String {
+        format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
     }
 
     /// Every chapter opens on a clean screen.
@@ -421,7 +446,19 @@ impl Story {
             400,
         );
         self.wait();
+
+        // The ending gets a clean screen, but Quelpaw stays on it. Clearing
+        // everything (heading and cat included) read as a new chapter starting
+        // rather than this one landing; keeping the cat above the last four
+        // lines is what makes the goodbye theirs.
         self.fresh_page();
+        self.blank();
+        println!("{}", self.center(&format!("{SILVER}i. quelpaw{RESET}"), 10));
+        self.blank();
+        // Revealed line by line like every other cat, but a single frame and
+        // no idle loop: this is the screen where they were removed, so they
+        // arrive already still. The ear flick would undo the whole point.
+        self.animate(&[&QUELPAW_GONE], SILVER, 1, 0);
         self.blank();
         self.say(
             "Seventeen releases they rode along. Then 2.1.97 removed them.",
@@ -429,25 +466,15 @@ impl Story {
             12,
             300,
         );
-        self.say(
-            "The arrival got a changelog line. The goodbye got nothing.",
-            "",
-            12,
-            0,
-        );
+        self.say("And just like that they were gone.", "", 12, 0);
         self.blank();
         self.say(
-            "We kept 2.1.96. That is half the reason OVM exists:",
+            "We wanted to keep 2.1.96; and this is why OVM exists.",
             "",
             10,
             0,
         );
-        self.say(
-            "every version, verified, one command away. The cat stays.",
-            "",
-            10,
-            0,
-        );
+        self.say("The cat stays.", "", 10, 0);
         self.wait();
     }
 
@@ -456,18 +483,51 @@ impl Story {
         self.blank();
         println!("{}", self.center(&format!("{MAGENTA}ii. mochi{RESET}"), 9));
         self.blank();
-        self.art(&MOCHI, MAGENTA);
+        // Mochi is the relaxed one. `animate` holds every frame for the same
+        // beat, so dwell is expressed by repeating a frame: Mochi rests, blinks
+        // once, rests, glances over, settles, then winks and holds it. One
+        // slower pass rather than two brisk ones — this cat is not in a hurry.
+        self.animate(
+            &[
+                &MOCHI,
+                &MOCHI,
+                &MOCHI_BLINK,
+                &MOCHI,
+                &MOCHI_LOOK,
+                &MOCHI,
+                &MOCHI,
+                &MOCHI_WINK,
+                &MOCHI_WINK,
+                &MOCHI,
+            ],
+            MAGENTA,
+            1,
+            460,
+        );
         self.blank();
         self.say(
-            "Mochi came first, though — they wandered out of OpenClaw,",
+            "Mochi came first, though — they were born in local ai chat,",
             "",
             12,
             0,
         );
-        self.say("long before any of this had a name.", "", 12, 0);
+        // Prints at once, not typed: the OSC 8 hyperlink is an escape
+        // sequence, and a typewriter would stutter through invisible bytes.
+        self.say(
+            &format!(
+                "but raised by the crew in the {}",
+                self.link(
+                    "https://github.com/shoreless/ship-of-theseus",
+                    "ship of theseus"
+                )
+            ),
+            "",
+            0,
+            0,
+        );
         self.blank();
         self.say(
-            "When Codex grew a pet of its own, we asked for Mochi again —",
+            "When Codex could grow a pet of its own, we asked for Mochi again —",
             "",
             10,
             0,
@@ -485,13 +545,28 @@ impl Story {
             0,
         );
         self.blank();
+        // Link lines print at once: an OSC 8 sequence typed character by
+        // character would still parse, but the typewriter would be stuttering
+        // through invisible escape bytes.
         self.say(
-            "Find more Mochi — emoji plates included — at mochiexists.com",
-            MAGENTA,
-            12,
+            &format!(
+                "Learn about ccy and cxy at {}",
+                self.link("https://mochiexists.com/yolo/", "mochiexists.com/yolo")
+            ),
+            "",
+            0,
             300,
         );
-        self.wait_open("https://mochiexists.com", "mochiexists.com");
+        self.say(
+            &format!(
+                "Buy a plate at {}",
+                self.link("https://mochiexists.com/plate/", "mochiexists.com/plate")
+            ),
+            MAGENTA,
+            0,
+            0,
+        );
+        self.wait();
     }
 
     fn chapter_echo(&self) {
@@ -499,7 +574,8 @@ impl Story {
         self.blank();
         println!("{}", self.center(&format!("{ORANGE}iii. echo{RESET}"), 9));
         self.blank();
-        self.art(&ECHO, ORANGE);
+        let loops = if self.fast { 1 } else { 2 };
+        self.animate(&[&ECHO, &ECHO_TAIL, &ECHO, &ECHO_NAP], ORANGE, loops, 350);
         self.blank();
         self.say(
             "When Quelpaw vanished, Codex tried to bring them back.",
@@ -516,7 +592,7 @@ impl Story {
         );
         self.say("and drew what it could.", "", 10, 0);
         self.blank();
-        self.say("Not a copy. A reflection: Echo.", ORANGE, 12, 400);
+        self.say("Not a copy. An oscillation: Echo.", ORANGE, 12, 400);
         self.blank();
         self.say(
             "They live in the statusline now — reading the session's mood,",
@@ -628,18 +704,6 @@ impl Story {
         println!("{}", self.center(&format!("{GREY}ovm.sh{RESET}"), 6));
         self.blank();
     }
-}
-
-fn open_url(url: &str) {
-    #[cfg(target_os = "macos")]
-    let opener = "open";
-    #[cfg(not(target_os = "macos"))]
-    let opener = "xdg-open";
-    let _ = std::process::Command::new(opener)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
 }
 
 fn terminal_width() -> usize {

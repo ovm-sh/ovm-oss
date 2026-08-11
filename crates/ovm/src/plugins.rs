@@ -118,8 +118,15 @@ pub fn dispatch(
     path: &std::path::Path,
     args: &[String],
 ) -> crate::error::Result<std::process::ExitStatus> {
-    std::process::Command::new(path)
-        .args(args)
+    let mut command = std::process::Command::new(path);
+    command.args(args);
+    // Bundled plugins that need to call back into OVM must not rediscover it
+    // through PATH: an earlier lookalike would inherit any narrowly scoped
+    // credential the plugin intended for the trusted control plane.
+    if let Ok(executable) = std::env::current_exe().and_then(std::fs::canonicalize) {
+        command.env("OVM_EXECUTABLE", executable);
+    }
+    command
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
@@ -264,6 +271,33 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("failed to run plugin"), "{message}");
         assert!(message.contains("ovm-broken"), "{message}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dispatch_injects_the_exact_running_ovm_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let plugin = dir.path().join("ovm-record-parent");
+        let output = dir.path().join("parent.txt");
+        std::fs::write(
+            &plugin,
+            "#!/bin/sh\nprintf '%s' \"$OVM_EXECUTABLE\" > \"$1\"\n",
+        )
+        .expect("write plugin");
+        std::fs::set_permissions(&plugin, std::fs::Permissions::from_mode(0o755))
+            .expect("make executable");
+
+        let status = super::dispatch(&plugin, &[output.display().to_string()]).expect("dispatch");
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(output).expect("recorded executable"),
+            std::fs::canonicalize(std::env::current_exe().unwrap())
+                .unwrap()
+                .display()
+                .to_string()
+        );
     }
 
     #[test]

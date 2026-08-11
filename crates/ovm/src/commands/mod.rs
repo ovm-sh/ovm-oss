@@ -18,6 +18,7 @@ pub mod refresh_cache;
 pub mod select;
 pub mod self_autoupdate;
 pub mod self_manage;
+pub mod self_uninstall;
 pub mod self_update;
 pub mod shortcuts;
 pub mod stats;

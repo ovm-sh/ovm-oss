@@ -48,6 +48,10 @@ concurrency:
 jobs:
   metadata:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Read workflow-run conclusions for the tagged SHA (the CI-green gate).
+      actions: read
     outputs:
       prerelease: ${{ steps.release.outputs.prerelease }}
       final_prerelease: ${{ steps.release.outputs.final_prerelease }}
@@ -186,6 +190,49 @@ jobs:
             exit 1
           }
 
+      # The public tag must point INTO main's history and its commit must have
+      # passed the full public CI workflow. Without this, a tag pushed beside
+      # main — or onto a commit whose CI is red — still rebuilds and attests
+      # artifacts that no public gate ever proved. Fail closed on both checks.
+      - name: Require the public tag on main with full CI green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # fetch-depth 0 above brought every branch, so ancestry is answerable
+          # locally.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $RELEASE_TAG ($GITHUB_SHA) is not an ancestor of main — public releases are cut only from main's history"
+            exit 1
+          fi
+          # Constrained to the push-to-main run deliberately: a pull_request run
+          # for the same SHA proves a merge preview, not the branch state, and
+          # must never satisfy this gate. A rerun of a failed attempt reports as
+          # in-progress, which means "keep waiting", never "already rejected".
+          for attempt in $(seq 1 30); do
+            summary=$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100" \
+              --jq '([.workflow_runs[] | select(.status == "completed" and .conclusion == "success")] | length),
+                    ([.workflow_runs[] | select(.status != "completed")] | length),
+                    (.workflow_runs | length)')
+            read -r green pending total <<<"$(tr '\n' ' ' <<<"$summary")"
+            if [ "$green" -gt 0 ]; then
+              echo "Full CI is green for $GITHUB_SHA."
+              break
+            fi
+            if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              echo "::error::full CI concluded without success for $GITHUB_SHA — refusing to release an unproven commit"
+              exit 1
+            fi
+            if [ "$attempt" = 30 ]; then
+              echo "::error::no successful CI run for $GITHUB_SHA after 30 minutes — refusing to release an unproven commit"
+              exit 1
+            fi
+            echo "CI for $GITHUB_SHA not green yet ($pending in flight, $total total; attempt $attempt/30); waiting 60s…"
+            sleep 60
+          done
+
   test:
     needs: metadata
     if: needs.metadata.outputs.stage == 'draft'
@@ -194,7 +241,12 @@ jobs:
       # macOS run mid-flight, or a real failure arrives with half the picture.
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os:
+          - macos-latest
+          # ubuntu-22.04 deliberately, not ubuntu-latest: it is the published
+          # glibc floor (2.35) the Linux artifacts below are built against, so
+          # the release tests must run on that same baseline.
+          - ubuntu-22.04
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -213,10 +265,18 @@ jobs:
             os: macos-latest
           - target: x86_64-apple-darwin
             os: macos-15-intel
+          # Linux builds are pinned to ubuntu-22.04, NOT ubuntu-latest: the
+          # builder's glibc becomes the artifact's minimum. ubuntu-latest
+          # (24.04) stamped GLIBC_2.39 into every published Linux binary, which
+          # made installs succeed and the executable fail to start on Ubuntu
+          # 22.04, Debian 12, and RHEL 9. 22.04 fixes the floor at glibc 2.35
+          # and the smoke step below proves each archive actually runs there.
+          # Bumping this floor is a breaking change: update the documented
+          # baseline in RELEASING.md and install.sh's guard first.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -231,13 +291,105 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Install Linux cross compiler
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Build and package public tag
+        # qemu-user runs the produced aarch64 binaries in the smoke step below
+        # against the cross sysroot's glibc — the only runtime proof this
+        # cross-compiled artifact gets before users download it.
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
+      - name: Build public tag
         shell: bash
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      # Developer ID signing + notarization, macOS legs only. Without this the
+      # published binaries carry ad-hoc signatures with no TeamIdentifier and
+      # fail spctl assessment on managed Macs and browser downloads (curl|tar
+      # never sets the quarantine bit, which is why installs still worked).
+      # Gated on secret presence so forks and secretless rebuilds still produce
+      # artifacts — but loudly, never as a silent downgrade.
+      - name: Sign binaries with Developer ID (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          TARGET: ${{ matrix.target }}
         run: |
-          cargo build --release --locked --target "${{ matrix.target }}"
+          set -euo pipefail
+          if [ -z "${APPLE_CERT_P12_BASE64:-}" ]; then
+            echo "::warning::APPLE_CERT_P12_BASE64 is not configured — binaries will ship AD-HOC SIGNED (no Developer ID, no notarization)."
+            echo "HAS_APPLE_SIGNING=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/ovm-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$APPLE_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S 'apple-tool:,apple:' \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" |
+            awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::certificate imported but no 'Developer ID Application' identity found"
+            exit 1
+          fi
+          echo "Signing as: $IDENTITY"
+          while IFS= read -r binary; do
+            codesign --force --options runtime --timestamp \
+              --sign "$IDENTITY" "target/$TARGET/release/$binary"
+            codesign --verify --strict "target/$TARGET/release/$binary"
+          done < <(scripts/bundle-manifest.sh binaries)
+          echo "HAS_APPLE_SIGNING=true" >> "$GITHUB_ENV"
+
+      - name: Notarize signed binaries (macOS)
+        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_API_KEY_ID:-}" ]; then
+            echo "::error::binaries are Developer ID signed but APPLE_API_KEY_ID is missing — refusing to ship signed-but-unnotarized artifacts (worse than a clean skip: Gatekeeper treats them as suspicious)."
+            exit 1
+          fi
+          KEY_FILE="$RUNNER_TEMP/notary-key.p8"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$KEY_FILE"
+          SUBMISSION="$RUNNER_TEMP/ovm-notarize.zip"
+          while IFS= read -r binary; do
+            zip -j "$SUBMISSION" "target/$TARGET/release/$binary"
+          done < <(scripts/bundle-manifest.sh binaries)
+          xcrun notarytool submit "$SUBMISSION" \
+            --key "$KEY_FILE" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
+            --wait --timeout 30m --output-format json | tee "$RUNNER_TEMP/notary-result.json"
+          rm -f "$KEY_FILE"
+          # --wait exiting zero is not proof of acceptance: assert the
+          # terminal status explicitly so an Invalid submission can never
+          # ship signed-but-unnotarized with every gate green.
+          python3 - "$RUNNER_TEMP/notary-result.json" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))
+          status = result.get("status")
+          if status != "Accepted":
+              raise SystemExit(f"notarization status is {status!r}, not Accepted — submission {result.get('id')}")
+          print(f"notarization Accepted: submission {result.get('id')}")
+          PY
+          # Bare Mach-O binaries cannot be stapled (no bundle to hold the
+          # ticket); Gatekeeper fetches the notarization record online, which
+          # is exactly what this submission created.
+
+      - name: Package public tag
+        shell: bash
+        run: |
           scripts/bundle-manifest.sh validate
           mkdir -p dist/bundle
           cp crates/ovm/ovm-bundle-v1.tsv dist/bundle/
@@ -251,6 +403,43 @@ jobs:
           archive="ovm-${{ matrix.target }}.tar.gz"
           tar -C dist/bundle -czf "dist/$archive" "${entries[@]}"
           (cd dist && shasum -a 256 "$archive" > "$archive.sha256")
+
+      # Runtime smoke of the archive users download, on every leg. Building and
+      # packing proves nothing about the dynamic loader: the published v0.1.1
+      # Linux binaries installed cleanly everywhere and then failed to start on
+      # any glibc older than the builder's. Each binary must load and exit 0 on
+      # --version, and the main binary must report the tag's version. The
+      # aarch64 Linux leg is cross-compiled, so it runs under qemu-user against
+      # the cross sysroot's glibc — same 2.35 floor as the builder.
+      - name: Smoke-run packaged archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          SMOKE_DIR=$(mktemp -d)
+          tar xzf "dist/ovm-$TARGET.tar.gz" -C "$SMOKE_DIR"
+
+          RUN=""
+          if [[ "$TARGET" == "aarch64-unknown-linux-gnu" ]]; then
+            RUN="qemu-aarch64 -L /usr/aarch64-linux-gnu"
+          fi
+
+          while IFS= read -r binary; do
+            echo "smoke: $binary --version"
+            # shellcheck disable=SC2086
+            $RUN "$SMOKE_DIR/$binary" --version
+          done < <(scripts/bundle-manifest.sh binaries)
+
+          EXPECTED_VERSION="${RELEASE_TAG#v}"
+          # shellcheck disable=SC2086
+          REPORTED=$($RUN "$SMOKE_DIR/ovm" --version)
+          if [[ "$REPORTED" != *"$EXPECTED_VERSION"* ]]; then
+            echo "ovm --version reported '$REPORTED', expected it to contain '$EXPECTED_VERSION'" >&2
+            exit 1
+          fi
+
       - name: Attest archive built from this public tag
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
@@ -266,6 +455,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -291,6 +482,26 @@ jobs:
             actual=$(shasum -a 256 "$archive" | awk '{print $1}')
             [[ "$expected" == "$actual" ]]
           done
+      # One SPDX document for the whole workspace, generated from the locked
+      # dependency graph at this public tag. Consumers get the full transitive
+      # dependency list alongside the checksums and provenance attestations.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Write SBOM asset (SPDX)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          cargo install cargo-sbom --version 0.10.0 --locked
+          cargo sbom --output-format spdx_json_2_3 > "artifacts/ovm-$RELEASE_TAG.spdx.json"
+          python3 -c "import json,sys; json.load(open(sys.argv[1]))" "artifacts/ovm-$RELEASE_TAG.spdx.json"
+          (cd artifacts && shasum -a 256 "ovm-$RELEASE_TAG.spdx.json" > "ovm-$RELEASE_TAG.spdx.json.sha256")
+
+      - name: Attest SBOM built from this public tag
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: artifacts/ovm-${{ inputs.tag }}.spdx.json
+
       - name: Bind draft creation to the unchanged public tag
         shell: bash
         run: |
@@ -375,7 +586,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           target_commitish: ${{ github.sha }}
           overwrite_files: true
-          files: artifacts/*/ovm-*.tar.gz*
+          files: |
+            artifacts/*/ovm-*.tar.gz*
+            artifacts/ovm-*.spdx.json*
       - name: Verify every uploaded draft asset
         shell: bash
         env:
@@ -440,9 +653,89 @@ jobs:
           echo "Draft $GITHUB_REF_NAME is staged and verified. Validate it," \
             "then dispatch stage=finalize to publish it once with its final state."
 
-  finalize:
+  verify-finalize-darwin:
     needs: metadata
     if: needs.metadata.outputs.stage == 'finalize'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify the staged Darwin assets against the approved Apple team
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERT_P12_BASE64:-}" ]; then
+            echo "::error::APPLE_CERT_P12_BASE64 is required to approve Darwin signing before finalize"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/ovm-finalize-signing.keychain-db"
+          keychain_password=$(uuidgen)
+          trap 'security delete-keychain "$keychain" >/dev/null 2>&1 || true' EXIT
+          security create-keychain -p "$keychain_password" "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$APPLE_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/finalize-cert.p12"
+          security import "$RUNNER_TEMP/finalize-cert.p12" -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/finalize-cert.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" | \
+            awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          expected_team=$(sed -n 's/.*(\([A-Z0-9][A-Z0-9]*\))$/\1/p' <<<"$identity")
+          if [ -z "$identity" ] || [ -z "$expected_team" ]; then
+            echo "::error::the configured signing certificate has no Developer ID Application identity with a Team ID"
+            exit 1
+          fi
+          releases=$(gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq 'add')
+          release=$(jq --arg tag "$RELEASE_TAG" \
+            '[.[] | select(.tag_name == $tag)] | if length == 1 then .[0] else error("expected exactly one staged release") end' \
+            <<<"$releases")
+          release_id=$(jq -r '.id' <<<"$release")
+          rm -rf verified-darwin-assets
+          mkdir verified-darwin-assets
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            archive="ovm-$target.tar.gz"
+            asset_id=$(jq -r --arg name "$archive" \
+              '[.assets[] | select(.name == $name)] | if length == 1 then .[0].id else error("missing or duplicate Darwin asset") end' \
+              <<<"$release")
+            gh api -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "verified-darwin-assets/$archive"
+            extract="verified-darwin-assets/$target"
+            mkdir "$extract"
+            tar xzf "verified-darwin-assets/$archive" -C "$extract"
+            while IFS= read -r binary; do
+              path="$extract/$binary"
+              test -f "$path"
+              codesign --verify --strict "$path"
+              details=$(codesign -dvvv "$path" 2>&1)
+              team=$(sed -n 's/^TeamIdentifier=//p' <<<"$details")
+              authorities=$(sed -n 's/^Authority=//p' <<<"$details")
+              authority=${authorities%%$'\n'*}
+              [[ "$team" == "$expected_team" ]] || {
+                echo "::error::$binary in $archive has TeamIdentifier=${team:-missing}, expected the configured Developer ID team"
+                exit 1
+              }
+              [[ "$authority" == "Developer ID Application:"* ]] || {
+                echo "::error::$binary in $archive is not signed by a Developer ID Application certificate"
+                exit 1
+              }
+            done < <(printf '%s\n' ovm ovm-codex-skew ovm-claudex)
+          done
+          # Preserve the release id in logs without trusting a tag-only lookup.
+          echo "Verified Darwin signatures for staged release $release_id."
+
+  finalize:
+    needs: [metadata, verify-finalize-darwin]
+    if: >-
+      always() &&
+      needs.metadata.result == 'success' &&
+      needs.metadata.outputs.stage == 'finalize' &&
+      needs.verify-finalize-darwin.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -549,6 +842,30 @@ jobs:
           asset_names=$(jq -r '.assets[].name' <<<"$release")
           rm -rf verified-release-assets
           mkdir verified-release-assets
+          sbom="ovm-$RELEASE_TAG.spdx.json"
+          sbom_sidecar="$sbom.sha256"
+          for asset in "$sbom" "$sbom_sidecar"; do
+            [[ $(printf '%s\n' "$asset_names" | grep -Fxc "$asset") == 1 ]] || {
+              echo "release $RELEASE_TAG must contain exactly one $asset" >&2
+              exit 1
+            }
+            asset_id=$(jq -r --arg name "$asset" \
+              '.assets[] | select(.name == $name) | .id' <<<"$release")
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "verified-release-assets/$asset"
+          done
+          (
+            cd verified-release-assets
+            shasum -a 256 -c "$sbom_sidecar"
+          )
+          python3 -c "import json,sys; json.load(open(sys.argv[1]))" \
+            "verified-release-assets/$sbom"
+          gh attestation verify "verified-release-assets/$sbom" \
+            -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG"
           for target in \
             aarch64-apple-darwin \
             x86_64-apple-darwin \

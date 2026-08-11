@@ -47,7 +47,7 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
     ensure_claude_installed()?;
 
     seed_claude_home(&dirs, &config)?;
-    crate::feedback::install_session_start_hook(&dirs)?;
+    crate::feedback::install_session_hooks(&dirs)?;
     eprintln!(
         "  {} Isolated Claude home seeded → {} (your ~/.claude is untouched)",
         style("✓").green(),
@@ -357,6 +357,17 @@ fn seed_claude_home(dirs: &ClaudexDirs, config: &ClaudexConfig) -> Result<()> {
     let settings_path = home.join("settings.json");
     let mut settings = read_json_object(&settings_path)?;
     settings.insert("cleanupPeriodDays".into(), json!(999_999));
+    // Artifact publishing is off by default in a claudex home. Publishing sends
+    // a page to claude.ai and hands back a shareable URL — an Anthropic service,
+    // reached with an Anthropic login, from a session whose model is GPT-5.6
+    // through someone else's subscription. Nobody choosing claudex is asking
+    // for that, and it is the kind of default that only gets noticed after a
+    // page exists. `disableArtifact` is the switch Claude Code itself reads
+    // (`settings.disableArtifact === true`), and seeding it rather than forcing
+    // an env var leaves it a default: edit the file and it stays edited.
+    if !settings.contains_key("disableArtifact") {
+        settings.insert("disableArtifact".into(), Value::Bool(true));
+    }
     let env = settings
         .entry("env".to_string())
         .or_insert_with(|| Value::Object(Map::new()));
@@ -693,6 +704,43 @@ mod tests {
     fn claude_md_skips_import_when_user_has_no_global_file() {
         let contents = claude_md_contents(&ClaudexConfig::default(), false);
         assert!(!contents.contains("@~/.claude/CLAUDE.md"));
+    }
+
+    /// Publishing an artifact posts a page to claude.ai and returns a shareable
+    /// URL. In a claudex home the model is GPT-5.6 on someone else's
+    /// subscription, so that default is wrong — and wrong in the direction you
+    /// only discover once a page exists. It must be a DEFAULT though: a user who
+    /// turns it back on must not have it flipped again by the next setup run.
+    #[test]
+    fn artifact_publishing_is_off_by_default_but_stays_user_owned() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dirs = ClaudexDirs::at(temp.path().to_path_buf());
+        dirs.ensure_layout().expect("layout");
+        let config = ClaudexConfig::default();
+
+        seed_claude_home(&dirs, &config).expect("first seed");
+        let settings_path = dirs.claude_home().join("settings.json");
+        let settings = read_json_object(&settings_path).expect("read");
+        assert_eq!(
+            settings.get("disableArtifact"),
+            Some(&serde_json::json!(true)),
+            "a fresh claudex home must not publish artifacts to claude.ai"
+        );
+
+        // The user turns it back on; setup must leave that alone.
+        let mut settings = read_json_object(&settings_path).expect("read");
+        settings.insert("disableArtifact".into(), serde_json::json!(false));
+        write_json_object(&settings_path, &settings).expect("write");
+
+        seed_claude_home(&dirs, &config).expect("second seed");
+
+        assert_eq!(
+            read_json_object(&settings_path)
+                .expect("read")
+                .get("disableArtifact"),
+            Some(&serde_json::json!(false)),
+            "setup re-imposed a default the user had deliberately changed"
+        );
     }
 
     #[test]

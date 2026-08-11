@@ -40,6 +40,28 @@ manifest, emits portable SHA-256 sidecars, attaches build-provenance
 attestations, and stages the GitHub release. It does not publish crates.io,
 npm, or Homebrew packages.
 
+Four build-side guarantees ride along, and each fails closed:
+
+- **The tag must be proven.** It has to be an ancestor of `main`, and its
+  commit needs a successful `ci.yml` run from a push to `main`. A
+  pull_request run does not count; a rerun still in flight is waited on.
+- **glibc floor.** Linux bundles are built on `ubuntu-22.04`, which fixes the
+  supported floor at glibc 2.35 (Ubuntu 22.04+, Debian 12+, Fedora 36+).
+  Every packed archive is then smoke-run — the cross-compiled aarch64 one
+  under qemu-user — so an archive that cannot start is caught before upload,
+  not by users. Raising the floor means updating the runners, this section,
+  and `install.sh`'s guard together.
+- **macOS signing.** With the `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`,
+  `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_BASE64` secrets
+  configured, every macOS binary is Developer ID signed with the hardened
+  runtime and notarized. Without the certificate secrets the build emits a
+  warning and ships ad-hoc signed binaries; signed-but-no-notary-key is a
+  hard failure. Note that the installer verifies SHA-256 sidecars, not
+  signatures, so an unsigned release still installs — the signature is what
+  managed Macs and browser downloads assess.
+- **SBOM.** An SPDX 2.3 document for the locked workspace ships as a release
+  asset beside the archives.
+
 Publication is draft-until-final. `stage=draft` stages a fully verified
 UNPUBLISHED draft without moving the installed fleet; validate that draft from
 a clean, isolated install. `stage=finalize` does not build: it requires the

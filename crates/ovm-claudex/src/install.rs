@@ -29,12 +29,26 @@ pub struct PendingUpdate {
     /// updates remain eligible for later safe activation even when it is off.
     #[serde(default)]
     pub automatic: bool,
+    /// True only when this version was vouched for by the OVM registry (the
+    /// deep lane) at prepare time. Records written before this field existed
+    /// deserialize as `false`, which is exactly right: a proxy an older OVM
+    /// staged automatically could have come from the upstream fallback, and
+    /// [`activate_pending_update`] refuses to auto-activate an unverified
+    /// pending update rather than trust that provenance-less leftover.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UpdateCache {
     latest: String,
     checked_at: u64,
+    /// True only when `latest` came from the OVM registry (deep-lane
+    /// verified). Old caches without the field deserialize as false and are
+    /// treated as stale, so an upstream-derived answer can never feed the
+    /// automatic path. Explicit installs may still use upstream fallback.
+    #[serde(default)]
+    verified: bool,
 }
 
 /// Held while checking, downloading, and publishing proxy update state.
@@ -321,7 +335,12 @@ pub fn update_command(version: Option<&str>) -> Result<()> {
             style("✓").green()
         );
     }
-    prepare_update_locked(&dirs, &version, false)?;
+    // Explicit `ovm claudex update`: the user asked for this exact version, so
+    // it activates regardless of the `verified` flag (the flag gates only the
+    // automatic path). Recording the registry's verdict keeps the on-disk
+    // record honest about provenance.
+    let verified = registry_latest_version().as_deref() == Some(version.as_str());
+    prepare_update_locked(&dirs, &version, false, verified)?;
 
     if let Some(config) = crate::config::ClaudexConfig::load(&dirs.config_file())? {
         let session_guard = crate::proxy::SessionGuard::acquire(&dirs)?;
@@ -331,8 +350,13 @@ pub fn update_command(version: Option<&str>) -> Result<()> {
                 .is_some_and(|path| std::path::Path::new(&path) == claude_home);
             crate::proxy::activate_pending_update(&dirs, &config, !invoked_inside_claudex)?;
         } else {
+            let provenance = if verified {
+                "registry-approved and staged"
+            } else {
+                "publisher-vouched and staged (not yet approved by OVM's registry)"
+            };
             eprintln!(
-                "  {} cliproxyapi {} is verified and staged; it will activate after active claudex sessions exit.",
+                "  {} cliproxyapi {} is {provenance}; it will activate after active claudex sessions exit.",
                 style("…").cyan(),
                 style(&version).green().bold()
             );
@@ -373,7 +397,10 @@ pub fn install_latest(dirs: &ClaudexDirs) -> Result<PathBuf> {
 /// Newest version to install, e.g. "7.2.72". Consults the OVM registry first
 /// (its `cliproxyapi` `latest` is the newest deep-lane-verified build) and
 /// falls back to GitHub `releases/latest` when the registry is unreachable or
-/// has no cliproxyapi entry — keeping the historical behaviour on failure.
+/// has no cliproxyapi entry. The fallback is for EXPLICIT installs only — it
+/// trusts the upstream publisher for both the version and its checksum, so
+/// the automatic update path never takes it (see `latest_version_cached`)
+/// and the caller here says out loud which authority answered.
 pub fn latest_version() -> Result<String> {
     if let Some(version) = registry_latest_version() {
         return Ok(version);
@@ -391,7 +418,19 @@ pub fn latest_version() -> Result<String> {
     let tag = response["tag_name"]
         .as_str()
         .ok_or_else(|| ClaudexError::Message("release has no tag_name".into()))?;
-    Ok(normalize_version(tag))
+    let version = normalize_version(tag);
+    // The registry did not vouch for a version. That is either unreachable OR
+    // reachable-but-unusable (non-2xx, malformed JSON, no cliproxyapi entry) —
+    // this path cannot tell them apart, so it must not claim "unreachable" and
+    // hide a schema or poisoning failure. Either way, the fallback trusts the
+    // upstream publisher for both the version and its checksum.
+    eprintln!(
+        "  {} OVM registry did not vouch for a cliproxyapi version — using upstream latest {} \
+         (publisher-vouched, not yet verified by OVM's deep lane).",
+        style("!").yellow(),
+        style(&version).bold()
+    );
+    Ok(version)
 }
 
 /// Launch-time policy: discover and checksum-verify a newer managed proxy,
@@ -420,12 +459,22 @@ pub fn maybe_prepare_auto_update(
     if load_pending_update(dirs)?.is_some_and(|pending| !pending.automatic) {
         return Ok(None);
     }
-    let latest = latest_version_cached(dirs)?;
+    // Registry-verified versions only. When the registry cannot vouch for a
+    // build, automatic activation stands down instead of falling back to
+    // upstream's own latest — that path authenticates the archive with a
+    // checksum from the same publisher, which is no independent provenance
+    // for code that will hold provider OAuth data. Explicit
+    // `ovm claudex update` remains available and says what it is trusting.
+    let Some(latest) = latest_version_cached(dirs)? else {
+        return Ok(None);
+    };
     if !is_newer(&latest, &current)? {
         return Ok(None);
     }
 
-    let prepared = prepare_update_locked(dirs, &latest, true)?;
+    // Reached only after `latest_version_cached` returned a registry-approved
+    // version, so this automatic candidate is deep-lane vouched by construction.
+    let prepared = prepare_update_locked(dirs, &latest, true, true)?;
     eprintln!(
         "  {} Prepared cliproxyapi {} {} {} for safe activation.",
         style("↓").cyan(),
@@ -436,7 +485,11 @@ pub fn maybe_prepare_auto_update(
     Ok(Some(prepared))
 }
 
-fn latest_version_cached(dirs: &ClaudexDirs) -> Result<String> {
+/// Registry-verified latest for the automatic path, `None` when the registry
+/// cannot answer. Deliberately never consults the GitHub fallback: only
+/// versions the deep lane vouched for may be activated without the user
+/// asking.
+fn latest_version_cached(dirs: &ClaudexDirs) -> Result<Option<String>> {
     let now = now_unix();
     let interval = std::env::var("OVM_CLAUDEX_UPDATE_CHECK_INTERVAL_SECS")
         .ok()
@@ -446,29 +499,34 @@ fn latest_version_cached(dirs: &ClaudexDirs) -> Result<String> {
     if let Ok(contents) = std::fs::read_to_string(dirs.proxy_update_cache()) {
         if let Ok(cache) = serde_json::from_str::<UpdateCache>(&contents) {
             if let Some(latest) = fresh_cached_version(cache, now, interval) {
-                return Ok(latest);
+                return Ok(Some(latest));
             }
         }
     }
 
-    let latest = validate_version(&latest_version()?)?;
+    let Some(latest) = registry_latest_version() else {
+        return Ok(None);
+    };
+    let latest = validate_version(&latest)?;
     Version::parse(&latest).map_err(|error| {
         ClaudexError::Message(format!(
-            "invalid upstream release version {latest:?}: {error}"
+            "invalid registry release version {latest:?}: {error}"
         ))
     })?;
     let cache = UpdateCache {
         latest: latest.clone(),
         checked_at: now,
+        verified: true,
     };
     let mut contents = serde_json::to_string_pretty(&cache)?;
     contents.push('\n');
     crate::config::write_atomic(&dirs.proxy_update_cache(), &contents, None)?;
-    Ok(latest)
+    Ok(Some(latest))
 }
 
 fn fresh_cached_version(cache: UpdateCache, now: u64, interval: Duration) -> Option<String> {
-    (cache.checked_at <= now
+    (cache.verified
+        && cache.checked_at <= now
         && now - cache.checked_at <= interval.as_secs()
         && Version::parse(&cache.latest).is_ok())
     .then_some(cache.latest)
@@ -492,6 +550,7 @@ fn prepare_update_locked(
     dirs: &ClaudexDirs,
     version: &str,
     automatic: bool,
+    verified: bool,
 ) -> Result<PendingUpdate> {
     let version = validate_version(&normalize_version(version))?;
     let target = dirs.proxy_versions_dir().join(&version).join("cliproxyapi");
@@ -502,6 +561,7 @@ fn prepare_update_locked(
         version,
         binary: target,
         automatic,
+        verified,
     };
     let mut contents = serde_json::to_string_pretty(&pending)?;
     contents.push('\n');
@@ -1063,13 +1123,17 @@ mod tests {
         let cache = UpdateCache {
             latest: "7.2.74".into(),
             checked_at: now_unix(),
+            verified: true,
         };
         std::fs::write(
             dirs.proxy_update_cache(),
             serde_json::to_vec(&cache).unwrap(),
         )
         .unwrap();
-        assert_eq!(latest_version_cached(&dirs).unwrap(), "7.2.74");
+        assert_eq!(
+            latest_version_cached(&dirs).unwrap(),
+            Some("7.2.74".to_string())
+        );
     }
 
     #[test]
@@ -1079,6 +1143,7 @@ mod tests {
             UpdateCache {
                 latest: "7.2.74".into(),
                 checked_at: now + 60,
+                verified: true,
             },
             now,
             UPDATE_CHECK_INTERVAL,
@@ -1088,6 +1153,24 @@ mod tests {
             UpdateCache {
                 latest: "not-semver".into(),
                 checked_at: now,
+                verified: true,
+            },
+            now,
+            UPDATE_CHECK_INTERVAL,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn unverified_update_cache_never_feeds_the_automatic_path() {
+        // Pre-provenance caches (no `verified` field → false) and any future
+        // unverified entry must read as stale, not as a green light.
+        let now = now_unix();
+        assert!(fresh_cached_version(
+            UpdateCache {
+                latest: "7.2.74".into(),
+                checked_at: now,
+                verified: false,
             },
             now,
             UPDATE_CHECK_INTERVAL,
@@ -1124,7 +1207,7 @@ mod tests {
         let current = dirs.proxy_versions_dir().join("7.2.72").join("cliproxyapi");
         std::os::unix::fs::symlink(current, dirs.proxy_current()).unwrap();
 
-        prepare_update_locked(&dirs, "7.2.70", false).unwrap();
+        prepare_update_locked(&dirs, "7.2.70", false, false).unwrap();
         assert!(
             maybe_prepare_auto_update(&dirs, &crate::config::ClaudexConfig::default())
                 .unwrap()

@@ -88,6 +88,18 @@ pub struct Tuning {
     pub always_enable_effort: bool,
     pub max_tool_use_concurrency: u32,
     pub enable_tool_search: bool,
+    /// Context window declared to Claude Code for the proxied model.
+    ///
+    /// Claude Code sizes auto-compaction from the model name. `gpt-5.6-sol` is
+    /// not a name it knows, so it falls back to 200K and compacts far earlier
+    /// than the model requires. The number below is deliberately NOT the raw
+    /// 1,050,000 API window: claudex authenticates through Codex on a ChatGPT
+    /// subscription, and OpenAI prices prompts over 272K input tokens at 2x
+    /// input / 1.5x output for the whole request. Codex's own bundled catalog
+    /// was corrected 372K -> 272K in July 2026 for exactly this reason, so 272K
+    /// is where the model gets its real headroom and the session still stops at
+    /// the price cliff instead of sailing past it.
+    pub max_context_tokens: u32,
 }
 
 impl Default for Tuning {
@@ -96,6 +108,7 @@ impl Default for Tuning {
             always_enable_effort: true,
             max_tool_use_concurrency: 3,
             enable_tool_search: false,
+            max_context_tokens: 272_000,
         }
     }
 }

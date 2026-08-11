@@ -20,6 +20,9 @@ pub fn run(args: &[String]) -> Result<()> {
         .position(|arg| arg == "--")
         .unwrap_or(args.len());
     let fast = args[..flags_end].iter().any(|arg| arg == "--fast");
+    // Resolved before `--fast` is filtered out below, while the flag positions
+    // still line up with `flags_end`.
+    let resume_launcher = resume_launcher(&args[..flags_end], fast);
     let args: Vec<String> = args
         .iter()
         .enumerate()
@@ -58,7 +61,7 @@ pub fn run(args: &[String]) -> Result<()> {
     // Upgrade existing isolated homes in place. The hook creates a durable,
     // local feedback correlation as soon as Claude reports its real history
     // session ID (including resumes and /clear).
-    crate::feedback::install_session_start_hook(&dirs)?;
+    crate::feedback::install_session_hooks(&dirs)?;
 
     if let Err(error) = crate::install::maybe_prepare_auto_update(&dirs, &config) {
         eprintln!(
@@ -67,25 +70,14 @@ pub fn run(args: &[String]) -> Result<()> {
         );
     }
 
-    // Acquire exclusive when no session is alive, otherwise join the shared
-    // lease. Downloads happen before this point; only the brief stop/switch/
-    // verify transaction needs exclusivity.
+    // Every operation that can stop, start, or replace the proxy takes the
+    // update lock first, then the session lock. A launcher must wait here even
+    // when it would receive the exclusive session lease: otherwise `stop` can
+    // kill the old proxy, the launcher can publish a new pidfile, and `stop`
+    // can then unlink that new record by pathname.
+    let runtime_lock = crate::install::acquire_update_lock(&dirs)?;
     let session_guard = proxy::SessionGuard::acquire(&dirs)?;
-    let mut runtime_lock = crate::install::try_acquire_update_lock(&dirs)?;
-    if runtime_lock.is_none()
-        && !session_guard.is_exclusive()
-        && proxy::probe(
-            config.proxy.port,
-            &config.proxy.api_key,
-            proxy::ProbeIdentity::Pidfile(&dirs),
-        ) == proxy::ProxyProbe::Down
-    {
-        // Shared launchers can race to recover a dead proxy. Waiting is safe
-        // here because an updater can also acquire the shared session lock;
-        // an exclusive launcher never waits in this lock order.
-        runtime_lock = Some(crate::install::acquire_update_lock(&dirs)?);
-    }
-    if session_guard.is_exclusive() && runtime_lock.is_some() {
+    if session_guard.is_exclusive() {
         if let Err(error) = proxy::activate_pending_update(&dirs, &config, false) {
             eprintln!(
                 "  {} Prepared proxy update could not be activated; continuing with the previous version ({error}).",
@@ -126,17 +118,66 @@ pub fn run(args: &[String]) -> Result<()> {
 
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
         let session_lock_fd = session_guard.make_inheritable()?;
         command.env("OVM_CLAUDEX_SESSION_LOCK_FD", session_lock_fd.to_string());
-        Err(command.exec().into())
+
+        // Wait for Claude Code rather than exec'ing into it, so claudex is
+        // still alive to sign off when the session ends.
+        //
+        // A SessionEnd hook cannot do this job: measured on 2.1.226, SessionEnd
+        // fires for `-p` runs (reason "other") and NOT AT ALL when an
+        // interactive TUI session ends — which is every real session. The
+        // launcher is the only thing guaranteed to outlive the session.
+        //
+        // SIGINT is ignored here, not blocked for the child: Ctrl-C is
+        // delivered to the whole foreground process group, so Claude Code still
+        // receives and handles it. Ignoring it in the parent only stops claudex
+        // dying first and taking the sign-off with it.
+        unsafe {
+            libc::signal(libc::SIGINT, libc::SIG_IGN);
+        }
+        let status = command.status()?;
+        drop(session_guard);
+        sign_off(&dirs, &resume_launcher);
+        std::process::exit(status.code().unwrap_or(1));
     }
     #[cfg(not(unix))]
     {
         let status = command.status()?;
         drop(session_guard);
+        sign_off(&dirs, &resume_launcher);
         std::process::exit(status.code().unwrap_or(1));
     }
+}
+
+/// The claudex sign-off: a sleeping Mochi and the command that resumes what
+/// just ended.
+///
+/// Best-effort throughout — a session that has already finished must never fail
+/// because of its own goodbye. Nothing prints when stderr isn't a terminal, so
+/// `-p`, pipes and CI stay clean.
+fn sign_off(dirs: &ClaudexDirs, launcher: &str) {
+    if !std::io::stderr().is_terminal() {
+        return;
+    }
+    let Some(session_id) = crate::feedback::latest_session_id(dirs) else {
+        return;
+    };
+    let magenta = console::Style::new().magenta();
+    let dim = console::Style::new().dim();
+    let cyan = console::Style::new().cyan();
+    eprintln!();
+    eprintln!(
+        "{}  {}",
+        magenta.apply_to(r"  /\_/\ "),
+        dim.apply_to("thanks for using claudex via OVM")
+    );
+    eprintln!(
+        "{}  {}",
+        magenta.apply_to(" ( -.- )"),
+        cyan.apply_to(format!("{launcher} --resume {session_id}"))
+    );
+    eprintln!();
 }
 
 /// Active Claude Code version via OVM's script-friendly interface.
@@ -150,6 +191,22 @@ pub(crate) fn active_claude_version() -> Option<String> {
     }
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!version.is_empty()).then_some(version)
+}
+
+/// Which installed shim reproduces this session, for the sign-off's resume
+/// line. The shim family is `claudex`/`ccx` plus `y`=yolo and `f`=fast
+/// suffixes, so the flags a session was launched with name their own command.
+/// `--yolo` is OVM's flag, passed straight through, so it is read here rather
+/// than parsed out.
+fn resume_launcher(flags: &[String], fast: bool) -> String {
+    let yolo = flags.iter().any(|arg| arg == "--yolo");
+    match (yolo, fast) {
+        (false, false) => "claudex",
+        (true, false) => "ccxy",
+        (false, true) => "ccxf",
+        (true, true) => "ccxyf",
+    }
+    .to_string()
 }
 
 /// `<model>` → its fast-tier proxy alias.
@@ -397,6 +454,15 @@ fn launch_env(config: &ClaudexConfig, dirs: &ClaudexDirs, fast: bool) -> Vec<(St
             "ENABLE_TOOL_SEARCH".to_string(),
             config.tuning.enable_tool_search.to_string(),
         ),
+        // Without this Claude Code cannot size a model it doesn't know, assumes
+        // 200K, and warns on every launch. It honours the variable only for
+        // model IDs that do not start with `claude-`, which every proxied
+        // GPT-5.6 ID satisfies. Older Claude Code builds (before ~2.1.193)
+        // ignore the variable entirely rather than misreading it.
+        (
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS".to_string(),
+            config.tuning.max_context_tokens.to_string(),
+        ),
     ];
     if config.tuning.always_enable_effort {
         env.push((
@@ -482,6 +548,60 @@ mod tests {
             Some("3")
         );
         assert_eq!(env_value(&env, "ENABLE_TOOL_SEARCH"), Some("false"));
+    }
+
+    /// Claude Code reads CLAUDE_CODE_MAX_CONTEXT_TOKENS only for model IDs that
+    /// do not start with `claude-`; every other ID silently keeps the 200K
+    /// default. Pinning both halves here means a future model rename that
+    /// reintroduces a `claude-` prefix fails this test instead of quietly
+    /// halving everyone's usable context.
+    #[test]
+    fn launch_env_declares_the_context_window_for_a_non_claude_model_id() {
+        let mut config = ClaudexConfig::default();
+        config.proxy.api_key = "secret".into();
+        let dirs = ClaudexDirs::at(PathBuf::from("/tmp/claudex"));
+
+        let env = launch_env(&config, &dirs, false);
+
+        // 272K is OpenAI's 2x-pricing boundary, not the 1,050,000 raw window.
+        assert_eq!(
+            env_value(&env, "CLAUDE_CODE_MAX_CONTEXT_TOKENS"),
+            Some("272000")
+        );
+        for key in [
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+        ] {
+            let model = env_value(&env, key).unwrap_or_default();
+            assert!(
+                !model.starts_with("claude-"),
+                "{key} = {model} starts with `claude-`, so Claude Code ignores \
+                 CLAUDE_CODE_MAX_CONTEXT_TOKENS and falls back to 200K"
+            );
+        }
+    }
+
+    /// The resume line is only useful if it reproduces the session the user
+    /// just left — a yolo session that suggests the plain shim would come back
+    /// asking permission for everything it stopped asking about.
+    #[test]
+    fn resume_launcher_names_the_shim_that_reproduces_the_session() {
+        let flags =
+            |args: &[&str]| -> Vec<String> { args.iter().map(|arg| (*arg).to_string()).collect() };
+        assert_eq!(resume_launcher(&flags(&[]), false), "claudex");
+        assert_eq!(resume_launcher(&flags(&["--yolo"]), false), "ccxy");
+        assert_eq!(resume_launcher(&flags(&[]), true), "ccxf");
+        assert_eq!(resume_launcher(&flags(&["--yolo"]), true), "ccxyf");
+        // Every name has to be a shim setup actually installs, or the line
+        // prints a command that does not exist.
+        for launcher in ["claudex", "ccxy", "ccxf", "ccxyf"] {
+            assert!(
+                crate::setup::CLAUDEX_SHIMS.contains(&launcher),
+                "{launcher} is not an installed shim"
+            );
+        }
     }
 
     #[test]

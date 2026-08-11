@@ -305,6 +305,7 @@ fn run() -> Result<()> {
             SelfCommands::Use { version } => commands::self_manage::use_version(&version),
             SelfCommands::Rollback => commands::self_manage::rollback(),
             SelfCommands::RepairControl => commands::self_manage::repair_control(),
+            SelfCommands::Uninstall { purge, yes } => commands::self_uninstall::run(purge, yes),
         },
         Commands::SelfUpdate {
             channel,

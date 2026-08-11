@@ -61,6 +61,18 @@ pub struct SelfOperationLock {
     _file: File,
 }
 
+/// What the `ovm` at the recorded launcher directory turned out to be.
+/// See [`SelfManager::control_plane_ownership`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlPlaneOwnership {
+    /// Nothing is there.
+    Absent,
+    /// OVM wrote it, so OVM may remove it.
+    Managed,
+    /// Some other `ovm` — a package manager's, or a name collision. Not ours.
+    Foreign,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PathSnapshot {
     path: PathBuf,
@@ -162,6 +174,82 @@ impl SelfManager {
 
     pub fn control_plane_path(&self) -> PathBuf {
         self.launcher_dir().join("ovm")
+    }
+
+    /// Whether the `ovm` at the recorded launcher directory is one OVM wrote.
+    ///
+    /// [`Self::launcher_dir`] trusts an absolute path read from a file, so the
+    /// control-plane path can point anywhere — at a stale directory a past
+    /// install recorded, or at `/opt/homebrew/bin` if that file is wrong. Side
+    /// binaries and product launchers have owned this check since the start
+    /// (they must be symlinks into our tree); the control plane had none, and
+    /// uninstall deleted whatever was named `ovm` there.
+    ///
+    /// Three things count as ours, and nothing else does:
+    /// a path inside `~/.ovm` (OVM's own tree — a symlinked `~/.ovm` resolves
+    /// with it), a symlink pointing back into that tree, and a file whose bytes
+    /// are one of the snapshots we installed. The last is what a custom
+    /// `OVM_INSTALL_DIR` install looks like: `install.sh` copies the snapshot
+    /// binary there, so the copy is identifiable by content.
+    pub(crate) fn control_plane_ownership(&self) -> Result<ControlPlaneOwnership> {
+        let control = self.control_plane_path();
+        let metadata = match std::fs::symlink_metadata(&control) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok(ControlPlaneOwnership::Absent)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if self.path_is_under_base(&control) {
+            return Ok(ControlPlaneOwnership::Managed);
+        }
+        if metadata.file_type().is_symlink() {
+            let target = std::fs::read_link(&control)?;
+            let absolute = if target.is_absolute() {
+                target
+            } else {
+                control
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(target)
+            };
+            return Ok(if self.path_is_under_base(&absolute) {
+                ControlPlaneOwnership::Managed
+            } else {
+                ControlPlaneOwnership::Foreign
+            });
+        }
+        if !metadata.file_type().is_file() {
+            return Ok(ControlPlaneOwnership::Foreign);
+        }
+
+        let digest = digest_file(&control)?;
+        let mut candidates = self
+            .list_versions()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|version| self.version_dir(&version).join("ovm"))
+            .collect::<Vec<_>>();
+        candidates.push(self.dirs.root.join("control-previous"));
+        for candidate in candidates {
+            if digest_file(&candidate).is_ok_and(|installed| installed == digest) {
+                return Ok(ControlPlaneOwnership::Managed);
+            }
+        }
+        Ok(ControlPlaneOwnership::Foreign)
+    }
+
+    /// Whether `path` sits inside `~/.ovm`. The *parent* is canonicalized, not
+    /// the path itself: a symlink at the path must be judged by where it lives,
+    /// not by where it points, and a `~/.ovm` that is itself a symlink (an
+    /// install kept on external storage) resolves to the same tree either way.
+    fn path_is_under_base(&self, path: &Path) -> bool {
+        let Ok(base) = std::fs::canonicalize(&self.ovm_dirs.base) else {
+            return false;
+        };
+        path.parent()
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+            .is_some_and(|parent| parent.starts_with(&base))
     }
 
     pub fn version_dir(&self, version: &str) -> PathBuf {
@@ -519,7 +607,10 @@ impl SelfManager {
         Ok(())
     }
 
-    fn read_managed_side_links(&self) -> Option<HashSet<String>> {
+    /// The side-binary names recorded as ours, if the record is intact.
+    /// Uninstall reads it too, so a shim left by a bundle that is no longer the
+    /// active one is still recognised as OVM's to remove.
+    pub(crate) fn read_managed_side_links(&self) -> Option<HashSet<String>> {
         let contents = std::fs::read_to_string(&self.dirs.side_links_file).ok()?;
         let mut names = HashSet::new();
         for name in contents.lines().filter(|name| !name.is_empty()) {
@@ -597,7 +688,7 @@ impl SelfManager {
         Ok(())
     }
 
-    fn product_launcher_is_managed(&self, launcher: &Path) -> Result<bool> {
+    pub(crate) fn product_launcher_is_managed(&self, launcher: &Path) -> Result<bool> {
         if !launcher.is_symlink() {
             return Ok(false);
         }
@@ -607,7 +698,7 @@ impl SelfManager {
             || self.link_target_is_managed(launcher, &target))
     }
 
-    fn is_managed_side_link(&self, link: &Path) -> bool {
+    pub(crate) fn is_managed_side_link(&self, link: &Path) -> bool {
         let Ok(target) = std::fs::read_link(link) else {
             return false;
         };
@@ -1337,6 +1428,101 @@ mod tests {
         receiver.recv_timeout(Duration::from_secs(2)).unwrap();
         thread.join().unwrap();
         assert!(manager.dirs.operation_lock.is_file());
+    }
+
+    #[test]
+    fn only_ovms_own_control_plane_counts_as_managed() {
+        let temp = tempdir().unwrap();
+        let manager = manager(temp.path());
+        let manifest = fixture_manifest(&[]);
+        let source = fixture_source(temp.path(), &manifest, "control");
+        manager.install_bundle("1.0.0", &manifest, &source).unwrap();
+
+        // Nothing installed at the default location yet.
+        assert_eq!(
+            manager.control_plane_ownership().unwrap(),
+            ControlPlaneOwnership::Absent
+        );
+
+        // The default install writes it inside ~/.ovm, which is OVM's tree.
+        manager.refresh_control_plane("1.0.0").unwrap();
+        assert_eq!(
+            manager.control_plane_ownership().unwrap(),
+            ControlPlaneOwnership::Managed
+        );
+
+        // A launcher directory somewhere else entirely — say a `sudo`
+        // installed-by-hand path, or a package manager's bin — holding an
+        // `ovm` that is not ours. It must not be claimed.
+        let elsewhere = temp.path().join("usr/local/bin");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("ovm"), b"#!/bin/sh\n# not ours\n").unwrap();
+        std::fs::write(
+            &manager.dirs.launcher_dir_file,
+            format!("{}\n", elsewhere.display()),
+        )
+        .unwrap();
+        assert_eq!(
+            manager.control_plane_ownership().unwrap(),
+            ControlPlaneOwnership::Foreign
+        );
+
+        // The same path holding a copy of a snapshot we installed is ours:
+        // that is exactly what `OVM_INSTALL_DIR=/usr/local/bin` produces.
+        std::fs::copy(
+            manager.version_dir("1.0.0").join("ovm"),
+            elsewhere.join("ovm"),
+        )
+        .unwrap();
+        assert_eq!(
+            manager.control_plane_ownership().unwrap(),
+            ControlPlaneOwnership::Managed
+        );
+
+        // And so is a symlink pointing back into the tree (the retired
+        // checkout workflow left these behind).
+        std::fs::remove_file(elsewhere.join("ovm")).unwrap();
+        symlink(
+            manager.version_dir("1.0.0").join("ovm"),
+            elsewhere.join("ovm"),
+        )
+        .unwrap();
+        assert_eq!(
+            manager.control_plane_ownership().unwrap(),
+            ControlPlaneOwnership::Managed
+        );
+
+        // A symlink to something outside the tree is somebody else's.
+        std::fs::remove_file(elsewhere.join("ovm")).unwrap();
+        let outsider = temp.path().join("outsider");
+        std::fs::write(&outsider, b"#!/bin/sh\n").unwrap();
+        symlink(&outsider, elsewhere.join("ovm")).unwrap();
+        assert_eq!(
+            manager.control_plane_ownership().unwrap(),
+            ControlPlaneOwnership::Foreign
+        );
+    }
+
+    #[test]
+    fn a_symlinked_ovm_home_still_owns_its_control_plane() {
+        // ~/.ovm on external storage: the base is a symlink, and everything
+        // under its target is still OVM's own tree.
+        let temp = tempdir().unwrap();
+        let physical = temp.path().join("external/ovm-state");
+        let logical = temp.path().join("home/.ovm");
+        std::fs::create_dir_all(&physical).unwrap();
+        std::fs::create_dir_all(logical.parent().unwrap()).unwrap();
+        symlink(&physical, &logical).unwrap();
+        let manager = SelfManager::at(OvmDirs::at(logical));
+        let manifest = fixture_manifest(&[]);
+        let source = fixture_source(temp.path(), &manifest, "external");
+        manager.install_bundle("1.0.0", &manifest, &source).unwrap();
+        manager.refresh_control_plane("1.0.0").unwrap();
+
+        assert_eq!(
+            manager.control_plane_ownership().unwrap(),
+            ControlPlaneOwnership::Managed
+        );
     }
 
     #[test]

@@ -133,7 +133,10 @@ ovm self list                # installed OVM snapshots
 ovm self rollback            # back to the previous one
 ovm self channel alpha       # opt into prereleases (default: stable)
 ovm update auto self notify  # ask before updating, instead of doing it silently
+ovm self uninstall           # remove OVM (keeps your installed products)
 ```
+
+**Uninstalling** — `ovm self uninstall` reverses the installer: it removes the `# >>> ovm >>>` PATH block from the shell profiles the installer wrote to (nothing else in those files is touched), the launchers and side-binary shims in `~/.ovm/bin`, and OVM's own snapshots under `~/.ovm/self`. Your installed Claude/Codex/Pi versions and `~/.ovm/config.json` are **kept**, so reinstalling picks up where you left off; `--purge` removes the whole `~/.ovm` tree instead. It asks for a typed confirmation (`--yes` skips it) and refuses to run non-interactively without `--yes`.
 
 By default (`on`) an update is **staged in the background** and activated atomically at the start of your next command, which prints `↑ OVM <new> (was <old>)`. Nothing is ever downloaded on the path between you and a launch. If the control plane is ever damaged: `~/.ovm/self/control-previous self repair-control`.
 

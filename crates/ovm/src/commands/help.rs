@@ -23,9 +23,16 @@ pub fn run_short() -> Result<()> {
     println!("  help                everything else");
 
     println!(
-        "\nRun `{}` for the full guide, `{}` for one command.\n",
+        "\nRun `{}` for the full guide, `{}` for one command.",
         style("ovm help").cyan(),
         style("ovm help <command>").cyan()
+    );
+    // The installer promises this on the way out; the cats deserve a way back.
+    // A footer line, not a seventh command row — the `Common:` list is the
+    // thing being kept short, and the ceiling test counts those separately.
+    println!(
+        "{}\n",
+        style("There's a story behind the cats: `ovm story`").dim()
     );
     Ok(())
 }
@@ -82,7 +89,7 @@ pub fn run() -> Result<()> {
     println!("  clean        Remove cached raw artifacts");
     println!("  cleanup      Configure old install retention");
     println!("  archive      Archive old versions");
-    println!("  self         Update, switch, list, roll back, or set OVM's channel");
+    println!("  self         Update, switch, list, roll back, uninstall, or set OVM's channel");
     println!("  self-update  Update the ovm binary itself (alias for `ovm self update`)");
     println!("  doctor       Check an installed version for compatibility issues");
     println!("  shortcuts    Install bare launch-command shims");
@@ -100,6 +107,7 @@ pub fn run() -> Result<()> {
 
     println!("\nOther:");
     println!("  completions  Generate shell completions");
+    println!("  story        A tale of two cats and an echo (--fast plays it through)");
     println!("  help         Show this overview");
     // One pattern, two examples — not the eight-row cross product of two flags
     // and two products. The exhaustive table lives in `ovm help launch`.

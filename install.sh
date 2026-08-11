@@ -956,6 +956,57 @@ else
             ;;
     esac
 
+    # The published Linux binaries are GNU builds with a glibc 2.35 floor
+    # (the release builders run Ubuntu 22.04). Check BEFORE downloading:
+    # without this, installation on an older or musl libc completes cleanly
+    # and the first `ovm` invocation dies in the dynamic loader — an install
+    # that "succeeded" into a broken state. musl systems (Alpine) and
+    # pre-2.35 glibc (Ubuntu 20.04, RHEL 9) must build from source instead.
+    #
+    # This guard fails CLOSED. An unidentifiable libc used to be waved
+    # through "because the loader will say no" — but the loader says no
+    # AFTER the install reports success, which is the exact broken state the
+    # check exists to prevent. A system with no getconf and no ldd is a
+    # system we cannot qualify, so it is refused with the escape hatch named
+    # in the message.
+    if [ "$OS" = "linux" ] && [ "${OVM_SKIP_LIBC_CHECK:-}" != "1" ]; then
+        GLIBC_FLOOR="2.35"
+        libc_report=$(getconf GNU_LIBC_VERSION 2>/dev/null || true)
+        if [ -z "$libc_report" ]; then
+            libc_report=$(ldd --version 2>&1 | head -n1 || true) # pipefail-safe: `|| true` discards the pipeline status outright, and an absent report is handled as "unidentifiable" below
+        fi
+        case "$libc_report" in
+            *musl*)
+                fail "OVM's prebuilt Linux binaries need glibc; this system uses musl libc. Install from source instead."
+                ;;
+        esac
+        # Only a line that actually names glibc is parsed for a version.
+        # Matching any "x.y" anywhere took the first number in the line, so a
+        # tool-version banner ("BusyBox v1.36.1 …") was read as "glibc 1.36"
+        # and rejected the system with a wrong reason. glibc's own reports —
+        # "glibc 2.35" from getconf, "ldd (Ubuntu GLIBC 2.35-0ubuntu3) 2.35"
+        # from ldd — both end in the bare version, so take the last field.
+        glibc_version=""
+        case "$libc_report" in
+            *glibc*|*GLIBC*|*"GNU libc"*|*"GNU C Library"*)
+                glibc_version=$(printf '%s\n' "$libc_report" | awk '{print $NF}')
+                ;;
+        esac
+        case "$glibc_version" in
+            ''|*[!0-9.]*) glibc_version="" ;;
+            *.*) ;;
+            *) glibc_version="" ;;
+        esac
+        if [ -z "$glibc_version" ]; then
+            fail "could not identify this system's C library, so OVM cannot tell whether its prebuilt binaries will run here (getconf/ldd reported: ${libc_report:-nothing}).
+       The binaries need glibc >= $GLIBC_FLOOR. Install from source instead, or re-run with OVM_SKIP_LIBC_CHECK=1 to install anyway."
+        fi
+        lowest=$(printf '%s\n%s\n' "$GLIBC_FLOOR" "$glibc_version" | sort -V | head -n1) # pipefail-safe: sort consumes all input before emitting, so head cannot close the pipe on two lines
+        if [ "$lowest" != "$GLIBC_FLOOR" ]; then
+            fail "OVM's prebuilt Linux binaries need glibc >= $GLIBC_FLOOR (Ubuntu 22.04+, Debian 12+, Fedora 36+); this system has glibc $glibc_version. Install from source instead."
+        fi
+    fi
+
     mochi working "Installing OVM for $TARGET..."
     # Split the fetch from the parse. Folded into one pipeline, a failed curl
     # aborted the whole script under `set -e` before the `fail` below could

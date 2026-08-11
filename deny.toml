@@ -1,10 +1,5 @@
 [advisories]
 version = 2
-ignore = [
-    # Transitive through indicatif 0.17.11. Track replacement/removal when
-    # indicatif no longer depends on the unmaintained number_prefix crate.
-    "RUSTSEC-2025-0119",
-]
 
 [bans]
 multiple-versions = "allow"

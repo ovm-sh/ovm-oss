@@ -742,11 +742,6 @@ fn first_launch_adopts_the_install_already_on_the_machine() {
 }
 
 #[test]
-#[ignore = "harness gap, not a product gap: 'latest' resolution escapes the \
-            mock to the real registry, so this installs a REAL Codex and then \
-            fails because that binary needs a TTY. The bootstrap itself is \
-            proven by the trace — installs latest, activates, launches. Needs \
-            a mockable latest-resolution seam to run unattended."]
 fn first_launch_installs_latest_when_the_machine_has_nothing() {
     let home = tempfile::tempdir().expect("tempdir");
     disable_auto_update(home.path());
@@ -754,10 +749,16 @@ fn first_launch_installs_latest_when_the_machine_has_nothing() {
     let (_server, releases_url) = setup_codex_mock_with_latest(tag, MANAGED_MARKER);
 
     // PATH deliberately holds no codex at all: nothing to adopt.
-    // OVM_REGISTRY_BASE_URL keeps "latest" resolution on the mock as well —
-    // otherwise this reaches the real registry and installs a real Codex.
+    // Every OTHER "latest" authority is dead-ended (the alpha.10 lesson:
+    // codex-latest tests must dead-end npm AND the registry), so resolution
+    // can only land on the releases mock. Without the npm dead-end this test
+    // escaped to the real npm registry and installed a real Codex — that was
+    // the harness gap that kept it `#[ignore]`d.
     codex_ovm(home.path(), &releases_url)
-        .env("OVM_REGISTRY_BASE_URL", &releases_url)
+        .env("OVM_CODEX_NPM_REGISTRY_URL", OFFLINE_URL)
+        .env("OVM_NPM_PACKAGE_URL", OFFLINE_URL)
+        .env("OVM_REGISTRY_BASE_URL", OFFLINE_URL)
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("PATH", "/usr/bin:/bin")
         .args(["cx"])
         .assert()

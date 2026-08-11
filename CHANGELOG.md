@@ -5,6 +5,120 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.2] - 2026-08-11
+
+The tag was re-cut on 2026-08-11 before its first public release to fold in
+the fixes from a full external go-live audit.
+
+### Security
+
+- **Linux binaries run on the systems they install onto.** Release builds
+  moved from `ubuntu-latest` (whose silent 24.04 bump stamped a glibc 2.39
+  requirement into every published Linux binary) to a fixed **glibc 2.35
+  floor** (Ubuntu 22.04+, Debian 12+, Fedora 36+). Every release leg now
+  smoke-runs the packed archive it built — the aarch64 cross-build under
+  qemu — and `install.sh` refuses older-glibc and musl systems with a
+  build-from-source message instead of installing a binary the dynamic
+  loader cannot start.
+- **CI credentials are withheld from binaries under test.** The deep lane
+  executes freshly downloaded upstream releases; those child processes no
+  longer inherit repository tokens or deploy secrets. Checkouts on the
+  benchmark runner stop persisting the Actions token, pushes authenticate
+  step-scoped, and every spawn site of a product under test rebuilds its
+  environment with secret-named variables stripped (the products' own auth
+  excepted — exercising it is the point of the authenticated lanes).
+- **Claudex auto-update only activates registry-approved versions.** The
+  automatic path no longer falls back to upstream's `releases/latest` with a
+  checksum from the same publisher; it acts on OVM-registry (deep-lane)
+  verdicts and stands down when none is available. Explicit installs keep
+  the fallback and say which authority they trusted. Legacy proxy pid
+  records also gained an identity anchor (the pidfile's own mtime) so a
+  recycled PID can no longer be signalled on a name match alone.
+- **Release tags are bound to their proof.** A release tag must be an
+  ancestor of `main` and its commit must have passed the full CI workflow —
+  an off-main tag with matching version numbers can no longer bypass the
+  per-push gates. macOS release binaries are Developer ID signed and
+  notarized when the `APPLE_*` secrets are configured on the building repo;
+  without those secrets the build warns loudly and ships ad-hoc signed
+  binaries, and a build that is signed but has no notary key fails outright
+  rather than publishing signed-but-unnotarized artifacts. Promotion then
+  checks the Darwin binaries of both the private qualification assets and
+  the rebuilt public assets: each must pass `codesign --verify --strict`,
+  chain to a Developer ID Application certificate, and report a
+  TeamIdentifier (pin it with `OVM_EXPECTED_DARWIN_TEAM_ID`). Promoting from
+  a host without `codesign` is refused, because an unverifiable run must not
+  look like a verified one. `OVM_ALLOW_UNSIGNED_DARWIN=1` downgrades every
+  one of those refusals to a warning — the deliberate escape hatch for
+  promoting a build cut before the signing secrets existed. Nothing
+  re-checks Gatekeeper identity after publication: `install.sh` and
+  `ovm self update` verify SHA-256 sidecars, not signatures. Each release
+  also ships an SPDX SBOM alongside its checksums and provenance
+  attestations.
+
+### Added
+
+- **`ovm self uninstall` — a supported way back out.** The installer edits shell
+  profiles and drops launchers, snapshots, and side-binary shims across
+  `~/.ovm`; until now removing all of that meant hand-editing an rc file most
+  people never knew had been touched. The command strips the exact
+  `# >>> ovm >>>` block the installer wrote (every other line in the profile is
+  left byte-for-byte alone), removes the `~/.ovm/bin` launchers OVM still owns
+  and its snapshots under `~/.ovm/self`, and **keeps your installed
+  Claude/Codex/Pi versions and config** so a reinstall resumes where you left
+  off. `--purge` takes the whole `~/.ovm` tree — including `~/.ovm/claudex`,
+  which holds claudex's isolated Claude home, so the preview names that
+  directory and what is in it rather than letting "the whole tree" stand in for
+  your conversation history. It asks for a typed confirmation, `--yes` skips
+  it, and a non-interactive shell without `--yes` refuses rather than assuming
+  consent. A run that cannot remove something removes everything else, says
+  which item failed, and exits non-zero — including when it could not so much
+  as inspect a path, which is never reported as a clean uninstall. Only OVM's
+  own files go: the `ovm` at the recorded launcher path is removed only once it
+  proves to be one OVM wrote (anything else is left in place and named as
+  such), and recursive deletion stays inside `~/.ovm` after every symlink is
+  resolved. An install whose `~/.ovm` is itself a symlink onto another disk
+  is refused outright — the preview names where the link really points, and
+  removal is left to a human who has verified the target, rather than
+  following a link into a directory the name didn't claim.
+- **A Claudex sign-off that hands back the resume command.** Leaving a session
+  now prints a sleeping Mochi and the exact command to pick it back up —
+  `ccxy --resume <id>`, naming the shim the session was launched from, so a
+  yolo or priority-tier session resumes as itself instead of dropping into a
+  different one. Claude Code shows a hook's output only when the hook fails, so
+  the sign-off is written to the terminal directly; sessions that end with
+  `/clear` or a resume stay silent, and a session with no terminal prints
+  nothing and cannot fail.
+- **[ovm.sh/writing](https://ovm.sh/writing)** — a notes section for
+  investigations behind the tooling, opening with how the context window above
+  was established from the shipped Claude Code binary and 145 managed builds.
+
+### Fixed
+
+- **Claudex now tells Claude Code how big the proxied model actually is.**
+  Claude Code sizes auto-compaction from the model name, and `gpt-5.6-sol` is
+  not a name it recognises, so every Claudex session assumed a 200K window,
+  compacted earlier than the model required, and printed an unknown-model
+  notice at launch. Claudex declares **272,000** tokens — deliberately not the
+  raw 1,050,000 API window: Claudex authenticates through Codex on a ChatGPT
+  subscription, where prompts over 272K input tokens bill at 2x input and 1.5x
+  output for the whole request. Sessions get their real headroom and stop where
+  the billing rate changes. Override with `tuning.max_context_tokens`.
+- Guided setup on a fresh machine exposes the freshly installed OVM on `PATH`
+  before it runs, so the guided path works on a machine that has never had OVM.
+- **`ovm story` is findable.** It shipped as a headline feature, the installer
+  invited people to run it, and `ovm help` never mentioned it — working, but
+  undiscoverable unless you already knew. It is now listed in the full help,
+  with a one-line pointer on the bare `ovm` screen. A test now fails if any
+  command exists without appearing in the written help.
+- The story's Mochi link points at `mochiexists.com/plate`.
+- A benchmark lane that fails partway now still exports the measurements it
+  produced. Previously an aborted sweep skipped the ledger export entirely, so
+  a run that measured real versions before hitting the usage kill switch
+  committed nothing and reported "Nothing new" — published data silently lost
+  work that had already been done.
+
 ## [0.1.1] - 2026-08-10
 
 The guided Claudex journey and cat story qualified across three alpha releases
@@ -732,7 +846,12 @@ the real first public release carries the version the public repo ships.
 
 <!-- v0.0.3-alpha.4 is the first tag on the repaired public history; older
      versions predate it and intentionally have no public link targets. -->
-[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1-alpha.3...v0.1.1
+[0.1.1-alpha.3]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1-alpha.2...v0.1.1-alpha.3
+[0.1.1-alpha.2]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1-alpha.1...v0.1.1-alpha.2
+[0.1.1-alpha.1]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.0...v0.1.1-alpha.1
 [0.1.0]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.14...v0.1.0
 [0.0.3-alpha.14]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.13...v0.0.3-alpha.14
 [0.0.3-alpha.13]: https://github.com/ovm-sh/ovm-oss/compare/v0.0.3-alpha.12...v0.0.3-alpha.13
