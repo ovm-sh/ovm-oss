@@ -1,0 +1,444 @@
+# ONE-OFF — delete once v0.1.2 is published. This is not release machinery.
+#
+# Why it exists: release.yml's verify-finalize-darwin job shipped with
+# `permissions: contents: read`. GitHub returns DRAFT releases only to callers
+# with push access, so that token listed zero releases for the staged tag and
+# the gate died on "expected exactly one staged release" — a fail-closed check
+# blind to the state it gates. It was new in 9c9b0ee, after v0.1.1, so v0.1.2
+# was its first live run.
+#
+# Why the fix cannot simply be re-run: Actions executes the workflow file from
+# the dispatched ref. Finalizing v0.1.2 means dispatching AT tag v0.1.2, whose
+# release.yml has the bug frozen into it; the tag cannot move (update and
+# deletion are both blocked with no bypass actors). Dispatching the fixed
+# release.yml from main instead fails its own first gate, which requires
+# dispatch at the exact tag — an invariant worth keeping, not deleting to
+# unstick one release.
+#
+# So: same verification, run from main, in a workflow whose contract permits a
+# branch dispatch. Every check below is copied VERBATIM from release.yml. The
+# only edits are the five values release.yml derives from `inputs` and its
+# metadata job, which are pinned here as constants — including the tag's commit,
+# asserted explicitly because GITHUB_SHA is main's HEAD in this workflow.
+#
+# Pinned to exactly one release on purpose: a general "publish any draft" button
+# on a public repo is a bigger security surface than release.yml. After v0.1.2
+# is out this file is inert, and the next release sync deletes it anyway
+# (promote-release.sh replaces the public tree wholesale).
+
+name: Finalize v0.1.2 (one-off)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type "finalize v0.1.2 as latest" exactly.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finalize-v0-1-2-one-off
+  cancel-in-progress: false
+
+env:
+  TAG_COMMIT: ec2ef667cc9d4f59f90bb6a0164ae7b15dd091bf
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: v0.1.2
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require typed confirmation and bind this run to the frozen tag
+        shell: bash
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          [[ "$CONFIRM" == "finalize v0.1.2 as latest" ]] || {
+            echo "confirm must be exactly: finalize v0.1.2 as latest" >&2
+            exit 1
+          }
+          # This workflow is dispatched from a branch BY DESIGN, so the
+          # tag-to-commit binding release.yml gets free from GITHUB_SHA has to
+          # be asserted here instead. Nothing downstream trusts a tag lookup.
+          [[ "$GITHUB_REF" == refs/heads/main ]] || {
+            echo "dispatch this from main; got $GITHUB_REF" >&2
+            exit 1
+          }
+          remote_sha=$(git ls-remote --exit-code origin refs/tags/v0.1.2 |
+            awk '{print $1}')
+          [[ "$remote_sha" == "$TAG_COMMIT" ]] || {
+            echo "tag v0.1.2 is $remote_sha, expected the pinned $TAG_COMMIT" >&2
+            exit 1
+          }
+          [[ $(git cat-file -t refs/tags/v0.1.2) == commit ]] || {
+            echo "release tags must be lightweight tags pointing at a commit" >&2
+            exit 1
+          }
+          # Same crate-version cross-check release.yml's metadata job runs,
+          # against the tag's tree rather than the branch's.
+          crate_versions=$(sed -n 's/^version = "\([^"]*\)"/\1/p' \
+            crates/ovm/Cargo.toml)
+          crate_version=${crate_versions%%$'\n'*}
+          [[ "v$crate_version" == v0.1.2 ]] || {
+            echo "tag v0.1.2 does not match crate version $crate_version" >&2
+            exit 1
+          }
+          echo "Bound to v0.1.2 at $TAG_COMMIT."
+
+  verify-finalize-darwin:
+    needs: guard
+    runs-on: macos-latest
+    permissions:
+      # write, despite this job only ever READING — the exact bug this
+      # workflow exists to route around. See the header.
+      contents: write
+    steps:
+      - name: Verify the staged Darwin assets against the approved Apple team
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          RELEASE_TAG: v0.1.2
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERT_P12_BASE64:-}" ]; then
+            echo "::error::APPLE_CERT_P12_BASE64 is required to approve Darwin signing before finalize"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/ovm-finalize-signing.keychain-db"
+          keychain_password=$(uuidgen)
+          trap 'security delete-keychain "$keychain" >/dev/null 2>&1 || true' EXIT
+          security create-keychain -p "$keychain_password" "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$APPLE_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/finalize-cert.p12"
+          security import "$RUNNER_TEMP/finalize-cert.p12" -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/finalize-cert.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" | \
+            awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          expected_team=$(sed -n 's/.*(\([A-Z0-9][A-Z0-9]*\))$/\1/p' <<<"$identity")
+          if [ -z "$identity" ] || [ -z "$expected_team" ]; then
+            echo "::error::the configured signing certificate has no Developer ID Application identity with a Team ID"
+            exit 1
+          fi
+          releases=$(gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq 'add')
+          release=$(jq --arg tag "$RELEASE_TAG" \
+            '[.[] | select(.tag_name == $tag)] | if length == 1 then .[0] else error("expected exactly one staged release") end' \
+            <<<"$releases")
+          release_id=$(jq -r '.id' <<<"$release")
+          rm -rf verified-darwin-assets
+          mkdir verified-darwin-assets
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            archive="ovm-$target.tar.gz"
+            asset_id=$(jq -r --arg name "$archive" \
+              '[.assets[] | select(.name == $name)] | if length == 1 then .[0].id else error("missing or duplicate Darwin asset") end' \
+              <<<"$release")
+            gh api -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "verified-darwin-assets/$archive"
+            extract="verified-darwin-assets/$target"
+            mkdir "$extract"
+            tar xzf "verified-darwin-assets/$archive" -C "$extract"
+            while IFS= read -r binary; do
+              path="$extract/$binary"
+              test -f "$path"
+              codesign --verify --strict "$path"
+              details=$(codesign -dvvv "$path" 2>&1)
+              team=$(sed -n 's/^TeamIdentifier=//p' <<<"$details")
+              authorities=$(sed -n 's/^Authority=//p' <<<"$details")
+              authority=${authorities%%$'\n'*}
+              [[ "$team" == "$expected_team" ]] || {
+                echo "::error::$binary in $archive has TeamIdentifier=${team:-missing}, expected the configured Developer ID team"
+                exit 1
+              }
+              [[ "$authority" == "Developer ID Application:"* ]] || {
+                echo "::error::$binary in $archive is not signed by a Developer ID Application certificate"
+                exit 1
+              }
+            done < <(printf '%s\n' ovm ovm-codex-skew ovm-claudex)
+          done
+          # Preserve the release id in logs without trusting a tag-only lookup.
+          echo "Verified Darwin signatures for staged release $release_id."
+
+  finalize:
+    needs: [guard, verify-finalize-darwin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: v0.1.2
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Re-check tag protection and immutability before publishing
+        shell: bash
+        env:
+          # Same administration-read requirement as the draft-stage check.
+          GH_TOKEN: ${{ secrets.OVM_PRIVATE_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The draft-stage check can be hours old by finalize time; a ruleset
+          # weakened (or immutability disabled) in between must block the
+          # publish, not be discovered afterwards.
+          if ! ruleset_ids=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/rulesets?targets=tag" \
+            --jq '.[] | select(.enforcement == "active") | .id')
+          then
+            echo "::error::could not inspect public tag-protection rulesets with the workflow token"
+            exit 1
+          fi
+          protected=false
+          for ruleset_id in $ruleset_ids; do
+            if gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" |
+              jq -e '
+                .target == "tag" and
+                .enforcement == "active" and
+                ((.bypass_actors // []) | length == 0) and
+                ((.conditions.ref_name.exclude // []) | length == 0) and
+                ([.rules[].type] | index("update") != null) and
+                ([.rules[].type] | index("deletion") != null) and
+                (.conditions.ref_name.include |
+                  any(. == "~ALL" or . == "refs/tags/v*"))
+              ' >/dev/null
+            then
+              protected=true
+              break
+            fi
+          done
+          if [ "$protected" != true ]; then
+            echo "::error::no active v* tag ruleset without bypass actors or exclusions blocks both updates and deletions"
+            exit 1
+          fi
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" != true ]; then
+            echo "::error::immutable releases are not enabled on $GITHUB_REPOSITORY"
+            exit 1
+          fi
+      - name: Publish the validated draft once with its final state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The publish PATCH stays on the Actions token; only the
+          # immutable-releases read needs the release token's
+          # repository-administration scope.
+          SETTINGS_TOKEN: ${{ secrets.OVM_PRIVATE_RELEASE_TOKEN }}
+          PRIVATE_COMMIT: d73e4a9eb52b6e651746265374b07ba10610d258
+          RELEASE_TAG: v0.1.2
+          FINAL_PRERELEASE: 'false'
+          MAKE_LATEST: 'true'
+        run: |
+          set -euo pipefail
+          remote_sha=$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG" | awk '{print $1}')
+          [[ "$remote_sha" == "$TAG_COMMIT" ]] || {
+            echo "release tag moved or was deleted before finalization" >&2
+            exit 1
+          }
+          # Drafts are not addressable by tag, so list all releases (slurped
+          # into one array across pages). Draft and published candidates get
+          # the SAME full verification — binding, assets, checksums, and
+          # build-provenance attestations — before any state transition; a
+          # published release is only ever verified, never edited.
+          releases=$(gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq 'add')
+          matches=$(jq --arg tag "$RELEASE_TAG" \
+            '[.[] | select(.tag_name == $tag)]' <<<"$releases")
+          [[ $(jq 'length' <<<"$matches") == 1 ]] || {
+            echo "expected exactly one staged draft or published release for $RELEASE_TAG" >&2
+            exit 1
+          }
+          release=$(jq '.[0]' <<<"$matches")
+          release_id=$(jq -r '.id' <<<"$release")
+          is_draft=$(jq -r '.draft' <<<"$release")
+          if [[ "$is_draft" != true ]]; then
+            # Repository-level immutability is not retroactive: a release
+            # published before it was enabled is still editable and can never
+            # count as finalized. Require per-release immutability.
+            jq -e '.immutable == true' <<<"$release" >/dev/null || {
+              echo "release $RELEASE_TAG is published but NOT immutable; it predates immutable releases and must be replaced by a strictly newer version" >&2
+              exit 1
+            }
+          fi
+          if ! jq -r '.body' <<<"$release" | tr -d '\r' |
+            grep -Fqx "Private build commit: $PRIVATE_COMMIT"
+          then
+            echo "release $RELEASE_TAG is not bound to private build $PRIVATE_COMMIT" >&2
+            exit 1
+          fi
+          asset_names=$(jq -r '.assets[].name' <<<"$release")
+          rm -rf verified-release-assets
+          mkdir verified-release-assets
+          sbom="ovm-$RELEASE_TAG.spdx.json"
+          sbom_sidecar="$sbom.sha256"
+          for asset in "$sbom" "$sbom_sidecar"; do
+            [[ $(printf '%s\n' "$asset_names" | grep -Fxc "$asset") == 1 ]] || {
+              echo "release $RELEASE_TAG must contain exactly one $asset" >&2
+              exit 1
+            }
+            asset_id=$(jq -r --arg name "$asset" \
+              '.assets[] | select(.name == $name) | .id' <<<"$release")
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "verified-release-assets/$asset"
+          done
+          (
+            cd verified-release-assets
+            shasum -a 256 -c "$sbom_sidecar"
+          )
+          python3 -c "import json,sys; json.load(open(sys.argv[1]))" \
+            "verified-release-assets/$sbom"
+          gh attestation verify "verified-release-assets/$sbom" \
+            -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG"
+          for target in \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-gnu
+          do
+            archive="ovm-$target.tar.gz"
+            sidecar="$archive.sha256"
+            for asset in "$archive" "$sidecar"; do
+              [[ $(printf '%s\n' "$asset_names" | grep -Fxc "$asset") == 1 ]] || {
+                echo "release $RELEASE_TAG must contain exactly one $asset" >&2
+                exit 1
+              }
+              asset_id=$(jq -r --arg name "$asset" \
+                '.assets[] | select(.name == $name) | .id' <<<"$release")
+              gh api \
+                -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                > "verified-release-assets/$asset"
+            done
+            awk -v archive="$archive" '
+              NR != 1 || NF != 2 || $2 != archive ||
+                $1 !~ /^[[:xdigit:]]{64}$/ { exit 1 }
+              END { if (NR != 1) exit 1 }
+            ' "verified-release-assets/$sidecar"
+            (
+              cd verified-release-assets
+              shasum -a 256 -c "$sidecar"
+            )
+            # A swapped archive+sidecar pair passes checksum self-consistency;
+            # only the build-provenance attestation binds the bytes to the
+            # attested public-tag build — from THIS repo's release workflow at
+            # THIS tag, not any attestation in the repo. Verify BEFORE the
+            # immutable publish.
+            gh attestation verify "verified-release-assets/$archive" \
+              -R "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG"
+          done
+          if [[ "$is_draft" == true ]]; then
+            # Close the verify→publish window: re-fetch the draft and require
+            # the exact asset set (ids, names, sizes) and repo immutability
+            # observed during verification, immediately before the PATCH.
+            expected_assets=$(jq '[.assets[] | {id, name, size}] | sort_by(.id)' <<<"$release")
+            recheck=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")
+            jq -e --arg tag "$RELEASE_TAG" \
+              '.draft == true and .tag_name == $tag' <<<"$recheck" >/dev/null || {
+              echo "draft $RELEASE_TAG changed state between verification and publication" >&2
+              exit 1
+            }
+            current_assets=$(jq '[.assets[] | {id, name, size}] | sort_by(.id)' <<<"$recheck")
+            [[ "$current_assets" == "$expected_assets" ]] || {
+              echo "draft $RELEASE_TAG assets changed between verification and publication" >&2
+              exit 1
+            }
+            if [ "$(GH_TOKEN="$SETTINGS_TOKEN" gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" != true ]; then
+              echo "immutable releases were disabled between verification and publication" >&2
+              exit 1
+            fi
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -F draft=false \
+              -F prerelease="$FINAL_PRERELEASE" \
+              -f make_latest="$MAKE_LATEST" >/dev/null
+          fi
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --argjson prerelease "$FINAL_PRERELEASE" \
+            '.draft == false and .tag_name == $tag and .prerelease == $prerelease
+             and .immutable == true' \
+            <<<"$release" >/dev/null || {
+            echo "release $RELEASE_TAG is not in the requested final IMMUTABLE state" >&2
+            exit 1
+          }
+          # Fail closed on Latest lookup: only a genuine 404 (no published
+          # stable release yet — the recovery window) may read as "no Latest";
+          # any other API failure must not skip verification.
+          latest_err=$(mktemp)
+          if latest_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" \
+            --jq '.tag_name' 2>"$latest_err"); then
+            :
+          elif grep -q "HTTP 404" "$latest_err"; then
+            latest_tag=""
+          else
+            cat "$latest_err" >&2
+            echo "could not verify releases/latest; refusing to guess" >&2
+            exit 1
+          fi
+          if [[ "$MAKE_LATEST" == true ]]; then
+            [[ "$latest_tag" == "$RELEASE_TAG" ]] || {
+              echo "published release did not become Latest (immutable releases cannot be edited afterwards)" >&2
+              exit 1
+            }
+          else
+            # The fleet-stays-put contract must hold in the requested final
+            # state, including the already-published idempotent path.
+            [[ "$latest_tag" != "$RELEASE_TAG" ]] || {
+              echo "release $RELEASE_TAG is Latest but finalize was requested with make_latest=false" >&2
+              exit 1
+            }
+          fi
+          remote_sha=$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG" | awk '{print $1}')
+          [[ "$remote_sha" == "$TAG_COMMIT" ]] || {
+            echo "release tag moved or was deleted after publication" >&2
+            exit 1
+          }
+          if [[ "$is_draft" == true ]]; then
+            echo "Published $RELEASE_TAG once with prerelease=$FINAL_PRERELEASE make_latest=$MAKE_LATEST."
+          else
+            echo "Release $RELEASE_TAG was already published; fully re-verified in the requested final state."
+          fi
+
+  verify-public-install:
+    # Verbatim from release.yml: every other check confirms the ASSETS exist;
+    # none of them installs. That gap is how a release once shipped whose
+    # installer left users with "command not found".
+    needs: [guard, finalize]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: v0.1.2
+          persist-credentials: false
+      - name: Install from the public URL and use it as a new user would
+        shell: bash
+        env:
+          RELEASE_TAG: v0.1.2
+        run: |
+          set -euo pipefail
+          OVM_ACCEPTANCE_REMOTE=1 \
+          OVM_ACCEPTANCE_PUBLISHED="${RELEASE_TAG#v}" \
+            bash tests/scripts/first-run-acceptance.sh
