@@ -425,7 +425,44 @@ fn npm_package_from_path(path: &Path) -> Option<String> {
 }
 
 fn is_ovm_managed(dirs: &OvmDirs, candidate: &Path) -> bool {
-    crate::version_manager::path_is_inside(&dirs.base, candidate)
+    // Walk the symlink chain and judge each hop by WHERE IT LIVES, never by
+    // where the chain ultimately lands. Two of our own launchers used to
+    // read as foreign installs under a Homebrew/cargo OVM (executable
+    // outside ~/.ovm): the ~/.ovm/bin shim resolves to that executable, and
+    // ~/.local/bin/claude resolves through the shim to the same place — so
+    // full canonicalization left the base directory and the only remaining
+    // test, current_exe, fails whenever the control plane exec'd a
+    // self-managed version. A hop whose own directory canonicalizes into
+    // ~/.ovm is ours by construction, whatever it points at.
+    let mut hop = candidate.to_path_buf();
+    for _ in 0..16 {
+        let dir_is_ours = hop
+            .parent()
+            .is_some_and(|parent| crate::version_manager::path_is_inside(&dirs.base, parent));
+        if dir_is_ours {
+            return true;
+        }
+        match std::fs::read_link(&hop) {
+            Ok(target) if target.is_absolute() => hop = target,
+            Ok(target) => match hop.parent() {
+                Some(parent) => hop = parent.join(target),
+                None => break,
+            },
+            Err(_) => break,
+        }
+    }
+    // A launcher whose chain never touches ~/.ovm but resolves to the
+    // running OVM executable is ours too (a shim created before the base
+    // moved, an exotic install layout).
+    if let (Ok(resolved), Ok(own_exe)) = (
+        candidate.canonicalize(),
+        std::env::current_exe().and_then(|exe| exe.canonicalize()),
+    ) {
+        if resolved == own_exe {
+            return true;
+        }
+    }
+    false
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {
@@ -596,6 +633,28 @@ mod tests {
                 .expect("found foreign binary");
 
         assert_eq!(found, foreign_bin.join("codex"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ovm_shim_resolving_outside_the_base_is_still_ours() {
+        // With a Homebrew or cargo OVM, ~/.ovm/bin/<product> is a symlink to
+        // the ovm executable OUTSIDE ~/.ovm. Judging the resolved target
+        // alone misread our own shim as an unmanaged install — the location
+        // under ~/.ovm decides first.
+        let root = tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(root.path().join(".ovm"));
+        fs::create_dir_all(&dirs.bin).expect("mkdir ovm bin");
+        let outside_exe = root.path().join("homebrew-bin").join("ovm");
+        fs::create_dir_all(outside_exe.parent().expect("parent")).expect("mkdir");
+        fs::write(&outside_exe, "the ovm executable").expect("write");
+        let shim = dirs.bin.join("codex");
+        std::os::unix::fs::symlink(&outside_exe, &shim).expect("shim");
+
+        let found =
+            find_foreign_binary_in_paths(&dirs, Product::Codex, std::slice::from_ref(&dirs.bin));
+
+        assert_eq!(found, None, "our own shim must never read as foreign");
     }
 
     #[test]

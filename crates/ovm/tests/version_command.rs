@@ -158,7 +158,7 @@ fn an_empty_store_says_so_for_every_product_and_names_the_fix() {
 #[test]
 fn an_installed_product_reports_the_active_version_and_the_count() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.142.0";
     let (_server, releases_url) = setup_codex_mock(version);
 
     ovm(home.path(), &releases_url)

@@ -186,3 +186,92 @@ mod tests {
         assert_eq!(std::fs::read(&path).expect("the file"), b"published");
     }
 }
+
+/// Format a `SystemTime` as a UTC `YYYY-MM-DD HH:MM` stamp.
+///
+/// The clock is here because the date alone could not do the job it was added
+/// for. The self picker's dev snapshots are usually all built on one day, so a
+/// date-only column printed the same ten characters on every row and still
+/// left the reader with nothing explaining why `current` sat where it did.
+///
+/// OVM has no date crate — adding one to print sixteen characters is not a
+/// trade worth making — so this is the civil-from-days algorithm (Howard
+/// Hinnant's `civil_from_days`), which is exact for every date this will ever
+/// see.
+///
+/// Times before the Unix epoch return `None` rather than a wrong stamp: a
+/// version stamped before 1970 means the clock is broken, and a dash is the
+/// honest rendering of that.
+pub(crate) fn utc_datetime(time: std::time::SystemTime) -> Option<String> {
+    let secs: i64 = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        .try_into()
+        .ok()?;
+    let seconds_of_day = secs.rem_euclid(86_400);
+    Some(format!(
+        "{} {:02}:{:02}",
+        civil_date(secs),
+        seconds_of_day / 3_600,
+        (seconds_of_day % 3_600) / 60
+    ))
+}
+
+/// `YYYY-MM-DD` for a count of seconds since the Unix epoch.
+fn civil_date(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    // Shift the era so March 1st starts the year: that puts the leap day at
+    // the end, where the 4/100/400 rules stay a plain arithmetic sequence.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::{civil_date, utc_datetime};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn utc_datetime_carries_the_clock_that_orders_same_day_builds() {
+        let at = |secs: u64| utc_datetime(UNIX_EPOCH + Duration::from_secs(secs));
+        assert_eq!(at(0).as_deref(), Some("1970-01-01 00:00"));
+        // Two builds on one day: the date is identical, the clock is not —
+        // which is the whole reason the time is in the cell.
+        assert_eq!(
+            at(1_755_388_800 + 9 * 3_600 + 5 * 60).as_deref(),
+            Some("2025-08-17 09:05")
+        );
+        assert_eq!(
+            at(1_755_388_800 + 23 * 3_600 + 59 * 60).as_deref(),
+            Some("2025-08-17 23:59")
+        );
+        // Seconds are not shown, and must never round the minute up.
+        assert_eq!(at(1_755_388_800 + 59).as_deref(), Some("2025-08-17 00:00"));
+        // Before the epoch is a broken clock, not a date to guess at.
+        assert!(utc_datetime(UNIX_EPOCH - Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn civil_date_matches_known_instants() {
+        assert_eq!(civil_date(0), "1970-01-01");
+        // Leap day, and the day either side of it.
+        assert_eq!(civil_date(1_709_164_800), "2024-02-29");
+        assert_eq!(civil_date(1_709_078_400), "2024-02-28");
+        assert_eq!(civil_date(1_709_251_200), "2024-03-01");
+        // 2000 is a leap year (÷400), 1900 was not (÷100).
+        assert_eq!(civil_date(951_782_400), "2000-02-29");
+        assert_eq!(civil_date(1_755_388_800), "2025-08-17");
+        // Mid-day never rolls the date forward.
+        assert_eq!(civil_date(1_755_388_800 + 86_399), "2025-08-17");
+    }
+}

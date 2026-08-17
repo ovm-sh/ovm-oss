@@ -17,6 +17,10 @@ const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
 const ITALIC: &str = "\x1b[3m";
+const UNDERLINE: &str = "\x1b[4m";
+/// SGR 24 ends the underline without clearing colour, so an underlined label
+/// can sit inside a coloured line (the "buy a plate" line is MAGENTA).
+const UNDERLINE_OFF: &str = "\x1b[24m";
 const MAGENTA: &str = "\x1b[35m";
 const ORANGE: &str = "\x1b[38;5;215m";
 const RUST: &str = "\x1b[38;5;130m";
@@ -215,6 +219,55 @@ fn accepts_buddy(input: &str) -> bool {
     matches!(input.trim().to_lowercase().as_str(), "/buddy" | "buddy")
 }
 
+/// Length of the escape sequence starting at `start`, or `None` if the
+/// character there is ordinary text.
+///
+/// The typewriter paces *visible* characters. Without this it would sleep
+/// once per byte of an invisible sequence — an OSC 8 hyperlink is ~40 bytes,
+/// so a linked line took half a second of dead air before its first letter
+/// appeared. The old workaround was to print link lines instantly, which is
+/// what made chapter ii read as snap, snap, type, type, type, snap, snap.
+///
+/// Two forms appear in this story:
+///   CSI  `ESC [ … final`   final byte in `@`..=`~`  (colour, underline)
+///   OSC  `ESC ] … ST`      terminated by `ESC \` or BEL  (hyperlinks)
+fn escape_run(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'\x1b') {
+        return None;
+    }
+    let mut i = start + 1;
+    match chars.get(i) {
+        Some('[') => {
+            i += 1;
+            while let Some(&c) = chars.get(i) {
+                i += 1;
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+        Some(']') => {
+            i += 1;
+            while let Some(&c) = chars.get(i) {
+                i += 1;
+                if c == '\x07' {
+                    break;
+                }
+                if c == '\x1b' {
+                    if chars.get(i) == Some(&'\\') {
+                        i += 1;
+                    }
+                    break;
+                }
+            }
+        }
+        // A lone two-character escape (including the bare ST that closes OSC 8).
+        Some(_) => i += 1,
+        None => {}
+    }
+    Some(i - start)
+}
+
 // ---- the teller -------------------------------------------------------------
 
 struct Story {
@@ -254,10 +307,24 @@ impl Story {
         }
         print!("{margin}{color}");
         let mut out = io::stdout();
-        for ch in text.chars() {
-            print!("{ch}");
+        // Escape sequences are emitted whole and instantly; only the letters
+        // the reader can actually see cost a beat. That lets a line carrying a
+        // hyperlink type at the same rhythm as the prose around it.
+        let chars: Vec<char> = text.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if let Some(run) = escape_run(&chars, i) {
+                for ch in &chars[i..i + run] {
+                    print!("{ch}");
+                }
+                let _ = out.flush();
+                i += run;
+                continue;
+            }
+            print!("{}", chars[i]);
             let _ = out.flush();
             sleep(Duration::from_millis(pace_ms));
+            i += 1;
         }
         println!("{}", if color.is_empty() { "" } else { RESET });
     }
@@ -339,8 +406,13 @@ impl Story {
     ///
     /// Terminals that don't support OSC 8 ignore the sequence and print the
     /// text, so the line still reads correctly — never as raw escapes.
+    ///
+    /// The label is underlined (SGR 4, closed with 24 rather than a full
+    /// reset so the caller's colour survives the link). Without it the link
+    /// is invisible until the reader happens to hold cmd/ctrl — the text
+    /// looked like prose, so nobody knew there was anything to click.
     fn link(&self, url: &str, text: &str) -> String {
-        format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+        format!("\x1b]8;;{url}\x1b\\{UNDERLINE}{text}{UNDERLINE_OFF}\x1b]8;;\x1b\\")
     }
 
     /// Every chapter opens on a clean screen.
@@ -505,14 +577,18 @@ impl Story {
             460,
         );
         self.blank();
+        // localaicat.com is the public site on purpose: the source repo
+        // local-ai-cat/Local-AI-Chat is private, so linking it the way the
+        // ship of theseus line does would hand every reader a 404.
         self.say(
-            "Mochi came first, though — they were born in local ai chat,",
+            &format!(
+                "Mochi came first, though — they were born in {},",
+                self.link("https://localaicat.com", "local ai chat")
+            ),
             "",
             12,
             0,
         );
-        // Prints at once, not typed: the OSC 8 hyperlink is an escape
-        // sequence, and a typewriter would stutter through invisible bytes.
         self.say(
             &format!(
                 "but raised by the crew in the {}",
@@ -522,7 +598,7 @@ impl Story {
                 )
             ),
             "",
-            0,
+            12,
             0,
         );
         self.blank();
@@ -539,31 +615,31 @@ impl Story {
             0,
         );
         self.say(
-            "back one more time — to greet every ovm and cxy user.",
+            "back in ASCII — to greet every ovm and cxy user.",
             "",
             10,
             0,
         );
         self.blank();
-        // Link lines print at once: an OSC 8 sequence typed character by
-        // character would still parse, but the typewriter would be stuttering
-        // through invisible escape bytes.
         self.say(
             &format!(
                 "Learn about ccy and cxy at {}",
                 self.link("https://mochiexists.com/yolo/", "mochiexists.com/yolo")
             ),
             "",
-            0,
+            10,
             300,
         );
+        // Two offers, not a list: the blank line keeps "buy a plate" from
+        // reading as a second bullet of the ccy/cxy line above it.
+        self.blank();
         self.say(
             &format!(
                 "Buy a plate at {}",
                 self.link("https://mochiexists.com/plate/", "mochiexists.com/plate")
             ),
             MAGENTA,
-            0,
+            10,
             0,
         );
         self.wait();
@@ -738,6 +814,70 @@ mod tests {
         assert!(!accepts_buddy(""));
         assert!(!accepts_buddy("/help"));
         assert!(!accepts_buddy("bud"));
+    }
+
+    /// A link that is not underlined is invisible until the reader happens to
+    /// hold cmd/ctrl — it reads as prose, which is how the local ai chat and
+    /// ship of theseus links went unnoticed. The label must carry SGR 4, and
+    /// must close with SGR 24 rather than a full reset so an underlined label
+    /// can sit inside a coloured line without clearing the colour.
+    #[test]
+    fn links_are_underlined_and_do_not_clear_the_surrounding_colour() {
+        let story = Story {
+            fast: true,
+            width: 80,
+        };
+        let rendered = story.link("https://localaicat.com", "local ai chat");
+
+        assert!(rendered.contains("\x1b]8;;https://localaicat.com\x1b\\"));
+        assert!(rendered.contains("\x1b[4mlocal ai chat\x1b[24m"));
+        assert!(rendered.ends_with("\x1b]8;;\x1b\\"));
+        // A full reset here would drop the caller's colour mid-line.
+        assert!(!rendered.contains(RESET));
+    }
+
+    /// The typewriter must pace visible letters only. If `escape_run` ever
+    /// stops recognising a sequence, the reader watches ~40 bytes of an OSC 8
+    /// hyperlink tick by one sleep at a time before the line appears.
+    #[test]
+    fn escape_run_measures_sequences_and_leaves_prose_alone() {
+        let story = Story {
+            fast: true,
+            width: 80,
+        };
+        let line = format!(
+            "born in {},",
+            story.link("https://localaicat.com", "local ai chat")
+        );
+        let chars: Vec<char> = line.chars().collect();
+
+        // Ordinary prose is never mistaken for an escape.
+        assert_eq!(escape_run(&chars, 0), None);
+
+        // Every escape is consumed whole, and what is left is exactly the
+        // text a reader sees — which is what the typewriter paces.
+        let mut visible = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            match escape_run(&chars, i) {
+                Some(run) => i += run,
+                None => {
+                    visible.push(chars[i]);
+                    i += 1;
+                }
+            }
+        }
+        assert_eq!(visible, "born in local ai chat,");
+
+        // CSI underline, and the bare ST that closes a hyperlink.
+        assert_eq!(
+            escape_run(&"\x1b[4m".chars().collect::<Vec<_>>(), 0),
+            Some(4)
+        );
+        assert_eq!(
+            escape_run(&"\x1b\\".chars().collect::<Vec<_>>(), 0),
+            Some(2)
+        );
     }
 
     #[test]

@@ -1,0 +1,85 @@
+{
+  "assets": [
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-aarch64-apple-darwin.tar.gz",
+      "name": "codex-aarch64-apple-darwin.tar.gz",
+      "size": 6122646
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 6444219
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-aarch64-unknown-linux-musl.tar.gz",
+      "size": 8574742
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-exec-aarch64-apple-darwin.tar.gz",
+      "name": "codex-exec-aarch64-apple-darwin.tar.gz",
+      "size": 3245892
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-exec-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-exec-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 3451384
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-exec-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-exec-aarch64-unknown-linux-musl.tar.gz",
+      "size": 5643443
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-exec-x86_64-apple-darwin.tar.gz",
+      "name": "codex-exec-x86_64-apple-darwin.tar.gz",
+      "size": 3442193
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-exec-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-exec-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 3667711
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-exec-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-exec-x86_64-unknown-linux-musl.tar.gz",
+      "size": 5741715
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-linux-sandbox-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-linux-sandbox-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 379815
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-linux-sandbox-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-linux-sandbox-aarch64-unknown-linux-musl.tar.gz",
+      "size": 422434
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-linux-sandbox-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-linux-sandbox-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 410123
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-linux-sandbox-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-linux-sandbox-x86_64-unknown-linux-musl.tar.gz",
+      "size": 456190
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-x86_64-apple-darwin.tar.gz",
+      "name": "codex-x86_64-apple-darwin.tar.gz",
+      "size": 6478399
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 6818937
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.2.0/codex-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-x86_64-unknown-linux-musl.tar.gz",
+      "size": 8902199
+    }
+  ],
+  "tag_name": "rust-v0.2.0"
+}

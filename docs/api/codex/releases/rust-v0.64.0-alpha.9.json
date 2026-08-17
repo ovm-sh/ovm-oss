@@ -1,0 +1,85 @@
+{
+  "assets": [
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-aarch64-apple-darwin.tar.gz",
+      "name": "codex-aarch64-apple-darwin.tar.gz",
+      "size": 15648704
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 16804151
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 17270464
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-aarch64-unknown-linux-musl.tar.gz",
+      "size": 19266154
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-aarch64-apple-darwin.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-apple-darwin.tar.gz",
+      "size": 1824083
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 1887674
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 1933831
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-unknown-linux-musl.tar.gz",
+      "size": 4230196
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-x86_64-apple-darwin.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-apple-darwin.tar.gz",
+      "size": 1987795
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 1974433
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 2041997
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-responses-api-proxy-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-unknown-linux-musl.tar.gz",
+      "size": 4125736
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-x86_64-apple-darwin.tar.gz",
+      "name": "codex-x86_64-apple-darwin.tar.gz",
+      "size": 17188646
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 18218483
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 18464744
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.64.0-alpha.9/codex-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-x86_64-unknown-linux-musl.tar.gz",
+      "size": 20625141
+    }
+  ],
+  "tag_name": "rust-v0.64.0-alpha.9"
+}

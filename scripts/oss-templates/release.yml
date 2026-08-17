@@ -658,7 +658,13 @@ jobs:
     if: needs.metadata.outputs.stage == 'finalize'
     runs-on: macos-latest
     permissions:
-      contents: read
+      # write, despite this job only ever READING: GitHub returns draft
+      # releases exclusively to callers with push access, so a contents:read
+      # token lists zero releases for the staged tag and this gate fails with
+      # "expected exactly one staged release" — a fail-closed check that
+      # cannot see the state it gates. Same landmine as the private
+      # release-token read: least privilege here means "cannot verify".
+      contents: write
     steps:
       - name: Verify the staged Darwin assets against the approved Apple team
         shell: bash

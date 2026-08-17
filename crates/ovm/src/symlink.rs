@@ -54,7 +54,6 @@ pub fn switch_symlink(link: &Path, target: &Path) -> Result<()> {
 }
 
 /// Remove a symlink if it exists
-#[cfg(test)]
 pub fn remove_symlink(link: &Path) -> Result<()> {
     if link.is_symlink() {
         std::fs::remove_file(link)?;

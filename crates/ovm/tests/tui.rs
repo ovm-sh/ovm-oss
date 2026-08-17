@@ -231,7 +231,7 @@ fn product_picker_esc_exits_cleanly() {
 #[test]
 fn version_picker_shows_installed_version() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.141.0";
     let env = install_codex_version(home.path(), version);
 
     let bin = ovm_bin_path();
@@ -384,7 +384,7 @@ fn version_picker_loads_quickly_for_all_products_from_registry() {
     let mut registry_server = mockito::Server::new();
     let products = [
         ("claude", "2.1.112"),
-        ("codex", "rust-v0.130.0"),
+        ("codex", "rust-v0.142.0"),
         ("pi", "0.67.6"),
     ];
 
@@ -463,7 +463,7 @@ fn select_with_direct_version_switches_non_interactively() {
     // `ovm select codex <version>` with an installed version should switch directly
     // without opening the TUI.
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.141.0";
     let env = install_codex_version(home.path(), version);
 
     assert_cmd::Command::cargo_bin("ovm")

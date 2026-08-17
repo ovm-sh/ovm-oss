@@ -1,0 +1,105 @@
+{
+  "assets": [
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-aarch64-apple-darwin.tar.gz",
+      "name": "codex-aarch64-apple-darwin.tar.gz",
+      "size": 37246700
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 39850670
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 39213515
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-aarch64-unknown-linux-musl.tar.gz",
+      "size": 40546429
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-command-runner-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-command-runner-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 281234
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-command-runner-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-command-runner-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 302375
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-aarch64-apple-darwin.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-apple-darwin.tar.gz",
+      "size": 2116824
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 2150615
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 2183831
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-unknown-linux-musl.tar.gz",
+      "size": 4310085
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-x86_64-apple-darwin.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-apple-darwin.tar.gz",
+      "size": 2298911
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 2265116
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 2309995
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-responses-api-proxy-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-unknown-linux-musl.tar.gz",
+      "size": 4309040
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 301184
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 319442
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-x86_64-apple-darwin.tar.gz",
+      "name": "codex-x86_64-apple-darwin.tar.gz",
+      "size": 41347340
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 43506541
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 42271602
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.108.0-alpha.6/codex-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-x86_64-unknown-linux-musl.tar.gz",
+      "size": 44228068
+    }
+  ],
+  "tag_name": "rust-v0.108.0-alpha.6"
+}

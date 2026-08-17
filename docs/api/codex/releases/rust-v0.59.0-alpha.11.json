@@ -1,0 +1,85 @@
+{
+  "assets": [
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-aarch64-apple-darwin.tar.gz",
+      "name": "codex-aarch64-apple-darwin.tar.gz",
+      "size": 16912395
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 17829832
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 18349260
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-aarch64-unknown-linux-musl.tar.gz",
+      "size": 20454267
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-aarch64-apple-darwin.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-apple-darwin.tar.gz",
+      "size": 1823726
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-aarch64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-pc-windows-msvc.exe.tar.gz",
+      "size": 1886026
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-aarch64-unknown-linux-gnu.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 1932591
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-aarch64-unknown-linux-musl.tar.gz",
+      "name": "codex-responses-api-proxy-aarch64-unknown-linux-musl.tar.gz",
+      "size": 4231022
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-x86_64-apple-darwin.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-apple-darwin.tar.gz",
+      "size": 1987651
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 1974165
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 2042716
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-responses-api-proxy-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-responses-api-proxy-x86_64-unknown-linux-musl.tar.gz",
+      "size": 4125984
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-x86_64-apple-darwin.tar.gz",
+      "name": "codex-x86_64-apple-darwin.tar.gz",
+      "size": 18274685
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "name": "codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "size": 19039623
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-x86_64-unknown-linux-gnu.tar.gz",
+      "name": "codex-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 19396767
+    },
+    {
+      "browser_download_url": "https://github.com/openai/codex/releases/download/rust-v0.59.0-alpha.11/codex-x86_64-unknown-linux-musl.tar.gz",
+      "name": "codex-x86_64-unknown-linux-musl.tar.gz",
+      "size": 21547700
+    }
+  ],
+  "tag_name": "rust-v0.59.0-alpha.11"
+}

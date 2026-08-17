@@ -19,6 +19,12 @@ use std::time::{Duration, SystemTime};
 
 struct InstallLock {
     _file: File,
+    // Held SHARED for the whole install so any number of installers coexist,
+    // while `uninstall_all` takes the same file EXCLUSIVE — the only way to
+    // fully close the window where an installer starts (new lock file, fresh
+    // version) after a mass removal has finished enumerating per-version
+    // locks. None only for lock holders that never contend with mass removal.
+    _product_file: Option<File>,
     waited: bool,
 }
 
@@ -468,6 +474,108 @@ impl VersionManager {
         fs::remove_dir_all(self.product_dirs.version_dir(&version))?;
         hooks::run_hook(&self.dirs.hooks, Hook::PostUninstall, &version);
         Ok(())
+    }
+
+    /// Remove every installed version of this product, active one included,
+    /// and clear the selection state — the "fully leave a product" path that
+    /// otherwise required `rm -rf` by hand, because [`Self::uninstall`]
+    /// refuses the active version and `use` demands another installed version
+    /// to switch to first.
+    ///
+    /// Returns (versions removed, bytes freed). The selection (current
+    /// symlink and pin) is cleared BEFORE the removal loop: a loop that dies
+    /// half-way must not leave `current` pointing into a removed directory,
+    /// and with no active version the per-version guard has nothing to trip
+    /// on. Versions are removed under their storage names as listed — no
+    /// normalization, so dev installs (`dev:<label>`) go too.
+    pub fn uninstall_all(&self) -> Result<(usize, u64)> {
+        // Removal must not race an install, so the exclusive product lock
+        // comes FIRST — before even deciding whether anything is installed.
+        // Every installer holds this lock SHARED for its whole install, so a
+        // failed try here means an install is mid-flight (refuse), and once
+        // held no installer can begin — including one whose brand-new
+        // version has no per-version lock file yet. Taking it before the
+        // enumeration also makes the answers below authoritative: "nothing
+        // installed" cannot mean "installed a moment after we looked", and
+        // no install can complete between listing and removal to be swept
+        // without its hooks or dropped from the count.
+        let product_file = self.open_product_install_lock()?;
+        match FileExt::try_lock(&product_file) {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                return Err(OvmError::Message(format!(
+                    "Another OVM process is installing {}; nothing was removed. \
+                     Retry when it finishes.",
+                    self.product().display_name()
+                )))
+            }
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+
+        let versions = self.list_installed()?;
+        if versions.is_empty() && self.unlisted_leftover_dirs()?.is_empty() {
+            return Err(OvmError::Message(format!(
+                "No {} versions are installed.",
+                self.product().display_name()
+            )));
+        }
+
+        // Per-version locks as well, for one release of overlap: an OLDER
+        // ovm binary running concurrently predates the product lock and
+        // holds only these. A held one refuses the whole operation, and a
+        // re-enumeration after acquisition catches a lock file created
+        // inside the enumerate-then-lock window. Accepted residual, only
+        // while pre-product-lock binaries run concurrently: an old installer
+        // starting after the re-enumeration is invisible for the REST of the
+        // removal. Its tree is either swept mid-install (the incomplete
+        // state the take-over path recovers) or completes after the sweep
+        // and survives. The caller re-lists afterwards and reports what it
+        // can see; one that publishes after that re-list is indistinguishable
+        // from a fresh post-removal install and surfaces in the next `ls` —
+        // the same TOCTOU every completion message has.
+        let mut lock_targets: std::collections::BTreeSet<String> =
+            versions.iter().cloned().collect();
+        lock_targets.extend(self.install_lock_names()?);
+        let mut locks = Vec::new();
+        for name in &lock_targets {
+            locks.push(self.try_acquire_install_lock_for_removal(name)?);
+        }
+        for name in self.install_lock_names()? {
+            if !lock_targets.contains(&name) {
+                return Err(OvmError::Message(format!(
+                    "Another OVM process started installing {} {name} mid-removal; \
+                     nothing was removed. Retry when it finishes.",
+                    self.product().display_name()
+                )));
+            }
+        }
+
+        symlink::remove_symlink(&self.product_dirs.current)?;
+        // Unlike the launch paths' best-effort clear_pin, "clears the
+        // selection" is this method's contract — a failure must surface.
+        match fs::remove_file(&self.product_dirs.pin) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+
+        let mut freed = 0;
+        for version in &versions {
+            let version_dir = self.product_dirs.version_dir(version);
+            freed += dir_size(&version_dir)?;
+            hooks::run_hook(&self.dirs.hooks, Hook::PreUninstall, version);
+            fs::remove_dir_all(&version_dir)?;
+            hooks::run_hook(&self.dirs.hooks, Hook::PostUninstall, version);
+        }
+        // "Fully leave" includes what list_installed does NOT report: an
+        // interrupted download's partial directory, an empty dir a crashed
+        // install left behind. Those never published anything, so no hooks
+        // fire for them — they are swept with the directory itself. Installs
+        // recreate the directory on demand.
+        if self.product_dirs.versions.exists() {
+            freed += dir_size(&self.product_dirs.versions)?;
+            fs::remove_dir_all(&self.product_dirs.versions)?;
+        }
+        Ok((versions.len(), freed))
     }
 
     pub fn clean(&self, version: &str) -> Result<u64> {
@@ -1237,7 +1345,115 @@ impl VersionManager {
         result
     }
 
+    /// Entries in the versions directory that [`Self::list_installed`] does
+    /// NOT report: partial trees from interrupted downloads, empty dirs from
+    /// crashed installs. What `uninstall_all` sweeps beyond the listed set,
+    /// and what its caller previews.
+    pub fn unlisted_leftover_dirs(&self) -> Result<Vec<String>> {
+        let listed: std::collections::BTreeSet<String> =
+            self.list_installed()?.into_iter().collect();
+        let mut leftovers = Vec::new();
+        if self.product_dirs.versions.is_dir() {
+            for entry in fs::read_dir(&self.product_dirs.versions)? {
+                let name = entry?.file_name().to_string_lossy().into_owned();
+                if !listed.contains(&name) {
+                    leftovers.push(name);
+                }
+            }
+            leftovers.sort();
+        }
+        Ok(leftovers)
+    }
+
+    /// The versions with an install lock FILE on disk — held or not. A lock
+    /// file for a version absent from the store is how an in-flight first
+    /// install announces itself before anything is listed.
+    fn install_lock_names(&self) -> Result<Vec<String>> {
+        let lock_dir = self
+            .dirs
+            .base
+            .join("locks")
+            .join("install")
+            .join(self.product().canonical_name());
+        let mut names = Vec::new();
+        if !lock_dir.is_dir() {
+            return Ok(names);
+        }
+        for entry in fs::read_dir(&lock_dir)? {
+            let name = entry?.file_name();
+            if let Some(name) = name.to_str().and_then(|name| name.strip_suffix(".lock")) {
+                names.push(name.to_string());
+            }
+        }
+        Ok(names)
+    }
+
+    /// The file every installer holds SHARED for its whole install, and mass
+    /// removal holds EXCLUSIVE. A sibling of the per-product lock directory —
+    /// version lock files live inside it, so no version name can collide.
+    fn product_install_lock_path(&self) -> PathBuf {
+        self.dirs
+            .base
+            .join("locks")
+            .join("install")
+            .join(format!("{}.all.lock", self.product().canonical_name()))
+    }
+
+    fn open_product_install_lock(&self) -> Result<File> {
+        let path = self.product_install_lock_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?)
+    }
+
+    /// [`Self::acquire_install_lock`] for the removal path: never waits. A
+    /// held lock means an installer is mid-flight, and the honest response to
+    /// "remove everything" colliding with "install something" is a refusal
+    /// the user can retry — not silently queueing a mass deletion behind an
+    /// install that believes its tree will still exist afterwards.
+    fn try_acquire_install_lock_for_removal(&self, version: &str) -> Result<InstallLock> {
+        let lock_dir = self
+            .dirs
+            .base
+            .join("locks")
+            .join("install")
+            .join(self.product().canonical_name());
+        fs::create_dir_all(&lock_dir)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_dir.join(format!("{version}.lock")))?;
+        match FileExt::try_lock(&file) {
+            Ok(()) => Ok(InstallLock {
+                _file: file,
+                _product_file: None,
+                waited: false,
+            }),
+            Err(TryLockError::WouldBlock) => Err(OvmError::Message(format!(
+                "Another OVM process is installing {} {version}; nothing was removed. \
+                 Retry when it finishes.",
+                self.product().display_name()
+            ))),
+            Err(TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+
     fn acquire_install_lock(&self, version: &str) -> Result<InstallLock> {
+        // Shared product lock first: it only ever blocks while a mass
+        // removal (exclusive holder) is mid-flight, and taking it before the
+        // per-version lock means an installer can never start writing into a
+        // tree a removal is about to sweep.
+        let product_file = self.open_product_install_lock()?;
+        FileExt::lock_shared(&product_file)?;
+
         let lock_dir = self
             .dirs
             .base
@@ -1279,6 +1495,7 @@ impl VersionManager {
 
         Ok(InstallLock {
             _file: file,
+            _product_file: Some(product_file),
             waited,
         })
     }
@@ -4178,6 +4395,80 @@ mod tests {
         assert_eq!(
             vm.current_version().expect("current"),
             Some("2.1.71".into())
+        );
+    }
+
+    #[test]
+    fn uninstall_all_removes_everything_and_clears_selection() {
+        let (vm, _dir) = setup_test_vm(Product::Claude);
+        create_claude_version(&vm, "2.1.5");
+        create_claude_version(&vm, "2.1.71");
+        vm.use_version("2.1.71").expect("use version");
+        fs::write(&vm.product_dirs.pin, "2.1.71").expect("pin");
+
+        let (count, _freed) = vm.uninstall_all().expect("uninstall all");
+
+        assert_eq!(count, 2);
+        assert!(vm.list_installed().expect("list").is_empty());
+        // The selection state must go with the versions: a current symlink
+        // into a removed directory or a pin naming a gone version is exactly
+        // the dangling state the by-hand `rm -rf` workflow used to leave.
+        assert_eq!(vm.current_version().expect("current"), None);
+        assert_eq!(vm.read_pin(), None);
+    }
+
+    #[test]
+    fn uninstall_all_sweeps_unlisted_leftovers_too() {
+        let (vm, _dir) = setup_test_vm(Product::Codex);
+        create_codex_release(&vm, "rust-v0.120.0");
+        // A bare directory is what an interrupted install leaves: not listed,
+        // so no hooks fire for it, but "fully leave" must take it anyway.
+        fs::create_dir_all(vm.product_dirs.version_dir("dev:resume-fix")).expect("mkdir");
+
+        let (count, _freed) = vm.uninstall_all().expect("uninstall all");
+
+        assert_eq!(count, 1, "only the real install is counted");
+        assert!(
+            !vm.product_dirs.versions.exists(),
+            "the whole versions directory goes, leftovers included"
+        );
+    }
+
+    #[test]
+    fn uninstall_all_refuses_while_an_install_lock_is_held() {
+        let (vm, _dir) = setup_test_vm(Product::Claude);
+        create_claude_version(&vm, "2.1.5");
+        // Another process mid-install of a version too new to be listed:
+        // only its held lock file announces it. The mass removal must refuse
+        // rather than sweep the half-written tree.
+        let lock_dir = vm.dirs.base.join("locks").join("install").join("claude");
+        fs::create_dir_all(&lock_dir).expect("mkdir");
+        let held = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(lock_dir.join("2.1.99.lock"))
+            .expect("lock file");
+        fs4::FileExt::try_lock(&held).expect("hold the lock");
+
+        let error = vm.uninstall_all().expect_err("must refuse");
+
+        assert!(error.to_string().contains("Another OVM process"), "{error}");
+        assert!(
+            vm.install_is_complete("2.1.5"),
+            "a refusal must remove nothing"
+        );
+    }
+
+    #[test]
+    fn uninstall_all_with_nothing_installed_refuses() {
+        let (vm, _dir) = setup_test_vm(Product::Claude);
+
+        let error = vm.uninstall_all().expect_err("nothing to remove");
+
+        assert!(
+            error.to_string().contains("No Claude Code versions"),
+            "{error}"
         );
     }
 

@@ -39,6 +39,14 @@ pub(super) struct SelfVersionRow {
     pub version: String,
     pub current: bool,
     pub previous: bool,
+    /// When this version was installed, `YYYY-MM-DD HH:MM`. The product picker
+    /// has always shown a date; this one had none, so a column of
+    /// content-addressed dev hashes gave the reader nothing to order them by
+    /// — `current` above `previous` looked like a bug rather than a build
+    /// sequence. The clock is part of the cell because dev snapshots are
+    /// typically all built on one day, and a date alone repeats the same ten
+    /// characters down the column. `None` renders as a dash.
+    pub installed_at: Option<String>,
     /// True when this version, once active, cannot switch back (predates the
     /// `ovm self` commands). The menu greys it out and refuses to select it.
     pub no_return: bool,
@@ -217,14 +225,17 @@ fn run_self_version_picker(can_go_back: bool) -> Result<PickerResult> {
     let dirs = crate::config::OvmDirs::new()?;
     let mut config = load_self_menu_config(&dirs.config_file)?;
     let manager = crate::self_manager::SelfManager::new()?;
-    let versions = manager.list_versions().unwrap_or_default();
+    let versions = manager
+        .list_versions_with_install_time()
+        .unwrap_or_default();
     let current = manager.current_version()?;
     let previous = manager.previous_version()?;
     let rows: Vec<SelfVersionRow> = versions
         .into_iter()
-        .map(|version| SelfVersionRow {
+        .map(|(version, installed)| SelfVersionRow {
             current: current.as_deref() == Some(version.as_str()),
             previous: previous.as_deref() == Some(version.as_str()),
+            installed_at: installed.and_then(crate::util::utc_datetime),
             no_return: !crate::self_manager::SelfManager::can_switch_back(&version),
             version,
         })

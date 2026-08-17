@@ -2,9 +2,9 @@
   "product": "pi",
   "display_name": "Pi",
   "source": "github:earendil-works/pi",
-  "updated_at": "2026-08-10T20:29:29Z",
+  "updated_at": "2026-08-17T05:03:52Z",
   "dist_tags": {
-    "latest": "0.84.1"
+    "latest": "0.84.2"
   },
   "versions": [
     {
@@ -1058,6 +1058,14 @@
     {
       "version": "0.84.1",
       "date": "2026-08-07",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "0.84.2",
+      "date": "2026-08-14",
       "verified": {
         "linux-auth": true,
         "macos-auth": true

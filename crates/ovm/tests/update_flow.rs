@@ -20,7 +20,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const OLD: &str = "rust-v0.120.0";
+const OLD: &str = "rust-v0.142.0";
 const NEW: &str = "rust-v0.146.0";
 
 fn make_tarball(entry_name: &str, contents: &[u8]) -> Vec<u8> {

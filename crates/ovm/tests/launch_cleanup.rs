@@ -129,10 +129,10 @@ fn home_with_aged_installs(aged: &[&str]) -> tempfile::TempDir {
 #[test]
 fn launch_defers_large_backlog_instead_of_removing_it() {
     let aged = [
-        "rust-v0.118.0",
-        "rust-v0.119.0",
-        "rust-v0.120.0",
-        "rust-v0.121.0",
+        "rust-v0.140.0",
+        "rust-v0.141.0",
+        "rust-v0.142.0",
+        "rust-v0.143.0",
     ];
     let home = home_with_aged_installs(&aged);
 
@@ -181,7 +181,7 @@ fn launch_defers_large_backlog_instead_of_removing_it() {
 /// `current` pointing at something the launch had just archived.
 #[test]
 fn launch_reports_a_small_backlog_without_touching_it() {
-    let aged = ["rust-v0.118.0", "rust-v0.119.0", "rust-v0.120.0"];
+    let aged = ["rust-v0.140.0", "rust-v0.141.0", "rust-v0.142.0"];
     let home = home_with_aged_installs(&aged);
 
     let assert = ovm(home.path()).arg("codex").assert().success();
@@ -216,7 +216,7 @@ fn launch_leaves_installs_inside_the_retention_window_alone() {
     write_config(home.path());
     seed_install(home.path(), "rust-v0.130.0");
     activate(home.path(), "rust-v0.130.0");
-    for version in ["rust-v0.118.0", "rust-v0.119.0"] {
+    for version in ["rust-v0.140.0", "rust-v0.141.0"] {
         seed_install(home.path(), version);
         age_days(home.path(), version, 5);
     }
@@ -224,7 +224,7 @@ fn launch_leaves_installs_inside_the_retention_window_alone() {
     let assert = ovm(home.path()).arg("codex").assert().success();
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
 
-    for version in ["rust-v0.118.0", "rust-v0.119.0"] {
+    for version in ["rust-v0.140.0", "rust-v0.141.0"] {
         assert!(codex_binary(home.path(), version).exists());
     }
     assert!(
@@ -239,10 +239,10 @@ fn launch_leaves_installs_inside_the_retention_window_alone() {
 #[test]
 fn cleanup_now_lists_then_refuses_without_a_terminal() {
     let aged = [
-        "rust-v0.118.0",
-        "rust-v0.119.0",
-        "rust-v0.120.0",
-        "rust-v0.121.0",
+        "rust-v0.140.0",
+        "rust-v0.141.0",
+        "rust-v0.142.0",
+        "rust-v0.143.0",
     ];
     let home = home_with_aged_installs(&aged);
 
@@ -272,10 +272,10 @@ fn cleanup_now_lists_then_refuses_without_a_terminal() {
 #[test]
 fn cleanup_now_treats_bare_enter_as_no() {
     let aged = [
-        "rust-v0.118.0",
-        "rust-v0.119.0",
-        "rust-v0.120.0",
-        "rust-v0.121.0",
+        "rust-v0.140.0",
+        "rust-v0.141.0",
+        "rust-v0.142.0",
+        "rust-v0.143.0",
     ];
     let home = home_with_aged_installs(&aged);
 
@@ -298,7 +298,7 @@ fn cleanup_now_treats_bare_enter_as_no() {
 /// ...and an explicit yes does remove them, so the deliberate path still works.
 #[test]
 fn cleanup_now_removes_after_an_explicit_yes() {
-    let aged = ["rust-v0.118.0", "rust-v0.119.0"];
+    let aged = ["rust-v0.140.0", "rust-v0.141.0"];
     let home = home_with_aged_installs(&aged);
 
     let mut session = spawn(&cleanup_now_command(home.path()), Some(10_000)).expect("spawn pty");
@@ -336,10 +336,10 @@ fn cleanup_now_command(home: &Path) -> String {
 #[test]
 fn the_launch_survey_is_periodic_but_explicit_cleanup_always_looks() {
     let aged = [
-        "rust-v0.118.0",
-        "rust-v0.119.0",
-        "rust-v0.120.0",
-        "rust-v0.121.0",
+        "rust-v0.140.0",
+        "rust-v0.141.0",
+        "rust-v0.142.0",
+        "rust-v0.143.0",
     ];
     let home = home_with_aged_installs(&aged);
     let stamp = home.path().join(".ovm/cleanup-checked");
@@ -404,7 +404,7 @@ fn the_launch_survey_is_periodic_but_explicit_cleanup_always_looks() {
 /// `a_symlink_at_the_publish_target_is_replaced_not_followed`).
 #[test]
 fn a_launch_replaces_a_symlink_planted_at_the_stamp_instead_of_writing_through_it() {
-    let home = home_with_aged_installs(&["rust-v0.118.0", "rust-v0.119.0"]);
+    let home = home_with_aged_installs(&["rust-v0.140.0", "rust-v0.141.0"]);
 
     let victim = home.path().join("precious.txt");
     let victim_bytes = b"the file a planted link would aim at";
@@ -457,7 +457,7 @@ fn a_launch_replaces_a_symlink_planted_at_the_stamp_instead_of_writing_through_i
 /// to act on, so the state is visible where retention is configured.
 #[test]
 fn cleanup_reports_pending_backlog() {
-    let home = home_with_aged_installs(&["rust-v0.118.0", "rust-v0.119.0", "rust-v0.120.0"]);
+    let home = home_with_aged_installs(&["rust-v0.140.0", "rust-v0.141.0", "rust-v0.142.0"]);
 
     ovm(home.path())
         .arg("cleanup")

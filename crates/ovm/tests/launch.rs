@@ -209,7 +209,7 @@ fn write_fake_codex_binary(home: &Path, version: &str, script: &str) {
 #[test]
 fn launch_execs_active_binary_with_args_passed_through() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.140.0";
 
     // Fake "codex" is a shell script that echoes its args.
     let script = "#!/bin/sh\necho 'launched'\necho \"args=$*\"\n";
@@ -226,7 +226,7 @@ fn launch_execs_active_binary_with_args_passed_through() {
 #[test]
 fn launch_propagates_nonzero_exit_code() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.140.0";
 
     let script = "#!/bin/sh\nexit 42\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);
@@ -237,7 +237,7 @@ fn launch_propagates_nonzero_exit_code() {
 #[test]
 fn launch_sets_ovm_env_vars() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.140.0";
 
     // The child prints OVM_* vars it sees
     let script = "#!/bin/sh\necho \"product=$OVM_PRODUCT\"\necho \"version=$OVM_VERSION\"\n";
@@ -254,7 +254,7 @@ fn launch_sets_ovm_env_vars() {
 #[test]
 fn launch_respects_ovm_version_override() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.140.0";
 
     let script = "#!/bin/sh\necho \"OVM_VERSION=$OVM_VERSION\"\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);
@@ -273,7 +273,7 @@ fn launch_respects_ovm_version_override() {
 #[test]
 fn launch_aliases_cc_cx_work() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.140.0";
 
     let script = "#!/bin/sh\necho active\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);
@@ -289,7 +289,7 @@ fn launch_aliases_cc_cx_work() {
 #[test]
 fn codex_yolo_passes_current_dangerous_mode_flag() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.130.0";
+    let version = "rust-v0.142.0";
 
     let script = "#!/bin/sh\necho \"args=$*\"\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);
@@ -306,7 +306,7 @@ fn codex_yolo_passes_current_dangerous_mode_flag() {
 #[test]
 fn cxy_alias_launches_codex_with_yolo_enabled() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.130.0";
+    let version = "rust-v0.142.0";
 
     let script = "#!/bin/sh\necho \"args=$*\"\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);
@@ -421,8 +421,8 @@ fn setup_pinned_old_release(home: &Path, old_version: &str, latest_version: &str
 #[test]
 fn launch_respects_explicit_pin_and_does_not_jump_to_latest() {
     let home = tempfile::tempdir().expect("tempdir");
-    let old_version = "rust-v0.129.0";
-    let latest_version = "rust-v0.130.0";
+    let old_version = "rust-v0.141.0";
+    let latest_version = "rust-v0.142.0";
     setup_pinned_old_release(home.path(), old_version, latest_version);
 
     // `use codex <old>` was a deliberate pin: a plain launch under auto-update
@@ -437,8 +437,8 @@ fn launch_respects_explicit_pin_and_does_not_jump_to_latest() {
 #[test]
 fn launch_auto_update_can_use_newer_installed_release_when_tracking_latest() {
     let home = tempfile::tempdir().expect("tempdir");
-    let old_version = "rust-v0.129.0";
-    let latest_version = "rust-v0.130.0";
+    let old_version = "rust-v0.141.0";
+    let latest_version = "rust-v0.142.0";
     setup_pinned_old_release(home.path(), old_version, latest_version);
 
     // No pin file means "track latest" (also the state of installs that predate
@@ -457,7 +457,7 @@ fn launch_auto_update_can_use_newer_installed_release_when_tracking_latest() {
 #[test]
 fn launch_latest_with_args_refreshes_latest_then_uses_installed_release() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.130.0";
+    let version = "rust-v0.142.0";
 
     let script = "#!/bin/sh\necho \"args=$*\"\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);
@@ -472,7 +472,7 @@ fn launch_latest_with_args_refreshes_latest_then_uses_installed_release() {
 #[test]
 fn launch_latest_without_args_refreshes_latest_then_prompts_without_running_in_non_tty() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.130.0";
+    let version = "rust-v0.142.0";
 
     let script = "#!/bin/sh\necho should-not-run\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);
@@ -490,7 +490,7 @@ fn launch_latest_without_args_refreshes_latest_then_prompts_without_running_in_n
 #[test]
 fn launch_latest_without_network_uses_latest_installed_release() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.130.0";
+    let version = "rust-v0.142.0";
 
     let script = "#!/bin/sh\necho \"args=$*\"\n";
     let (_server, url) = install_fake_codex(home.path(), version, script);

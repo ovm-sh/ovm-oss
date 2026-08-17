@@ -243,6 +243,139 @@ fn pi_full_install_and_activate() {
         .stdout(predicates::str::contains("installed: 1"));
 }
 
+/// `clean` removes cached download artifacts, and its message must say that —
+/// "Cleaned all pi versions, freed 0 B" claimed a version removal that never
+/// happens (the absence-rendered-as-a-verdict shape the devlogs catalogue).
+#[test]
+fn clean_reports_cached_artifacts_not_version_removal() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let version = "0.67.6";
+    let (_server, releases_url) = setup_pi_mock(version, b"#!/bin/sh\necho fake-pi\n");
+
+    ovm(home.path(), &releases_url)
+        .args(["install", "pi", version])
+        .assert()
+        .success();
+
+    ovm(home.path(), &releases_url)
+        .args(["clean", "pi", "--all"])
+        .assert()
+        .success()
+        .stdout(
+            predicates::str::contains("cached download artifacts")
+                .and(predicates::str::contains("Cleaned all").not()),
+        );
+
+    // The install itself must survive a clean.
+    let bundle = home
+        .path()
+        .join(".ovm/products/pi/versions")
+        .join(version)
+        .join("release/bundle/pi/pi");
+    assert!(
+        bundle.exists(),
+        "clean must not touch the installed version"
+    );
+}
+
+/// `uninstall --all` is the way to fully leave a product: active version
+/// included, selection cleared. Non-interactive shells cannot answer the
+/// typed confirmation, so without --yes they get a refusal that says how to
+/// proceed, and a piped "yes" is not a person confirming.
+#[test]
+fn uninstall_all_leaves_the_product_entirely() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let version = "0.67.6";
+    let (_server, releases_url) = setup_pi_mock(version, b"#!/bin/sh\necho fake-pi\n");
+
+    ovm(home.path(), &releases_url)
+        .args(["install", "pi", version])
+        .assert()
+        .success();
+    ovm(home.path(), &releases_url)
+        .args(["use", "pi", version])
+        .assert()
+        .success();
+
+    // The active version alone still refuses a plain uninstall.
+    ovm(home.path(), &releases_url)
+        .args(["uninstall", "pi", version])
+        .assert()
+        .failure();
+
+    // Non-interactive without --yes: refuse, with the way forward spelled out.
+    ovm(home.path(), &releases_url)
+        .args(["uninstall", "pi", "--all"])
+        .write_stdin("yes\n")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--yes"));
+
+    ovm(home.path(), &releases_url)
+        .args(["uninstall", "pi", "--all", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Uninstalled all 1 Pi version"));
+
+    let versions_dir = home.path().join(".ovm/products/pi/versions");
+    let remaining = fs::read_dir(&versions_dir)
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(remaining, 0, "every version directory must be gone");
+    assert!(
+        !home.path().join(".ovm/products/pi/current").is_symlink(),
+        "the active selection must be cleared with the versions"
+    );
+
+    // A second pass finds nothing and says so without erroring.
+    ovm(home.path(), &releases_url)
+        .args(["uninstall", "pi", "--all", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("No Pi versions are installed"));
+
+    // Leftovers alone — a partial tree from an interrupted download — must
+    // still be sweepable, not early-exited past as "nothing installed".
+    fs::create_dir_all(versions_dir.join("0.99.9")).expect("partial leftover");
+    ovm(home.path(), &releases_url)
+        .args(["uninstall", "pi", "--all", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "Removed 1 leftover partial install directory",
+        ));
+    assert!(!versions_dir.exists(), "the leftover sweep must run");
+}
+
+/// `install` must mention an unmanaged copy on PATH — it may shadow the
+/// managed install, and someone who never runs `launch` or `adopt` used to
+/// never hear about it.
+#[test]
+fn install_points_at_an_unmanaged_copy_on_path() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let version = "0.67.6";
+    let (_server, releases_url) = setup_pi_mock(version, b"#!/bin/sh\necho fake-pi\n");
+
+    let foreign_dir = home.path().join("foreign-bin");
+    fs::create_dir_all(&foreign_dir).expect("mkdir");
+    let foreign = foreign_dir.join("pi");
+    fs::write(&foreign, "#!/bin/sh\necho foreign-pi\n").expect("write");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&foreign, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    ovm(home.path(), &releases_url)
+        .env("PATH", format!("{}:/usr/bin:/bin", foreign_dir.display()))
+        .args(["install", "pi", version])
+        .assert()
+        .success()
+        .stderr(
+            predicates::str::contains("unmanaged").and(predicates::str::contains("ovm adopt pi")),
+        );
+}
+
 #[test]
 fn pi_latest_install_uses_normalized_version_directory() {
     let home = tempfile::tempdir().expect("tempdir");

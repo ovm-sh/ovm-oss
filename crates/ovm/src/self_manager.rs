@@ -10,7 +10,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const OPERATION_LOCK_RETRY: Duration = Duration::from_millis(50);
@@ -293,7 +293,94 @@ impl SelfManager {
         Ok(manifest)
     }
 
+    /// Order for the self-version picker: dev snapshots first, then releases —
+    /// each group newest-first, matching the product picker. Both pickers are
+    /// reached the same way and read as one screen; having one count down from
+    /// the newest and the other up from the oldest made the reader re-learn
+    /// the list every time they crossed between them.
+    ///
+    /// This was a plain `sort()`, which is a string sort, and it got both
+    /// halves wrong. Dev builds landed at the bottom because `d` sorts after
+    /// a digit — under a long release history, the snapshot you just built
+    /// was the row furthest from the cursor. And releases came out
+    /// `alpha.11, alpha.12, alpha.14, alpha.4, alpha.5`, because "11" sorts
+    /// before "4" as text; `0.0.3-alpha.14` looked older than `0.0.3-alpha.4`.
+    ///
+    /// Dev-first matches what `Product::compare_versions` already does for
+    /// Codex's `dev:` builds — the self picker just never got the rule.
+    ///
+    /// Dev snapshots order by when they were installed, never by name. The
+    /// label is `dev-<branch>-<MMDD>-<hash>` and that hash is
+    /// content-addressed, so within a single day sorting by name is sorting
+    /// by content — which is arbitrary. That is why `current` could sit above
+    /// `previous` with nothing on the row explaining the order.
+    fn compare_self_versions(
+        left: &str,
+        left_installed: Option<SystemTime>,
+        right: &str,
+        right_installed: Option<SystemTime>,
+    ) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        match (left.starts_with("dev-"), right.starts_with("dev-")) {
+            (true, true) => {
+                return match (left_installed, right_installed) {
+                    (Some(left_at), Some(right_at)) => {
+                        // Newest build first. Same stamp (two installs inside
+                        // one minute) still needs a total order, or the list
+                        // shuffles between renders.
+                        right_at.cmp(&left_at).then_with(|| left.cmp(right))
+                    }
+                    // An unreadable stamp sorts last rather than claiming to
+                    // be the newest build.
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => left.cmp(right),
+                };
+            }
+            (true, false) => return Ordering::Less,
+            (false, true) => return Ordering::Greater,
+            (false, false) => {}
+        }
+
+        match (
+            semver::Version::parse(left).ok(),
+            semver::Version::parse(right).ok(),
+        ) {
+            (Some(left), Some(right)) => right.cmp(&left),
+            // Anything that will not parse sorts after what does, so a stray
+            // directory can never displace a real release.
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => left.cmp(right),
+        }
+    }
+
     pub fn list_versions(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list_versions_with_install_time()?
+            .into_iter()
+            .map(|(version, _)| version)
+            .collect())
+    }
+
+    /// When `version` finished installing, from the completion marker's mtime.
+    ///
+    /// The marker is written once, as the last act of staging a bundle, and is
+    /// never touched again — so it dates the install itself. The version
+    /// directory's own mtime does not: it moves whenever anything is written
+    /// inside, which would quietly relabel an old version as newly installed
+    /// and, now that the picker sorts dev snapshots by this stamp, reorder the
+    /// list to match the lie.
+    fn install_time(&self, version: &str) -> Option<SystemTime> {
+        std::fs::metadata(self.version_dir(version).join(COMPLETE_MARKER))
+            .and_then(|meta| meta.modified())
+            .ok()
+    }
+
+    /// Installed versions in picker order, each with its install time so
+    /// callers can show a date cell without re-stat'ing every directory.
+    pub fn list_versions_with_install_time(&self) -> Result<Vec<(String, Option<SystemTime>)>> {
         if !self.dirs.versions.is_dir() {
             return Ok(Vec::new());
         }
@@ -307,10 +394,13 @@ impl SelfManager {
                 continue;
             };
             if !version.starts_with('.') && self.is_complete(&version) {
-                versions.push(version);
+                let installed = self.install_time(&version);
+                versions.push((version, installed));
             }
         }
-        versions.sort();
+        versions.sort_by(|(left, left_at), (right, right_at)| {
+            Self::compare_self_versions(left, *left_at, right, *right_at)
+        });
         Ok(versions)
     }
 
@@ -1042,6 +1132,86 @@ mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
     use tempfile::tempdir;
+
+    /// The picker shows this list verbatim, so its order is the feature.
+    /// A plain `sort()` put the snapshot you just built at the very bottom
+    /// and ordered prereleases as text: alpha.11, alpha.12, alpha.14,
+    /// alpha.4 — which reads as though alpha.4 were the newest.
+    ///
+    /// Newest-first in both groups, matching the product picker: the build
+    /// you just made is the first row, not a row you scroll to.
+    #[test]
+    fn self_versions_list_dev_first_then_releases_newest_first() {
+        let at = |secs: u64| Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs));
+        // Hashes are content-addressed, so name order and build order
+        // disagree on purpose here: the newest build sorts alphabetically
+        // first, which is exactly how `current` ended up above `previous`.
+        let mut versions: Vec<(String, Option<SystemTime>)> = vec![
+            ("0.1.2".to_string(), None),
+            ("dev-main-0817-aaa11111".to_string(), at(3_000)),
+            ("0.0.3-alpha.11".to_string(), None),
+            ("0.0.3-alpha.4".to_string(), None),
+            ("dev-main-0817-zzz99999".to_string(), at(1_000)),
+            ("0.0.3-alpha.14".to_string(), None),
+            ("0.1.1".to_string(), None),
+            ("0.1.1-alpha.3".to_string(), None),
+        ];
+
+        versions.sort_by(|(left, left_at), (right, right_at)| {
+            SelfManager::compare_self_versions(left, *left_at, right, *right_at)
+        });
+
+        let ordered: Vec<&str> = versions.iter().map(|(v, _)| v.as_str()).collect();
+        assert_eq!(
+            ordered,
+            vec![
+                // Dev snapshots first, newest build down to oldest — by
+                // install time, not by name.
+                "dev-main-0817-aaa11111",
+                "dev-main-0817-zzz99999",
+                // Then releases newest-first: alpha.14 outranks alpha.4.
+                "0.1.2",
+                "0.1.1",
+                "0.1.1-alpha.3",
+                "0.0.3-alpha.14",
+                "0.0.3-alpha.11",
+                "0.0.3-alpha.4",
+            ]
+        );
+    }
+
+    /// The stamp must date the install, not the last write into the directory.
+    /// The picker sorts dev snapshots by it, so a directory mtime bumped by
+    /// any later write would both mislabel the row and move it to the top.
+    #[test]
+    fn install_time_reads_the_completion_marker_not_the_directory() {
+        let temp = tempdir().expect("tempdir");
+        let manager = manager(temp.path());
+        let version = "dev-main-0817-abcdef12";
+        let installed = manager.version_dir(version);
+        std::fs::create_dir_all(&installed).expect("version dir");
+        std::fs::write(installed.join(COMPLETE_MARKER), b"").expect("marker");
+
+        let marker_stamp = manager.install_time(version).expect("stamp");
+
+        // Something writes into the directory later — a scratch file, a
+        // repaired binary. The directory's mtime moves; the install did not.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(installed.join("scratch"), b"later").expect("later write");
+        let dir_stamp = std::fs::metadata(&installed)
+            .and_then(|meta| meta.modified())
+            .expect("dir mtime");
+
+        assert_eq!(
+            manager.install_time(version),
+            Some(marker_stamp),
+            "the stamp must not follow a later write into the directory"
+        );
+        assert!(
+            dir_stamp > marker_stamp,
+            "test is vacuous unless the directory mtime actually moved"
+        );
+    }
 
     fn fixture_manifest(side_names: &[&str]) -> BundleManifest {
         let mut contents = "ovm-bundle-v1\nmain\tovm\tovm\n".to_string();

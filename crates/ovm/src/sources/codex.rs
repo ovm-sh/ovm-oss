@@ -16,6 +16,31 @@ const CODEX_NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@openai/codex";
 /// Older releases don't publish them, so a missing asset/entry is skipped
 /// rather than treated as an error.
 const SIDECAR_BINARIES: &[&str] = &["codex-code-mode-host"];
+
+/// The oldest Codex release macOS will still execute.
+///
+/// Below this, Gatekeeper refuses the binary — a revoked signing certificate
+/// for most of the range, and an unnotarized Developer ID for `rust-v0.131.0`
+/// specifically (see `docs/codex-macos-gatekeeper-audit.md`). Either way macOS
+/// kills the process on launch and XProtect may delete the binary.
+///
+/// The install itself succeeds — download, checksum and the `codesign --verify`
+/// check all pass, because the file really is intact and really was signed.
+/// What fails is a *launch*-time policy check that install cannot see. So
+/// without this refusal the first sign a user gets is a malware dialog for a
+/// version OVM has just reported installing.
+///
+/// This boundary moves: the June 2026 audit put it at `rust-v0.120.0` and the
+/// July sweep found that range revoked too. Paired with
+/// `CODEX_GATEKEEPER_FLOOR` / `codex.benchmarkMinVersion` in `tools/benchmark`
+/// — one physical fact, but Rust cannot import TypeScript, so this copy is
+/// pinned by a test and has to move with the other two.
+const MACOS_REVOCATION_FLOOR: &str = "rust-v0.132.0";
+
+/// Escape hatch for deliberately fetching a revoked build (archival, forensics,
+/// reproducing the failure). Named for what it overrides, so an operator who
+/// sets it knows what they are accepting.
+const ALLOW_REVOKED_ENV: &str = "OVM_ALLOW_MACOS_REVOKED";
 const RELEASE_METADATA_TIMEOUT_SECS: u64 = 30;
 const RELEASE_ASSET_TIMEOUT_SECS: u64 = 300;
 const NPM_METADATA_TIMEOUT_SECS: u64 = 15;
@@ -173,6 +198,12 @@ fn latest_release_version(versions: Vec<String>) -> Option<String> {
 }
 
 pub fn download_release(version: &str, dest: &Path) -> Result<ReleaseInstallMetadata> {
+    // Before any network call: this verdict is a property of the version, not of
+    // the release metadata, and the whole point is to spend nothing on a build
+    // macOS will not execute. Ahead of the npm fallback too — republishing the
+    // same revoked binary through another registry does not make it runnable.
+    refuse_macos_revoked(version)?;
+
     // Fetched once and used twice: the GitHub path needs the asset list, and
     // the npm fallback needs to know whether this version publishes sidecars at
     // all. Fetching it separately per path would let the two disagree about the
@@ -301,6 +332,23 @@ fn download_npm_release(version: &str, dest: &Path) -> Result<ReleaseInstallMeta
 }
 
 fn fetch_release(version: &str) -> Result<Release> {
+    // A stamped release answers this without spending GitHub's per-IP API
+    // quota (60/hour unauthenticated). `latest` is deliberately never served
+    // from the registry: it is the one query whose answer moves, and a stale
+    // stamp would pin every user to whatever was newest when it was written.
+    //
+    // An explicit `OVM_CODEX_RELEASES_URL` override also skips the registry.
+    // That override exists so tests and debugging can aim OVM at a specific
+    // endpoint, and quietly answering from ovm.sh instead would defeat the
+    // thing it was set to do.
+    if version != "latest" && std::env::var_os("OVM_CODEX_RELEASES_URL").is_none() {
+        if let Some(release) =
+            super::registry::release_manifest_from_registry::<Release>(Product::Codex, version)
+        {
+            return Ok(release);
+        }
+    }
+
     let path = if version == "latest" {
         "latest".to_string()
     } else {
@@ -609,6 +657,47 @@ fn complete_install(
 /// installing. This is the one condition both the pre-download refusal in
 /// [`download_release`] and [`install_github_sidecars`] consult, so the two can
 /// never drift into disagreeing about the same release.
+/// Whether `version` predates the macOS certificate revocation.
+///
+/// Unparseable versions (`dev:` labels, anything the semver parser rejects) are
+/// never blocked: a build the user made themselves is signed by them, not by
+/// the revoked certificate.
+fn is_macos_revoked(version: &str) -> bool {
+    let Some(floor) = Product::Codex.parsed_release_version(MACOS_REVOCATION_FLOOR) else {
+        return false;
+    };
+    Product::Codex
+        .parsed_release_version(version)
+        .is_some_and(|parsed| parsed < floor)
+}
+
+/// Refuse a version macOS is known to kill on launch, before spending a
+/// multi-hundred-megabyte download on it.
+///
+/// A no-op off macOS: the revocation is a macOS launch check, and these builds
+/// run normally on Linux — which is where the benchmark sweeps measure them.
+fn refuse_macos_revoked(version: &str) -> Result<()> {
+    if !cfg!(target_os = "macos") || !is_macos_revoked(version) {
+        return Ok(());
+    }
+    if std::env::var_os(ALLOW_REVOKED_ENV).is_some() {
+        eprintln!(
+            "{} macOS will refuse to run Codex {version} and XProtect may delete it. \
+             Installing anyway because {ALLOW_REVOKED_ENV} is set.",
+            style("warning:").yellow().bold()
+        );
+        return Ok(());
+    }
+    Err(OvmError::Message(format!(
+        "Codex {version} cannot run on macOS. Gatekeeper rejects every release before \
+         {MACOS_REVOCATION_FLOOR} — a revoked signing certificate for most of them — so macOS \
+         kills the process on launch and XProtect may delete the binary. Nothing was installed.\n\
+         \n\
+         Install {MACOS_REVOCATION_FLOOR} or newer: ovm install codex {MACOS_REVOCATION_FLOOR}\n\
+         These versions still run on Linux. To download one anyway, set {ALLOW_REVOKED_ENV}=1."
+    )))
+}
+
 fn refuse_incomplete_sidecar_family(release: &Release, version: &str) -> Result<()> {
     for sidecar in SIDECAR_BINARIES {
         let asset_name = format!("{sidecar}-{}.tar.gz", release_target_triple());
@@ -875,8 +964,9 @@ mod tests {
         codex_npm_platform_version, declared_asset_size, download_and_extract_single_binary,
         download_github_release, download_release, expected_asset_names, extract_npm_archive,
         extract_release_archive, fetch_release, get_latest_npm_release_version_at,
-        install_github_sidecars, latest_release_version, list_remote_versions_at,
-        release_target_triple, select_release_asset, Release, ReleaseAsset,
+        install_github_sidecars, is_macos_revoked, latest_release_version, list_remote_versions_at,
+        refuse_macos_revoked, release_target_triple, select_release_asset, Release, ReleaseAsset,
+        ALLOW_REVOKED_ENV, MACOS_REVOCATION_FLOOR,
     };
     use flate2::write::GzEncoder;
     use flate2::Compression;
@@ -993,6 +1083,106 @@ mod tests {
             !message.contains("not found"),
             "a quota refusal must not be dressed up as a missing version: {message}"
         );
+    }
+
+    /// A stamped release is served from the registry without touching GitHub.
+    /// The point is the quota: resolving a version upstream costs one call
+    /// against 60/hour per IP, which a bulk install exhausts in minutes.
+    /// `OVM_CODEX_RELEASES_URL` is left unset here precisely because setting it
+    /// would disable the registry path this test is about — so if the registry
+    /// were skipped, the request would leave the machine and the test would
+    /// fail rather than quietly pass.
+    #[test]
+    fn a_stamped_release_is_served_from_the_registry_without_github() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut server = Server::new();
+        let manifest = server
+            .mock("GET", "/codex/releases/rust-v0.73.0.json")
+            .with_status(200)
+            .with_body(
+                r#"{"tag_name":"rust-v0.73.0","assets":[
+                    {"name":"codex-from-registry.tar.gz",
+                     "browser_download_url":"https://example.com/codex.tar.gz",
+                     "size":1234}]}"#,
+            )
+            .create();
+
+        std::env::set_var("OVM_REGISTRY_BASE_URL", server.url());
+        let result = fetch_release("rust-v0.73.0");
+        std::env::remove_var("OVM_REGISTRY_BASE_URL");
+
+        let release = result.expect("the stamped release must resolve");
+        assert_eq!(release.tag_name, "rust-v0.73.0");
+        assert_eq!(release.assets[0].name, "codex-from-registry.tar.gz");
+        assert_eq!(release.assets[0].size, Some(1234));
+        manifest.assert();
+    }
+
+    /// An unstamped version must still install. The registry is an
+    /// optimization, so a miss falls through to the API rather than being
+    /// reported as a version that does not exist.
+    #[test]
+    fn an_unstamped_version_falls_back_to_the_github_api() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut registry = Server::new();
+        let miss = registry
+            .mock("GET", "/codex/releases/rust-v0.73.0.json")
+            .with_status(404)
+            .create();
+        let mut github = Server::new();
+        let _hit = github
+            .mock("GET", "/tags/rust-v0.73.0")
+            .with_status(200)
+            .with_body(
+                r#"{"tag_name":"rust-v0.73.0","assets":[
+                    {"name":"codex-from-github.tar.gz",
+                     "browser_download_url":"https://example.com/codex.tar.gz",
+                     "size":99}]}"#,
+            )
+            .create();
+
+        std::env::set_var("OVM_REGISTRY_BASE_URL", registry.url());
+        std::env::set_var("OVM_CODEX_RELEASES_URL", github.url());
+        let result = fetch_release("rust-v0.73.0");
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+        std::env::remove_var("OVM_REGISTRY_BASE_URL");
+
+        let release = result.expect("a registry miss must fall back, not fail");
+        assert_eq!(release.assets[0].name, "codex-from-github.tar.gz");
+        // The override was set, so the registry is skipped entirely — the miss
+        // above must never have been requested.
+        assert!(
+            !miss.matched(),
+            "an explicit releases-URL override must win over the registry"
+        );
+    }
+
+    /// `latest` moves, so it is never answered from a stamp: a file written
+    /// last week would pin every user to last week's newest release.
+    #[test]
+    fn latest_is_never_answered_from_the_registry() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut registry = Server::new();
+        let stamped = registry
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"{"tag_name":"rust-v0.1.0","assets":[]}"#)
+            .create();
+        let mut github = Server::new();
+        let _hit = github
+            .mock("GET", "/latest")
+            .with_status(200)
+            .with_body(r#"{"tag_name":"rust-v0.999.0","assets":[]}"#)
+            .create();
+
+        std::env::set_var("OVM_REGISTRY_BASE_URL", registry.url());
+        std::env::set_var("OVM_CODEX_RELEASES_URL", github.url());
+        let result = fetch_release("latest");
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+        std::env::remove_var("OVM_REGISTRY_BASE_URL");
+
+        assert_eq!(result.expect("latest resolves").tag_name, "rust-v0.999.0");
+        assert!(!stamped.matched(), "latest must not come from a stamp");
     }
 
     /// The other half of the distinction: a genuine 404 still reports the
@@ -1481,7 +1671,7 @@ mod tests {
     /// our own short read.
     #[test]
     fn a_truncated_download_is_reported_as_incomplete_not_as_a_bad_release() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let dir = tempdir().expect("tempdir");
         let archive_path = dir.path().join("codex.tar.gz");
         let dest = dir.path().join("bin").join("codex");
@@ -1962,14 +2152,18 @@ mod tests {
     /// And the other direction for the requirement itself: a release from
     /// before the sidecar existed publishes none for any platform, so an npm
     /// package without one is complete and must keep installing.
+    ///
+    /// The version has to sit between [`MACOS_REVOCATION_FLOOR`] and 0.144.0 —
+    /// old enough to predate the sidecar, new enough that macOS will still run
+    /// it — or the install is refused for a reason this test is not about.
     #[test]
     fn an_npm_package_without_a_sidecar_installs_when_the_release_ships_none() {
         let dir = tempdir().expect("tempdir");
-        let sources = mock_sources(dir.path(), "rust-v0.130.0", &[], false, false, 1);
+        let sources = mock_sources(dir.path(), "rust-v0.140.0", &[], false, false, 1);
         let dest = dir.path().join("bin").join("codex");
 
         let result = with_mock_sources(&sources.server.url(), || {
-            download_release("rust-v0.130.0", &dest)
+            download_release("rust-v0.140.0", &dest)
         });
 
         result.expect("a sidecar-free release still installs from npm");
@@ -2008,5 +2202,72 @@ mod tests {
             .expect("bin dir")
             .join("codex-code-mode-host")
             .exists());
+    }
+
+    /// The Rust copy of the revocation floor. `tools/benchmark` holds the same
+    /// value as `CODEX_GATEKEEPER_FLOOR` / `codex.benchmarkMinVersion`; a
+    /// revocation that moves the boundary has to move all three, and this pins
+    /// the one the installer enforces.
+    #[test]
+    fn macos_revocation_floor_is_the_documented_version() {
+        assert_eq!(MACOS_REVOCATION_FLOOR, "rust-v0.132.0");
+    }
+
+    #[test]
+    fn revocation_applies_below_the_floor_and_stops_at_it() {
+        assert!(is_macos_revoked("rust-v0.44.0"));
+        assert!(is_macos_revoked("rust-v0.131.0"));
+        // The floor itself is the first version that still runs.
+        assert!(!is_macos_revoked("rust-v0.132.0"));
+        assert!(!is_macos_revoked("rust-v0.147.0"));
+    }
+
+    #[test]
+    fn a_locally_built_codex_is_never_treated_as_revoked() {
+        // dev builds carry the user's own signature, not the revoked one.
+        assert!(!is_macos_revoked("dev:my-fork"));
+        assert!(!is_macos_revoked("not-a-version"));
+    }
+
+    #[test]
+    fn a_revoked_version_is_refused_before_anything_is_downloaded() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        std::env::remove_var(ALLOW_REVOKED_ENV);
+
+        if cfg!(target_os = "macos") {
+            // No mock server is configured: reaching the network at all would
+            // fail with a connection error instead of the refusal, which is the
+            // point — the verdict must land before any request.
+            std::env::set_var("OVM_CODEX_RELEASES_URL", "http://127.0.0.1:1/unused");
+            let dir = tempdir().expect("tempdir");
+            let result = download_release("rust-v0.120.0", &dir.path().join("codex"));
+            std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+            let message = result
+                .expect_err("a revoked version must not install on macOS")
+                .to_string();
+            assert!(message.contains("revoked"), "{message}");
+            assert!(message.contains("rust-v0.132.0"), "{message}");
+            assert!(message.contains(ALLOW_REVOKED_ENV), "{message}");
+        } else {
+            // Off macOS these builds run fine, so the verdict must stay silent.
+            // Only the verdict is checked here: a download would not exercise
+            // it, because off macOS the resolver falls through to npm, which
+            // ignores OVM_CODEX_RELEASES_URL and really fetches the release —
+            // turning this into a live network probe rather than a test of the
+            // refusal.
+            refuse_macos_revoked("rust-v0.120.0")
+                .expect("a version only macOS refuses must install everywhere else");
+        }
+    }
+
+    #[test]
+    fn the_escape_hatch_allows_a_revoked_download_to_proceed() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        std::env::set_var(ALLOW_REVOKED_ENV, "1");
+        let result = refuse_macos_revoked("rust-v0.120.0");
+        std::env::remove_var(ALLOW_REVOKED_ENV);
+
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 }

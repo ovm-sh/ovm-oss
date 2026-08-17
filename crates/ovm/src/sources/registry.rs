@@ -34,11 +34,69 @@ pub fn list_versions_from_registry(product: Product) -> Option<VersionsWithDates
     list_versions_at_base(product, &registry_base())
 }
 
+/// A release's stamped asset list, or `None` if this version is not stamped.
+///
+/// Resolving a version's download URL from GitHub costs one API call against a
+/// quota of 60/hour that is anonymous clients' only allowance and is counted
+/// per IP address. At nightly volume that is invisible; during a bulk install
+/// it is fatal — on 2026-08-14 three codex sweep windows spent the whole quota
+/// and every install afterwards failed with 403. `scripts/stamp-release-assets.py`
+/// mirrors each release's installable assets into the registry, so a stamped
+/// version resolves with no GitHub request at all, for backfills and users alike.
+///
+/// `None` on every failure, exactly like the version listing above: this is an
+/// optimization and the caller keeps its API path. The tag is validated before
+/// it reaches the URL — it comes from the command line, and a version like
+/// `../../etc` must not walk out of the registry's namespace.
+pub fn release_manifest_from_registry<T: serde::de::DeserializeOwned>(
+    product: Product,
+    tag: &str,
+) -> Option<T> {
+    release_manifest_at_base(product, tag, &registry_base())
+}
+
+fn release_manifest_at_base<T: serde::de::DeserializeOwned>(
+    product: Product,
+    tag: &str,
+    base: &str,
+) -> Option<T> {
+    let safe = !tag.is_empty()
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !safe {
+        verbose_log(&format!(
+            "refusing to build a registry URL from tag {tag:?}"
+        ));
+        return None;
+    }
+    let url = format!("{base}/{}/releases/{tag}.json", product.canonical_name());
+    fetch_json(&url)
+}
+
 /// Testable core — accepts base URL directly so tests don't rely on env vars.
 fn list_versions_at_base(product: Product, base: &str) -> Option<VersionsWithDates> {
     let slug = product.canonical_name();
     let url = format!("{base}/{slug}.json");
+    let registry: ProductRegistry = fetch_json(&url)?;
 
+    let mut versions = Vec::new();
+    let mut dates = HashMap::new();
+    for entry in registry.versions {
+        if !product.is_official_remote_version(&entry.version) {
+            continue;
+        }
+        if let Some(date) = entry.date {
+            dates.insert(entry.version.clone(), date);
+        }
+        versions.push(entry.version);
+    }
+
+    Some((versions, dates))
+}
+
+/// GET a JSON document from the registry, or `None` with the reason logged.
+fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Option<T> {
     let client = match reqwest::blocking::Client::builder()
         .user_agent("ovm")
         .timeout(std::time::Duration::from_secs(5))
@@ -56,7 +114,7 @@ fn list_versions_at_base(product: Product, base: &str) -> Option<VersionsWithDat
         }
     };
 
-    let response = match client.get(&url).send() {
+    let response = match client.get(url).send() {
         Ok(response) => response,
         Err(error) => {
             verbose_log(&format!("request to {url} failed: {error}"));
@@ -69,27 +127,13 @@ fn list_versions_at_base(product: Product, base: &str) -> Option<VersionsWithDat
         return None;
     }
 
-    let registry: ProductRegistry = match response.json() {
-        Ok(value) => value,
+    match response.json() {
+        Ok(value) => Some(value),
         Err(error) => {
             verbose_log(&format!("{url} returned unparseable JSON: {error}"));
-            return None;
+            None
         }
-    };
-
-    let mut versions = Vec::new();
-    let mut dates = HashMap::new();
-    for entry in registry.versions {
-        if !product.is_official_remote_version(&entry.version) {
-            continue;
-        }
-        if let Some(date) = entry.date {
-            dates.insert(entry.version.clone(), date);
-        }
-        versions.push(entry.version);
     }
-
-    Some((versions, dates))
 }
 
 fn verbose_log(message: &str) {
@@ -102,6 +146,39 @@ fn verbose_log(message: &str) {
 mod tests {
     use super::*;
     use mockito::Server;
+
+    /// The tag becomes a URL path segment and arrives from the command line
+    /// (`ovm install codex <version>`), so a traversal attempt must be refused
+    /// outright rather than normalized — and refused before any request goes
+    /// out, so a crafted version string cannot aim OVM at an arbitrary path on
+    /// the registry host.
+    #[test]
+    fn a_traversing_tag_never_becomes_a_registry_request() {
+        let mut server = Server::new();
+        let any = server.mock("GET", mockito::Matcher::Any).create();
+
+        for tag in ["../../etc/passwd", "rust-v1.0/../..", "", "a b", "x?y=1"] {
+            let manifest: Option<serde_json::Value> =
+                release_manifest_at_base(Product::Codex, tag, &server.url());
+            assert!(manifest.is_none(), "{tag:?} must be refused");
+        }
+        assert!(!any.matched(), "no request may leave for an unsafe tag");
+    }
+
+    #[test]
+    fn a_stamped_manifest_is_read_from_the_product_namespace() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/codex/releases/rust-v0.73.0.json")
+            .with_status(200)
+            .with_body(r#"{"tag_name":"rust-v0.73.0","assets":[]}"#)
+            .create();
+
+        let manifest: serde_json::Value =
+            release_manifest_at_base(Product::Codex, "rust-v0.73.0", &server.url())
+                .expect("stamped manifest resolves");
+        assert_eq!(manifest["tag_name"], "rust-v0.73.0");
+    }
 
     #[test]
     fn parses_valid_registry_response() {

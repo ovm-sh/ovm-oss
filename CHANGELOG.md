@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-17
+
+### Added
+
+- **OVM's own version picker orders and dates itself.** It sorted by name,
+  which put the snapshot you just built below every release (`d` sorts after a
+  digit) and ordered prereleases as text — `0.0.3-alpha.14` read as older than
+  `0.0.3-alpha.4`. Dev snapshots now come first, ordered by when they were
+  installed, then releases by version, each group newest-first like the product
+  picker. Every row carries its install time (`YYYY-MM-DD HH:MM`), which is
+  what explains the order when a column of content-addressed dev hashes cannot:
+  the clock is there because snapshots are usually all built on one day.
+
+- **`ovm story` reads at one rhythm.** Lines carrying a link used to appear all
+  at once while the prose around them typed out, because the typewriter paced
+  bytes rather than visible characters and a hyperlink is ~40 invisible ones.
+  Links are also underlined now — before, they looked like prose and there was
+  no way to know there was anything to click.
+
+- **macOS refuses to install a Codex version Apple revoked.** Every Codex
+  release before `rust-v0.132.0` is signed by a certificate that has since been
+  revoked: macOS kills those builds on launch and XProtect deletes the binary.
+  The install itself always succeeded — the download, the checksum and the
+  signature check all pass, because the file really is intact and really was
+  signed, and revocation is checked at launch rather than at install — so the
+  first thing a user saw was a malware dialog for a version OVM had just
+  reported installing. OVM now refuses before downloading anything, names the
+  reason, and points at the oldest version that still runs. These builds are
+  unaffected on Linux, and `OVM_ALLOW_MACOS_REVOKED=1` downloads one anyway for
+  archival or forensics.
+
+- **Installing a pinned Codex version no longer spends GitHub API quota.**
+  Resolving a version's download URL used to cost one `api.github.com` call,
+  against a limit of 60 an hour that unauthenticated clients share by IP
+  address — so several installs in quick succession (a benchmark sweep, a CI
+  matrix, an office behind one NAT) could leave later ones failing with a 403
+  that had nothing to do with the version requested. The ovm.sh registry now
+  carries each release's asset manifest and OVM reads it first, falling back
+  to the API for anything unstamped. `latest` is always resolved live, since
+  it is the one answer that moves.
+
+- **`ovm uninstall <product> --all` fully leaves a product.** Every installed
+  version goes, the active one included, and the selection (current symlink
+  and pin) is cleared with them — previously the last version could only be
+  removed with `rm -rf` by hand, because `uninstall` refuses the active
+  version and `use` demands another installed version to switch to. Previews
+  what will be removed and requires typing the product's name to confirm
+  (`--yes` for scripts; non-interactive shells are refused with instructions
+  instead of hanging on a prompt).
+
+### Fixed
+
+- **The version picker's `b` filter narrows the installed list too.** It only
+  ever filtered the history section, so with a long install history the
+  installed rows filled the viewport and pressing `b` changed nothing visible —
+  a banner reading "showing buddy only" over an unmoved screen. Both sections
+  honor it now, and toggling it on with no companion versions in the list says
+  so rather than silently undoing itself.
+
+- **`ovm clean` says what it actually cleaned.** It removes cached download
+  artifacts, never installed versions — but "Cleaned all codex versions,
+  freed 0 B" claimed otherwise. Both the per-version and `--all` messages now
+  name the cached artifacts and note the installed versions are untouched.
+- **`ovm install` mentions an unmanaged copy on PATH.** An unmanaged install
+  earlier on PATH silently shadows the managed one, and only `launch`/`adopt`
+  used to say so; `install` now prints the same one-line pointer to
+  `ovm adopt`.
+
+- **Launch auto-updates can be skipped with Enter.** When a launch under
+  `autoUpdate: on` starts downloading a newer product version, pressing Enter
+  skips the download and launches the currently active version immediately;
+  the update retries on a future launch. The download runs as a child `ovm
+  install`, so a skip stops its output and releases the install lock the same
+  instant, and the interrupted install is redone cleanly later. The terminal
+  is never switched into raw mode for this, so no exit path — not even an
+  external kill — can leave the shell raw. Non-TTY launches keep the existing
+  blocking behavior.
+
 ## [0.1.2] - 2026-08-11
 
 The tag was re-cut on 2026-08-11 before its first public release to fold in
@@ -90,7 +168,7 @@ the fixes from a full external go-live audit.
   the sign-off is written to the terminal directly; sessions that end with
   `/clear` or a resume stay silent, and a session with no terminal prints
   nothing and cannot fail.
-- **[ovm.sh/writing](https://ovm.sh/writing)** — a notes section for
+- **[ovm.sh/devlog](https://ovm.sh/devlog)** — a dev log for
   investigations behind the tooling, opening with how the context window above
   was established from the shipped Claude Code binary and 145 managed builds.
 
@@ -846,7 +924,8 @@ the real first public release carries the version the public repo ships.
 
 <!-- v0.0.3-alpha.4 is the first tag on the repaired public history; older
      versions predate it and intentionally have no public link targets. -->
-[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1-alpha.3...v0.1.1
 [0.1.1-alpha.3]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1-alpha.2...v0.1.1-alpha.3

@@ -379,7 +379,7 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
         ),
     );
 
-    match install_and_use_latest(vm, &latest) {
+    match install_and_use_latest_skippable(vm, &latest, active_version) {
         Ok(version) => Ok(version),
         Err(error) => {
             eprintln!(
@@ -389,6 +389,74 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
                 console::style(&latest).bold(),
                 active_version,
                 console::style(format!("error: {error}")).dim()
+            );
+            Ok(active_version.to_string())
+        }
+    }
+}
+
+/// [`install_and_use_latest`] for the automatic launch path, escapable by
+/// pressing Enter while the download runs.
+///
+/// The user never asked for this download — the `on` policy did — so it must
+/// not hold the launch hostage: Enter skips it, the active version launches
+/// immediately, and the update simply retries on a future launch (the cached
+/// target is untouched; nothing is snoozed). Enter rather than any-key
+/// because the wait polls stdin in canonical mode — deliberately so, see
+/// [`crate::autoupdate::wait_child_or_skip`] for why raw mode is off the
+/// table here.
+///
+/// The download runs as a child `ovm install` rather than in-process because a
+/// skip has to actually STOP it: killing the child ends its progress output
+/// before the product's TUI takes the terminal, releases the per-version
+/// install lock, and leaves the incomplete install in exactly the state the
+/// lock's take-over path already recovers from. The child prints the same
+/// download lines this process would have, and cannot outlive this launch:
+/// the guard kills and reaps it on every exit path, including unwinding.
+///
+/// Only the paths that cannot offer a skip fall back to the in-process
+/// install: a download-free flip (nothing to wait on), a non-TTY stdin (no key
+/// to press), or a failure to locate our own executable.
+fn install_and_use_latest_skippable(
+    vm: &VersionManager,
+    latest: &str,
+    active_version: &str,
+) -> Result<String> {
+    let needs_download = !vm.standard_install_is_complete(latest);
+    let stdin_is_tty = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
+    let Ok(own_exe) = std::env::current_exe() else {
+        return install_and_use_latest(vm, latest);
+    };
+    if !needs_download || !stdin_is_tty {
+        return install_and_use_latest(vm, latest);
+    }
+
+    eprintln!(
+        "  {} press Enter to skip and launch {} now",
+        console::style("→").dim(),
+        console::style(active_version).bold(),
+    );
+    let mut child = crate::autoupdate::KillOnDrop(
+        Command::new(own_exe)
+            .args(["install", vm.product().canonical_name(), latest])
+            // If this launcher is killed outright (no unwind, so the guard
+            // never drops), the child notices the reparenting and exits
+            // rather than keep downloading into the shell's terminal.
+            .env(
+                crate::autoupdate::WATCH_PARENT_ENV,
+                std::process::id().to_string(),
+            )
+            .stdin(Stdio::null())
+            .spawn()?,
+    );
+
+    match crate::autoupdate::wait_child_or_skip(&mut child.0)? {
+        Some(status) if status.success() => install_and_use_latest(vm, latest),
+        Some(status) => Err(OvmError::Message(format!("install exited with {status}"))),
+        None => {
+            eprintln!(
+                "  {} Update skipped — it will retry on a future launch",
+                console::style("→").dim(),
             );
             Ok(active_version.to_string())
         }

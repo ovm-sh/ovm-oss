@@ -161,7 +161,7 @@ fn setup_codex_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, Stri
 #[test]
 fn codex_full_install_use_uninstall_lifecycle() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.141.0";
     let binary_contents = b"#!/bin/sh\necho fake-codex\n";
 
     let (_server, releases_url) = setup_codex_mock(version, binary_contents);
@@ -364,7 +364,7 @@ fn codex_install_also_installs_code_mode_host_sidecar() {
 #[test]
 fn codex_ls_remote_hits_mock_registry() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.141.0";
     let binary_contents = b"fake";
     let (_server, releases_url) = setup_codex_mock(version, binary_contents);
 
@@ -378,7 +378,7 @@ fn codex_ls_remote_hits_mock_registry() {
 #[test]
 fn install_rejects_duplicate_version() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.141.0";
     let binary_contents = b"fake";
     let (_server, releases_url) = setup_codex_mock(version, binary_contents);
 
@@ -408,7 +408,7 @@ fn install_rejects_duplicate_version() {
 #[test]
 fn install_refuses_a_codex_binary_that_is_not_signed_by_openai() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.120.0";
+    let version = "rust-v0.141.0";
     // A shell script, not a signed Mach-O: exactly what an attacker-substituted
     // or corrupted asset looks like to codesign.
     let binary_contents = b"#!/bin/sh\necho unsigned\n";
@@ -511,7 +511,7 @@ fn concurrent_codex_install_waits_and_reuses_single_download() {
     use assert_cmd::cargo::CommandCargoExt;
 
     let home = tempfile::tempdir().expect("tempdir");
-    let version = "rust-v0.130.0";
+    let version = "rust-v0.142.0";
     let asset_name = expected_codex_asset();
     let asset_body = make_tarball(expected_codex_entry(), b"single-flight-codex");
     let asset_size = asset_body.len();
@@ -688,8 +688,8 @@ fn setup_codex_mock_two_versions(
 #[test]
 fn codex_uninstall_removes_inactive_version() {
     let home = tempfile::tempdir().expect("tempdir");
-    let version_a = "rust-v0.120.0";
-    let version_b = "rust-v0.119.0";
+    let version_a = "rust-v0.141.0";
+    let version_b = "rust-v0.140.0";
     let binary_contents = b"#!/bin/sh\necho fake-codex\n";
 
     let (_server, releases_url) =
@@ -743,8 +743,8 @@ fn codex_uninstall_removes_inactive_version() {
 #[test]
 fn explicit_use_records_pin_and_use_latest_clears_it() {
     let home = tempfile::tempdir().expect("tempdir");
-    let newer = "rust-v0.120.0";
-    let older = "rust-v0.119.0";
+    let newer = "rust-v0.141.0";
+    let older = "rust-v0.140.0";
     let binary_contents = b"#!/bin/sh\necho fake-codex\n";
 
     let (_server, releases_url) = setup_codex_mock_two_versions(newer, older, binary_contents);

@@ -191,11 +191,20 @@ pub fn pick_product() -> Result<Option<ProductPick>> {
 }
 
 /// Render a single OVM self-version row: version cell, a `dev`/`release` kind
-/// tag, and a `current`/`previous` marker. Pure (returns the styled string) so
-/// the marker logic is unit-testable via `strip_ansi_codes`.
+/// tag, the install date, and a `current`/`previous` marker. Pure (returns the
+/// styled string) so the marker logic is unit-testable via `strip_ansi_codes`.
 fn render_self_row(row: &SelfVersionRow, version_width: usize) -> String {
     let kind_cell = format!("{:<7}", if row.is_dev() { "dev" } else { "release" });
     let kind_str = style(kind_cell).dim().to_string();
+
+    // 16 wide: `YYYY-MM-DD HH:MM`. Wider than the product picker's date-only
+    // cell on purpose — that one shows release dates, one per version, while
+    // this column's job is to separate snapshots built minutes apart.
+    let date_cell = match row.installed_at.as_deref() {
+        Some(stamp) => format!("{stamp:<16}"),
+        None => format!("{:<16}", "—"),
+    };
+    let date_str = style(date_cell).dim().to_string();
 
     let version_cell = super::fixed_width_cell(&row.version, version_width);
     let version_str = if row.current {
@@ -217,7 +226,7 @@ fn render_self_row(row: &SelfVersionRow, version_width: usize) -> String {
         String::new()
     };
 
-    format!("{kind_str}  {version_str}  {marker}")
+    format!("{kind_str}  {version_str}  {date_str}  {marker}")
 }
 
 /// Second-level picker for OVM's own versions, reached from the product picker's
@@ -465,6 +474,15 @@ fn has_companion_filter(product: Product) -> bool {
     matches!(product, Product::Claude | Product::Codex)
 }
 
+/// What the product calls its companion — the `b` filter's subject.
+fn companion_label(product: Product) -> &'static str {
+    match product {
+        Product::Claude => "buddy",
+        Product::Codex => "pet",
+        Product::Pi => "",
+    }
+}
+
 fn is_codex_prerelease(entry: &VersionEntry) -> bool {
     Product::Codex
         .parsed_release_version(&entry.version)
@@ -678,10 +696,15 @@ struct VersionPickerFrame<'a> {
 }
 
 /// Build the two-section row layout: every installed version pinned under an
-/// "installed" header (always shown, never filtered), then the full history
-/// under an "all versions" header (honoring the buddy / release filters).
+/// "installed" header, then the full history under an "all versions" header.
 /// Installed versions appear in both sections by design — "what you have" stays
 /// one glance away no matter how far the history scrolls.
+///
+/// The companion (buddy / pet) filter narrows *both* sections. It used to spare
+/// the installed section, which made the `b` key look dead: with a long install
+/// history the installed rows fill the whole viewport, so filtering only the
+/// section below the fold changed nothing the user could see. The release
+/// filter still spares it — that one only widens the history with prereleases.
 fn build_rows(
     entries: &[VersionEntry],
     product: Product,
@@ -689,21 +712,26 @@ fn build_rows(
     show_all_releases: bool,
 ) -> Vec<Row> {
     let mut rows = Vec::new();
+    let passes_companion =
+        |entry: &VersionEntry| !buddy_filter || entry.has_companion == Some(true);
 
-    let has_installed = entries.iter().any(|entry| entry.installed);
+    let installed: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.installed && passes_companion(entry))
+        .map(|(index, _)| index)
+        .collect();
+
+    let has_installed = !installed.is_empty();
     if has_installed {
         rows.push(Row::Header("installed"));
-        for (index, entry) in entries.iter().enumerate() {
-            if entry.installed {
-                rows.push(Row::Version(index));
-            }
-        }
+        rows.extend(installed.into_iter().map(Row::Version));
     }
 
     let history: Vec<usize> = entries
         .iter()
         .enumerate()
-        .filter(|(_, entry)| !buddy_filter || entry.has_companion == Some(true))
+        .filter(|(_, entry)| passes_companion(entry))
         .filter(|(_, entry)| {
             // Dev builds never parse as release semver, so they pass the
             // prerelease check and always stay visible.
@@ -864,6 +892,9 @@ pub(super) fn interactive_select(
     let mut rows = build_rows(entries, session.product, buddy_filter, show_all_releases);
     let mut cursor = active_or_first(&rows, entries);
     let mut offset = cursor.saturating_sub(visible / 2);
+    // One-shot line that replaces the status line for a single frame, so a key
+    // that legitimately does nothing still says so instead of looking dead.
+    let mut notice: Option<String> = None;
 
     let mut screen = PickerScreen::enter(&term)?;
     // Live-refresh window: while the first check is in flight, wait briefly so a
@@ -913,7 +944,7 @@ pub(super) fn interactive_select(
             show_all_releases,
             can_go_back: session.can_go_back,
             terminal_width: terminal_width(&term),
-            status_line: status_line(session),
+            status_line: notice.take().or_else(|| status_line(session)),
             downloads: &session.downloads,
         });
 
@@ -1008,6 +1039,17 @@ pub(super) fn interactive_select(
                 }
             }
             Key::Char('b') | Key::Char('B') if has_companion_filter(session.product) => {
+                // Turning the filter on with nothing to filter to would empty
+                // the list, and the empty-list guard below would silently undo
+                // it — say why instead of flickering back to the same screen.
+                if !buddy_filter && !entries.iter().any(|e| e.has_companion == Some(true)) {
+                    notice = Some(format!(
+                        "  {} no {} versions in this list",
+                        style("!").yellow(),
+                        companion_label(session.product)
+                    ));
+                    continue;
+                }
                 let keep = entry_index(&rows, cursor).map(|i| entries[i].version.clone());
                 buddy_filter = !buddy_filter;
                 rows = build_rows(entries, session.product, buddy_filter, show_all_releases);
@@ -1033,11 +1075,7 @@ pub(super) fn interactive_select(
 fn render_version_picker_frame(frame: VersionPickerFrame<'_>) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     lines.push(String::new());
-    let companion_label = match frame.product {
-        Product::Claude => "buddy",
-        Product::Codex => "pet",
-        Product::Pi => "",
-    };
+    let companion_label = companion_label(frame.product);
 
     let end = (frame.offset + frame.visible).min(frame.rows.len());
     let desired_version_width = frame
@@ -1385,9 +1423,37 @@ mod tests {
         SelfVersionRow {
             no_return: false,
             version: version.to_string(),
+            installed_at: Some("2026-08-17 09:41".to_string()),
             current,
             previous,
         }
+    }
+
+    /// Dev snapshot labels end in a content hash, so without a stamp the rows
+    /// carry nothing the reader can order by — which is why `current` sitting
+    /// above `previous` looked wrong. The stamp is what explains the order,
+    /// and it carries a clock because those snapshots share one date.
+    #[test]
+    fn self_rows_show_the_install_stamp_and_dash_when_unknown() {
+        let dated = plain(&render_self_row(
+            &self_row("dev-main-0817-46d432de", true, false),
+            24,
+        ));
+        assert!(dated.contains("2026-08-17 09:41"), "{dated}");
+
+        let undated = plain(&render_self_row(
+            &SelfVersionRow {
+                no_return: false,
+                version: "dev-main-0817-cf7a9548".to_string(),
+                installed_at: None,
+                current: false,
+                previous: true,
+            },
+            24,
+        ));
+        assert!(undated.contains("—"), "{undated}");
+        // The marker still lands after the date cell, not on top of it.
+        assert!(undated.contains("previous"), "{undated}");
     }
 
     #[test]
@@ -1395,6 +1461,7 @@ mod tests {
         let row = SelfVersionRow {
             no_return: true,
             version: "0.0.1".to_string(),
+            installed_at: None,
             current: false,
             previous: false,
         };
@@ -1541,6 +1608,51 @@ mod tests {
         // History section repeats them (duplicates by design) inside the full list.
         let history = history_versions(&rows, &entries);
         assert_eq!(history, vec!["2.1.121", "2.1.112", "2.1.96"]);
+    }
+
+    /// The bug behind "the buddy filter doesn't work": with a long install
+    /// history the installed section fills the viewport, so a filter that
+    /// spared it changed nothing on screen.
+    #[test]
+    fn buddy_filter_narrows_the_installed_section_too() {
+        let entries = vec![
+            entry("2.1.121", true, Some("2026-05-20")),
+            entry("2.1.120", true, Some("2026-05-19")),
+            pet_entry("2.1.96", true, Some("2026-04-02")),
+            pet_entry("2.1.90", false, Some("2026-03-28")),
+        ];
+
+        let rows = build_rows(&entries, Product::Claude, true, false);
+
+        assert!(matches!(rows[0], Row::Header("installed")));
+        let installed: Vec<&str> = rows
+            .iter()
+            .take_while(|row| !matches!(row, Row::Header("all versions")))
+            .filter_map(|row| match row {
+                Row::Version(index) => Some(entries[*index].version.as_str()),
+                Row::Header(_) => None,
+            })
+            .collect();
+        assert_eq!(installed, vec!["2.1.96"]);
+        assert_eq!(history_versions(&rows, &entries), vec!["2.1.96", "2.1.90"]);
+    }
+
+    /// With every installed version filtered out, the section header goes too —
+    /// an empty "installed" heading would read as "you have none installed".
+    #[test]
+    fn buddy_filter_drops_the_installed_header_when_nothing_matches() {
+        let entries = vec![
+            entry("2.1.121", true, Some("2026-05-20")),
+            pet_entry("2.1.96", false, Some("2026-04-02")),
+        ];
+
+        let rows = build_rows(&entries, Product::Claude, true, false);
+
+        assert!(!rows
+            .iter()
+            .any(|row| matches!(row, Row::Header("installed"))));
+        assert!(matches!(rows[0], Row::Header("versions")));
+        assert_eq!(history_versions(&rows, &entries), vec!["2.1.96"]);
     }
 
     #[test]

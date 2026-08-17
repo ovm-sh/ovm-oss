@@ -50,6 +50,10 @@ fn restore_default_sigpipe() {
 
 fn main() {
     restore_default_sigpipe();
+    // A no-op unless a launcher spawned this invocation to work on its behalf
+    // (currently: the skippable auto-update's child install), in which case
+    // this process must not outlive it.
+    autoupdate::arm_parent_watchdog();
     if let Err(error) = run() {
         abort(error);
     }
@@ -220,9 +224,12 @@ fn run() -> Result<()> {
             Ok(())
         }
         Commands::Adopt { product, path } => commands::adopt::run(&vm_for(&product)?, path),
-        Commands::Uninstall { product, version } => {
-            commands::uninstall::run(&vm_for(&product)?, &version)
-        }
+        Commands::Uninstall {
+            product,
+            version,
+            all,
+            yes,
+        } => commands::uninstall::run(&vm_for(&product)?, version.as_deref(), all, yes),
         Commands::Clean {
             product,
             version,

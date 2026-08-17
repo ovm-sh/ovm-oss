@@ -182,7 +182,17 @@ pub enum Commands {
         product: String,
 
         /// Version to uninstall
-        version: String,
+        #[arg(required_unless_present = "all")]
+        version: Option<String>,
+
+        /// Remove every installed version, the active one included, and clear
+        /// the selection — the way to fully leave a product
+        #[arg(long, conflicts_with = "version")]
+        all: bool,
+
+        /// Skip the typed confirmation for --all
+        #[arg(long, short = 'y', requires = "all")]
+        yes: bool,
     },
 
     /// Clean raw archives to save disk space
