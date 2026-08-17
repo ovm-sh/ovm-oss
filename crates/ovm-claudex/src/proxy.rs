@@ -471,6 +471,77 @@ pub fn list_models(port: u16, api_key: &str) -> Option<Vec<String>> {
     )
 }
 
+/// What exercising the stored Codex credential through the live proxy said.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CredentialProbe {
+    /// A minimal completion round-tripped: OpenAI still honors the grant.
+    Working,
+    /// The upstream refused to authenticate — the grant needs a fresh login.
+    Rejected(String),
+    /// The probe failed for a reason that says nothing about the grant
+    /// (quota, network, transient upstream error) — not a re-login signal.
+    Inconclusive(String),
+}
+
+/// Exercise the Codex credential end-to-end with a one-token completion.
+///
+/// A grant file on disk proves nothing: OpenAI invalidates the refresh-token
+/// family when the same account logs in through the Codex CLI, and the file
+/// looks identical afterward. Only a completed round-trip may be reported as
+/// "connected". This sends the real key, so callers must have positively
+/// identified the listener first via [`probe`].
+pub fn probe_codex_credential(port: u16, api_key: &str, model: &str) -> CredentialProbe {
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+    else {
+        return CredentialProbe::Inconclusive("could not build an HTTP client".into());
+    };
+    let request = serde_json::json!({
+        "model": model,
+        "max_tokens": 1,
+        "messages": [{ "role": "user", "content": "ok" }],
+    });
+    let response = client
+        .post(format!("http://127.0.0.1:{port}/v1/messages"))
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("anthropic-version", "2023-06-01")
+        .json(&request)
+        .send();
+    match response {
+        Err(error) => CredentialProbe::Inconclusive(format!("request failed: {error}")),
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            classify_credential_response(status, &body)
+        }
+    }
+}
+
+/// Only auth-shaped failures demand a re-login; anything else (quota,
+/// transient upstream errors) must not read as a dead credential, or doctor
+/// would send operators through a pointless OAuth dance on every rate limit.
+fn classify_credential_response(status: u16, body: &str) -> CredentialProbe {
+    if (200..300).contains(&status) {
+        return CredentialProbe::Working;
+    }
+    let message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| {
+            json.pointer("/error/message")
+                .and_then(|message| message.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| format!("HTTP {status}"));
+    let auth_shaped =
+        status == 401 || status == 403 || message.to_ascii_lowercase().contains("auth");
+    if auth_shaped {
+        CredentialProbe::Rejected(message)
+    } else {
+        CredentialProbe::Inconclusive(message)
+    }
+}
+
 fn port_collision_error(port: u16, why: &str) -> ClaudexError {
     ClaudexError::Message(format!(
         "Port 127.0.0.1:{port} is occupied by something that isn't claudex's proxy ({why}). \
@@ -1234,6 +1305,49 @@ fn stop_with_attempts(dirs: &ClaudexDirs, wait_attempts: u32) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::PinnedPair;
+
+    /// The exact failure shape from 2026-08-17: the proxy answered 503 with
+    /// `auth_unavailable` for a grant whose refresh token OpenAI had
+    /// invalidated, while every file-presence check stayed green. That body
+    /// must classify as a dead credential, not a transient error.
+    #[test]
+    fn an_auth_unavailable_body_reads_as_a_dead_credential() {
+        let body = r#"{"type":"error","error":{"type":"api_error","message":"auth_unavailable: no auth available (providers=codex, model=gpt-5.6-sol)"}}"#;
+        match classify_credential_response(503, body) {
+            CredentialProbe::Rejected(message) => {
+                assert!(message.contains("auth_unavailable"), "{message}")
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_successful_completion_reads_as_working() {
+        assert_eq!(
+            classify_credential_response(200, r#"{"type":"message"}"#),
+            CredentialProbe::Working
+        );
+    }
+
+    /// Quota exhaustion says nothing about the grant — telling the operator
+    /// to redo OAuth on every rate limit would be a false alarm.
+    #[test]
+    fn a_rate_limit_is_not_a_re_login_signal() {
+        let body = r#"{"type":"error","error":{"type":"api_error","message":"rate_limit_exceeded: try again later"}}"#;
+        match classify_credential_response(429, body) {
+            CredentialProbe::Inconclusive(_) => {}
+            other => panic!("expected Inconclusive, got {other:?}"),
+        }
+    }
+
+    /// A bare 401/403 is auth-shaped even without a parseable body.
+    #[test]
+    fn an_unauthorized_status_without_a_body_reads_as_dead() {
+        match classify_credential_response(401, "") {
+            CredentialProbe::Rejected(_) => {}
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
 
     fn touch_executable(path: &std::path::Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

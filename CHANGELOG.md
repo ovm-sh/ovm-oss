@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-18
+
+### Fixed
+
+- **`claudex` no longer calls a Codex grant "connected" without proving it.**
+  OpenAI invalidates a grant's refresh token whenever the same account signs
+  in through the Codex CLI, and the file on disk looks identical afterward —
+  so `setup` reported "already connected" and `doctor` reported "All good"
+  while every request failed with `auth_unavailable`. Both now exercise the
+  credential with a one-token completion through the verified proxy and only
+  report a connection the upstream actually honored; a dead grant turns into
+  a guided reconnect instead of a green check. Only auth-shaped failures ask
+  for a re-login — a rate limit is not an OAuth problem.
+
+- **`claudex` login survives a busy callback port.** The browser OAuth flow
+  listens on a fixed localhost port that dev servers love to squat. When the
+  port is taken, setup now falls back to the device-code flow — which binds
+  no local port at all — instead of asking you to go shut down whatever is
+  on port 3000.
+
+- **A `claudex` re-login retires the dead grant it replaces.** The proxy
+  round-robins across every stored credential, so a dead grant left beside
+  the fresh one kept failing a share of requests. After a successful
+  reconnect, grant files predating the login are moved out of the auth dir.
+
 ## [0.1.3] - 2026-08-17
 
 ### Added

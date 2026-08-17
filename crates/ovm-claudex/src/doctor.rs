@@ -49,12 +49,14 @@ pub fn run() -> Result<()> {
             ),
         }
 
+        let mut proxy_verified = false;
         match proxy::probe(
             config.proxy.port,
             &config.proxy.api_key,
             proxy::ProbeIdentity::Pidfile(&dirs),
         ) {
             proxy::ProxyProbe::Verified => {
+                proxy_verified = true;
                 ok(&format!(
                     "proxy verified on 127.0.0.1:{} (answers /v1/models with our key)",
                     config.proxy.port
@@ -86,6 +88,9 @@ pub fn run() -> Result<()> {
         }
 
         check_credentials(&dirs, &mut healthy);
+        if proxy_verified && proxy::has_oauth_grant(&dirs) {
+            check_live_credential(config, &mut healthy);
+        }
 
         if let Some(pin) = &config.pin {
             eprintln!(
@@ -205,12 +210,36 @@ fn check_model_registry(config: &ClaudexConfig, healthy: &mut bool) {
     }
 }
 
+/// A grant file can be long dead — OpenAI invalidates the refresh-token
+/// family when the same account logs in through the Codex CLI, and every
+/// static check stays green (2026-08-17: doctor said "All good" for a grant
+/// the upstream had been rejecting for hours). Exercise it for real.
+fn check_live_credential(config: &ClaudexConfig, healthy: &mut bool) {
+    match proxy::probe_codex_credential(
+        config.proxy.port,
+        &config.proxy.api_key,
+        &config.models.default,
+    ) {
+        proxy::CredentialProbe::Working => {
+            ok("Codex credential answers upstream (live completion)")
+        }
+        proxy::CredentialProbe::Rejected(why) => bad(
+            &format!("Codex credential rejected upstream ({why}) — reconnect: ovm claudex setup"),
+            healthy,
+        ),
+        proxy::CredentialProbe::Inconclusive(why) => eprintln!(
+            "  {} could not verify the Codex credential upstream ({why})",
+            style("!").yellow()
+        ),
+    }
+}
+
 /// The OAuth grant must exist and credential storage must stay owner-only.
 fn check_credentials(dirs: &ClaudexDirs, healthy: &mut bool) {
     let auth_dir = dirs.proxy_auth_dir();
     let has_grant = crate::proxy::has_oauth_grant(dirs);
     if has_grant {
-        ok("Codex OAuth grant present");
+        ok("Codex OAuth grant on disk");
     } else {
         bad("no Codex OAuth grant — run: ovm claudex setup", healthy);
     }

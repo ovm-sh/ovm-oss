@@ -82,7 +82,7 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
             }
         },
     };
-    offer_codex_login(&dirs, &proxy_binary)?;
+    offer_codex_login(&dirs, &proxy_binary, &config)?;
     offer_codex_cli()?;
 
     eprintln!();
@@ -583,27 +583,166 @@ fn dir_on_path(dir: &std::path::Path) -> bool {
     std::env::split_paths(&path_env).any(|entry| entry == dir)
 }
 
+/// CLIProxyAPI exits with this code when the browser flow's localhost
+/// callback port is already taken. That port is baked into the binary (it
+/// must match the redirect URI registered with OpenAI — `-oauth-callback-port`
+/// only moves the local listener, for SSH-tunnel setups), so the way past a
+/// busy port is the device-code flow, which binds no local port at all.
+const OAUTH_CALLBACK_PORT_IN_USE: i32 = 13;
+
+/// What a live round-trip said about a stored grant.
+enum GrantHealth {
+    Working,
+    Dead(String),
+    /// No verified proxy to ask (down, or listener identity unconfirmed) —
+    /// distinct from Working: the grant gets exercised on launch instead.
+    Unverifiable,
+}
+
 /// Hand the terminal to CLIProxyAPI's interactive Codex OAuth flow.
-fn offer_codex_login(dirs: &ClaudexDirs, binary: &std::path::Path) -> Result<()> {
+fn offer_codex_login(
+    dirs: &ClaudexDirs,
+    binary: &std::path::Path,
+    config: &ClaudexConfig,
+) -> Result<()> {
+    let mut reconnecting = false;
     if has_codex_auth(dirs) {
-        eprintln!("  {} Codex account already connected.", style("✓").green());
-        return Ok(());
+        match verify_existing_grant(dirs, config) {
+            GrantHealth::Working => {
+                eprintln!(
+                    "  {} Codex account connected (verified with a live completion).",
+                    style("✓").green()
+                );
+                return Ok(());
+            }
+            GrantHealth::Unverifiable => {
+                eprintln!(
+                    "  {} Codex OAuth grant present (proxy not running — verified on launch).",
+                    style("✓").green()
+                );
+                return Ok(());
+            }
+            GrantHealth::Dead(why) => {
+                eprintln!(
+                    "  {} Stored Codex grant is rejected upstream ({why}) — a fresh login is needed.",
+                    style("!").yellow()
+                );
+                reconnecting = true;
+            }
+        }
     }
-    if !confirm("Connect your Codex account now (opens browser)?")? {
+    let question = if reconnecting {
+        "Reconnect your Codex account now (opens browser)?"
+    } else {
+        "Connect your Codex account now (opens browser)?"
+    };
+    if !confirm(question)? {
         eprintln!("    Skipped — run `ovm claudex setup` again when ready.");
         return Ok(());
     }
+    let login_started = std::time::SystemTime::now();
+    run_codex_login(dirs, binary)?;
+    if reconnecting {
+        retire_stale_grants(&dirs.proxy_auth_dir(), login_started);
+    }
+    Ok(())
+}
+
+/// A grant file on disk proves nothing: OpenAI invalidates the refresh-token
+/// family when the same account logs in through the Codex CLI, and the file
+/// looks identical afterward (2026-08-17: setup reported "already connected"
+/// on a week-dead grant). Only a live completion through an identity-verified
+/// proxy may answer "connected"; the key is never sent to an unverified
+/// listener.
+fn verify_existing_grant(dirs: &ClaudexDirs, config: &ClaudexConfig) -> GrantHealth {
+    match proxy::probe(
+        config.proxy.port,
+        &config.proxy.api_key,
+        proxy::ProbeIdentity::Pidfile(dirs),
+    ) {
+        proxy::ProxyProbe::Verified => {}
+        _ => return GrantHealth::Unverifiable,
+    }
+    match proxy::probe_codex_credential(
+        config.proxy.port,
+        &config.proxy.api_key,
+        &config.models.default,
+    ) {
+        proxy::CredentialProbe::Working => GrantHealth::Working,
+        proxy::CredentialProbe::Rejected(why) => GrantHealth::Dead(why),
+        proxy::CredentialProbe::Inconclusive(_) => GrantHealth::Unverifiable,
+    }
+}
+
+/// Run the interactive browser login, falling back to the device-code flow
+/// when the callback port is taken (dev servers love the same ports).
+fn run_codex_login(dirs: &ClaudexDirs, binary: &std::path::Path) -> Result<()> {
     let status = Command::new(binary)
         .arg("--codex-login")
         .arg("--config")
         .arg(dirs.proxy_config_file())
         .status()?;
+    if status.code() == Some(OAUTH_CALLBACK_PORT_IN_USE) {
+        eprintln!(
+            "  {} The browser flow's local callback port is taken by another app — switching to the device-code flow.",
+            style("!").yellow()
+        );
+        let status = Command::new(binary)
+            .arg("--codex-device-login")
+            .arg("--config")
+            .arg(dirs.proxy_config_file())
+            .status()?;
+        if !status.success() {
+            return Err(ClaudexError::Message(
+                "Codex login did not complete. Re-run: ovm claudex setup".into(),
+            ));
+        }
+        return Ok(());
+    }
     if !status.success() {
         return Err(ClaudexError::Message(
             "Codex login did not complete. Re-run: ovm claudex setup".into(),
         ));
     }
     Ok(())
+}
+
+/// After a successful re-login over a dead grant, move grant files that
+/// predate the login out of the auth dir (to `auth-retired/` beside it —
+/// outside the dir the proxy loads). The proxy round-robins across every
+/// stored credential, so a dead grant left beside the fresh one keeps
+/// failing a share of requests. A file the login refreshed in place has a
+/// newer mtime and is kept.
+fn retire_stale_grants(auth_dir: &std::path::Path, login_started: std::time::SystemTime) {
+    let Some(retired_dir) = auth_dir.parent().map(|parent| parent.join("auth-retired")) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(auth_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        if modified >= login_started {
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if std::fs::create_dir_all(&retired_dir).is_ok()
+            && std::fs::rename(&path, retired_dir.join(name)).is_ok()
+        {
+            eprintln!(
+                "    retired dead grant: {} → auth-retired/",
+                name.to_string_lossy()
+            );
+        }
+    }
 }
 
 /// Whether the proxy's auth dir already holds any credential file.
@@ -617,6 +756,48 @@ fn has_codex_auth(dirs: &ClaudexDirs) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// After a re-login over a dead grant, only files predating the login are
+    /// retired — the fresh grant the login just wrote must survive, and the
+    /// proxy's `logs/` subdirectory is not a grant. (2026-08-17: a dead grant
+    /// left beside the fresh one kept failing a share of requests, because
+    /// the proxy round-robins across every stored credential.)
+    #[test]
+    fn retiring_stale_grants_keeps_the_fresh_one_and_subdirs() {
+        use std::time::{Duration, SystemTime};
+        let temp = tempfile::tempdir().unwrap();
+        let auth_dir = temp.path().join("auth");
+        std::fs::create_dir_all(auth_dir.join("logs")).unwrap();
+        let old = auth_dir.join("codex-old.json");
+        let fresh = auth_dir.join("codex-fresh.json");
+        std::fs::write(&old, "{}").unwrap();
+        std::fs::write(&fresh, "{}").unwrap();
+
+        let login_started = SystemTime::now();
+        let set_mtime = |path: &std::path::Path, time: SystemTime| {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+        set_mtime(&old, login_started - Duration::from_secs(60));
+        set_mtime(&fresh, login_started + Duration::from_secs(60));
+
+        retire_stale_grants(&auth_dir, login_started);
+
+        assert!(!old.exists(), "dead grant must leave the auth dir");
+        assert!(fresh.exists(), "fresh grant must survive");
+        assert!(auth_dir.join("logs").is_dir(), "subdirs are not grants");
+        assert!(
+            temp.path()
+                .join("auth-retired")
+                .join("codex-old.json")
+                .exists(),
+            "dead grant is retired beside the auth dir, not deleted"
+        );
+    }
 
     #[test]
     fn proxy_yaml_binds_localhost_only_with_our_key() {
