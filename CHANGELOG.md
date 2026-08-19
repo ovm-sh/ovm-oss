@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-19
+
+### Added
+
+- **`ovm tour` — guided onboarding, two ways.** An opening fork offers the
+  story (the `ovm story` chapters with an install stop after each one — Claude
+  after Quelpaw, Codex after Mochi, claudex after Echo) or a tldr path that
+  just installs Claude, Codex, and claudex in order, with Pi offered as an
+  optional extra. A reader with no buddy in their config gets offered the real
+  hatch: a one-off launch of Claude Code 2.1.96 to type `/buddy` in, leaving
+  their current selection untouched. Every act is fail-open and auto-skips
+  products that are already managed, so re-running the tour never moves an
+  existing install.
+
+- **`ovm story` shows the companion card, and shows you yours.** Chapter i now
+  draws Quelpaw's `/buddy` card as Claude Code 2.1.96 drew it — rarity, the
+  ASCII cat, the personality line, the stat bars — instead of only describing
+  it. And because `/buddy` wrote its record into the top-level Claude config
+  and 2.1.97 removed the reader rather than the record, anyone who hatched a
+  buddy before the removal now gets their own cat rendered off their own disk,
+  with the date it hatched. Rarity and stat bars are deliberately absent from
+  a reader's card: 2.1.96 derived those at render time and that code went with
+  the feature, so inventing them would be the one made-up thing in a story
+  that is otherwise all recovered.
+
+### Fixed
+
+- **Launch-time product update discovery is lightweight and non-blocking.** OVM
+  now conditionally probes the small aggregate registry in a detached process,
+  using its ETag so unchanged checks return a bodyless `304`. Invocations are
+  coalesced to once a minute, offline failures back off to one hour, and only
+  products whose summary changed download their full version index. A later
+  launch consumes the validated local result and applies the update, without
+  waiting for the legacy maintenance interval.
+- **The Codex skew guard knows `rust-v0.148.0`'s state migrations.** The
+  `CODEX_STATE_MIGRATIONS` manifest now covers migrations 47 ("rollout
+  migration state") and 48 ("thread section appearance"), both additive, so a
+  state DB written by 0.148.0 no longer classifies as unknown territory when
+  switching versions.
+- **Legacy log cleanup no longer reads as a behavioral degrade.** Every
+  sqlite-era Codex deletes the pre-sqlite plain-text files under
+  `CODEX_HOME/log/` on boot (verified against 0.144.6, 0.147.0 and 0.148.0).
+  The downgrade/recovery contract counted that expected cleanup as lost state,
+  vetoed whichever version happened to sit first after a legacy rung in the
+  ladder, and withheld the newest stable's qualification — which is what kept
+  `rust-v0.148.0` out of the registry on 2026-08-18. `log_files` decreases are
+  now advisory evidence; sessions, threads and the state DBs keep their
+  loss-means-degraded rule.
+- **Codex registry refreshes retain complete known history past GitHub's
+  1,000-release API ceiling.** The updater recognizes that specific capped
+  response, keeps older active versions from the validated registry, and still
+  adds newly published installable releases instead of failing the refresh or
+  falsely retiring history it can no longer page through.
+
 ## [0.1.4] - 2026-08-18
 
 ### Fixed

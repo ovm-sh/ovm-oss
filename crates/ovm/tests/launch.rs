@@ -207,6 +207,115 @@ fn write_fake_codex_binary(home: &Path, version: &str, script: &str) {
 }
 
 #[test]
+fn background_etag_probe_is_consumed_by_the_next_codex_launch() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let old = "rust-v0.147.0";
+    let latest = "rust-v0.148.0";
+    write_fake_codex_binary(home.path(), old, "#!/bin/sh\necho old-codex\n");
+    let product_dir = home.path().join(".ovm/products/codex");
+    fs::create_dir_all(&product_dir).expect("product dir");
+    std::os::unix::fs::symlink(
+        product_dir.join("versions").join(old),
+        product_dir.join("current"),
+    )
+    .expect("activate old Codex");
+
+    let config = home.path().join(".ovm/config.json");
+    fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
+    fs::write(
+        &config,
+        r#"{
+            "checkForUpdates": true,
+            "autoUpdate": { "default": "off", "codex": "on" },
+            "self": { "autoUpdate": "off" },
+            "cleanup": { "retention": "never" }
+        }"#,
+    )
+    .expect("write config");
+
+    let mut server = Server::new();
+    let aggregate = server
+        .mock("GET", "/registry.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_header("etag", "\"registry-v2\"")
+        .with_body(format!(
+            r#"{{"products":[
+                {{"product":"claude","latest":"2.1.235","version_count":485,"retired_count":0,"updated_at":"2026-08-19T01:22:51Z"}},
+                {{"product":"codex","latest":"{latest}","version_count":884,"retired_count":0,"updated_at":"2026-08-19T01:22:51Z"}},
+                {{"product":"pi","latest":"0.84.2","version_count":254,"retired_count":0,"updated_at":"2026-08-19T01:22:51Z"}}
+            ]}}"#
+        ))
+        .create();
+    let mut indexes = Vec::new();
+    for (product, body) in [
+        ("claude", r#"{"versions":[]}"#.to_string()),
+        (
+            "codex",
+            format!(r#"{{"versions":[{{"version":"{old}"}},{{"version":"{latest}"}}]}}"#),
+        ),
+        ("pi", r#"{"versions":[]}"#.to_string()),
+    ] {
+        indexes.push(
+            server
+                .mock("GET", format!("/{product}.json").as_str())
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(body)
+                .create(),
+        );
+    }
+
+    let asset_name = expected_codex_asset();
+    let entry = expected_codex_entry();
+    let latest_script = "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.148.0'; else echo new-codex; fi\n";
+    let tarball = make_tarball(entry, latest_script.as_bytes());
+    let asset_url = format!("{}/assets/{asset_name}", server.url());
+    server
+        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .with_status(200)
+        .with_body(tarball.clone())
+        .create();
+    server
+        .mock(
+            "GET",
+            format!("/codex/releases/{latest}.json").as_str(),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{"tag_name":"{latest}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{}}}]}}"#,
+            tarball.len()
+        ))
+        .create();
+
+    Command::cargo_bin("ovm")
+        .expect("ovm binary")
+        .env("HOME", home.path())
+        .env("OVM_REGISTRY_BASE_URL", server.url())
+        .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
+        .arg("__refresh-cache")
+        .assert()
+        .success();
+    aggregate.assert();
+    for index in indexes {
+        index.assert();
+    }
+
+    Command::cargo_bin("ovm")
+        .expect("ovm binary")
+        .env("HOME", home.path())
+        .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
+        .env("OVM_REGISTRY_BASE_URL", server.url())
+        .env("OVM_CODEX_NPM_REGISTRY_URL", "http://127.0.0.1:9")
+        .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
+        .args(["codex", "hello"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("new-codex"));
+}
+
+#[test]
 fn launch_execs_active_binary_with_args_passed_through() {
     let home = tempfile::tempdir().expect("tempdir");
     let version = "rust-v0.140.0";

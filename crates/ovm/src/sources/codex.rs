@@ -470,9 +470,12 @@ fn select_release_asset(release: &Release) -> Option<&ReleaseAsset> {
 }
 
 fn download_asset(url: &str, dest: &Path, metadata_size: Option<u64>) -> Result<String> {
-    // Loopback is only legitimate when the Codex releases test override points at
-    // a local mock; production release metadata must never resolve to loopback.
-    let allow_loopback = super::test_override_active("OVM_CODEX_RELEASES_URL");
+    // Loopback is only legitimate when a metadata test override points at a
+    // local mock. A stamped release may come from the registry override rather
+    // than the GitHub-releases override; production metadata must never resolve
+    // to loopback because neither override is normally present.
+    let allow_loopback = super::test_override_active("OVM_CODEX_RELEASES_URL")
+        || super::test_override_active("OVM_REGISTRY_BASE_URL");
     super::validate_download_url(url, super::GITHUB_DOWNLOAD_HOSTS, allow_loopback)?;
     let mut response = release_asset_client()?.get(url).send()?;
     super::validate_download_url(

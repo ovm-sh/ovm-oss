@@ -63,7 +63,7 @@ One design choice drives everything: **versions are immutable directories, and t
                                versions/dev:my-fix/…      ← your build, same treatment
 ```
 
-Switching rewrites one symlink — nothing is downloaded, deleted, or rebuilt, which is why rollback always works. Installs are staged, integrity-checked — every download is verified against the digest its publisher ships wherever one exists (Claude Code's release manifest, npm SRI, Pi's `SHA256SUMS`; OpenAI publishes none for the Codex assets we fetch), and always against the byte length the server and release metadata declare, so a truncated transfer can never be mistaken for a good one; macOS binaries additionally get a code-signing team check — and published atomically with a completion marker written last, so an interrupted install is invisible rather than half-usable. Launches read local state only: the "is there a newer version?" check is answered from a local cache that a detached background process refreshes, so a wedged network can never delay the tool you're launching. The only launch that downloads anything is one that has an upgrade to apply — or that you asked to change version.
+Switching rewrites one symlink — nothing is downloaded, deleted, or rebuilt, which is why rollback always works. Installs are staged, integrity-checked — every download is verified against the digest its publisher ships wherever one exists (Claude Code's release manifest, npm SRI, Pi's `SHA256SUMS`; OpenAI publishes none for the Codex assets we fetch), and always against the byte length the server and release metadata declare, so a truncated transfer can never be mistaken for a good one; macOS binaries additionally get a code-signing team check — and published atomically with a completion marker written last, so an interrupted install is invisible rather than half-usable. Launches read local state only: the "is there a newer version?" check is answered from a local cache that a detached background process validates with a conditional ETag request, so a wedged network can never delay the tool you're launching. The only launch that downloads anything is one that has a previously discovered upgrade to apply — or that you asked to change version.
 
 📖 **[Full technical overview with diagrams →](https://ovm.sh/how-it-works.html)** — storage, switching, the atomic self-update, and the release pipeline.
 🔬 **[Methodology →](https://ovm.sh/methodology.html)** — how releases are verified, benchmarked, and published.
@@ -172,7 +172,7 @@ Your prompts go **Claude Code UI → local CLIProxyAPI on `127.0.0.1` → OpenAI
 
 ## Version registry
 
-Version lists come from `ovm.sh/api/` (`claude.json`, `codex.json`, `pi.json`, `cliproxyapi.json`, `registry.json`) in a single request, so listing hundreds of versions takes milliseconds instead of hammering upstream APIs. If the registry is unreachable, OVM falls back to direct upstream calls. Refreshes happen in the background, never on the launch path.
+Version lists come from `ovm.sh/api/` (`claude.json`, `codex.json`, `pi.json`, `cliproxyapi.json`, `registry.json`), so listing hundreds of versions takes milliseconds instead of hammering upstream APIs. On invocation, a detached worker conditionally checks the roughly 1 KB aggregate `registry.json`; its ETag makes the common case a bodyless `304`. Changed product summaries trigger only those full-index downloads. Requests are coalesced to once a minute, independently of the legacy maintenance interval, and offline failures back off to one hour. The foreground launch never waits on the network and consumes the result on a later invocation.
 
 ## Development
 
@@ -181,7 +181,7 @@ Version lists come from `ovm.sh/api/` (`claude.json`, `codex.json`, `pi.json`, `
 cargo fmt && cargo clippy --all-targets --all-features -- -D warnings && cargo test
 ```
 
-`dev-install.sh` installs a content-addressed snapshot, so the installed commands keep working even if the checkout moves. Rerun it after changes — rebuilding alone doesn't refresh the installed snapshot. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/architecture.md](docs/architecture.md); release process in [RELEASING.md](RELEASING.md).
+`dev-install.sh` installs a content-addressed snapshot, so the installed commands keep working even if the checkout moves. Rerun it after changes — rebuilding alone doesn't refresh the installed snapshot, and validating through the installed `ovm` (not `./target/debug/ovm`) is what exercises the real control plane and bundled plugins. `ovm self current` shows which snapshot is live; `ovm self use <version>` rolls back. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/architecture.md](docs/architecture.md); release process in [RELEASING.md](RELEASING.md).
 
 ## Roadmap
 

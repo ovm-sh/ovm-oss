@@ -8,6 +8,7 @@
 //! `--fast` (or a non-tty on either end) plays straight through without
 //! waiting for input.
 
+use crate::buddy::Buddy;
 use crate::error::Result;
 use std::io::{self, IsTerminal, Write};
 use std::thread::sleep;
@@ -268,14 +269,101 @@ fn escape_run(chars: &[char], start: usize) -> Option<usize> {
     Some(i - start)
 }
 
+/// Where a reader can ask for `/buddy` back. Pre-filled but user-sent — the
+/// story only ever links; it never posts anything on anyone's behalf.
+const BUDDY_ISSUE_URL: &str =
+    "https://github.com/anthropics/claude-code/issues/new?title=Bring+back+%2Fbuddy";
+const BUDDY_POST_URL: &str =
+    "https://x.com/intent/post?text=dear+%40AnthropicAI%2C+please+bring+back+%2Fbuddy";
+
+/// Quelpaw's card, reproduced from the 2.1.96 recording — the one artifact this
+/// story is told from rather than about. The em dash and the missing space
+/// after it are the model's own punctuation, kept as written.
+const QUELPAW_PERSONALITY: &str = "Debugging genius with the patience of a caffeinated squirrel\u{2014}finds your bugs in seconds then immediately roasts your variable names.";
+const QUELPAW_STATS: [(&str, u8); 5] = [
+    ("DEBUGGING", 75),
+    ("PATIENCE", 2),
+    ("CHAOS", 13),
+    ("WISDOM", 36),
+    ("SNARK", 21),
+];
+
+// ---- the companion card -----------------------------------------------------
+
+/// The card `/buddy` drew when a creature hatched.
+///
+/// Two of these exist. The archived one is Quelpaw's, reproduced from the
+/// recording of 2.1.96 — rarity and stat bars included, because that is what
+/// was on screen. The other is whatever is in the reader's own config, which
+/// keeps only a name, a personality and a hatch time: 2.1.96 derived rarity and
+/// the bars at render time and the removal took that code with it. So a
+/// reader's card has no `rarity` and no `stats`, and inventing them would be
+/// the one dishonest thing in a story that is otherwise all recovered.
+struct Card<'a> {
+    /// (left, right) — `★ COMMON` and `CHONK`. Archived cards only.
+    rarity: Option<(&'a str, &'a str)>,
+    name: &'a str,
+    personality: &'a str,
+    /// Named 0–100 bars. Archived cards only.
+    stats: &'a [(&'a str, u8)],
+    /// A dim last line — "hatched 1 april 2026".
+    footer: Option<String>,
+}
+
+/// Content width inside the border. Wide enough for the longest archived stat
+/// row (`DEBUGGING` + a ten-cell bar + a three-digit value) and for prose to
+/// wrap without looking cramped, narrow enough that the whole card still
+/// centres inside 80 columns with room to spare.
+const CARD_INNER: usize = 42;
+
+/// Greedy wrap on whitespace. The personality is model-written prose of no
+/// fixed length, so it is the only thing on the card that can overflow.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let extra = if line.is_empty() { 0 } else { 1 };
+        if !line.is_empty() && line.chars().count() + extra + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// A ten-cell bar. `█` for filled, `░` for empty — the same two glyphs 2.1.96
+/// used, so the archived card reads as a reproduction rather than a redesign.
+///
+/// Truncating, not rounding: the recorded card fills seven cells for 75 and
+/// leaves PATIENCE 2 completely empty, which only `value / 10` reproduces.
+fn stat_bar(value: u8) -> String {
+    let filled = value.min(100) as usize / 10;
+    format!("{}{}", "█".repeat(filled), "░".repeat(10 - filled))
+}
+
 // ---- the teller -------------------------------------------------------------
 
-struct Story {
+pub(super) struct Story {
     fast: bool,
     width: usize,
 }
 
 impl Story {
+    /// `fast` also engages automatically off a tty — same rule `run` applies.
+    pub(super) fn new(fast: bool) -> Self {
+        let fast = fast || !io::stdout().is_terminal() || !io::stdin().is_terminal();
+        Story {
+            fast,
+            width: terminal_width(),
+        }
+    }
+
     fn beat(&self, ms: u64) {
         if !self.fast {
             sleep(Duration::from_millis(ms));
@@ -374,6 +462,123 @@ impl Story {
         self.beat(200);
     }
 
+    /// Draw a companion card, centred, then idle the cat inside its frame.
+    ///
+    /// The card is revealed a line at a time like every cat in this story, and
+    /// only afterwards do the cat's rows get rewritten in place. That is the
+    /// cursor-up trick `animate` already uses, except it has to reach back up
+    /// past the name, the personality and the stats and then return, so the
+    /// border never moves. Quelpaw idles exactly as they did when they were
+    /// drawn loose; the only change is what surrounds them.
+    fn card(&self, card: &Card, cat_frames: &[&[&str]], color: &str) {
+        // (plain, rendered) — the plain copy exists only to measure padding,
+        // because the rendered copy is full of escape sequences that occupy no
+        // columns.
+        let mut rows: Vec<(String, String)> = Vec::new();
+
+        if let Some((left, right)) = card.rarity {
+            let gap = CARD_INNER.saturating_sub(2 + left.chars().count() + right.chars().count());
+            let plain = format!("  {left}{}{right}", " ".repeat(gap));
+            rows.push((plain.clone(), format!("{DIM}{plain}{RESET}")));
+            rows.push((String::new(), String::new()));
+        }
+
+        let cat_start = rows.len();
+        for line in cat_frames[0] {
+            let plain = format!("    {line}");
+            rows.push((plain.clone(), format!("{color}{plain}{RESET}")));
+        }
+        let cat_height = cat_frames[0].len();
+
+        rows.push((String::new(), String::new()));
+        let name = format!("  {}", card.name);
+        rows.push((name.clone(), format!("{BOLD}{color}{name}{RESET}")));
+        rows.push((String::new(), String::new()));
+
+        for (i, line) in wrap(card.personality, CARD_INNER - 4).iter().enumerate() {
+            // The opening quote hangs in the margin so the prose block stays
+            // flush — the same thing the card did.
+            let plain = if i == 0 {
+                format!("  \u{201c}{line}")
+            } else {
+                format!("   {line}")
+            };
+            rows.push((plain.clone(), format!("{ITALIC}{GREY}{plain}{RESET}")));
+        }
+        if let Some((plain, rendered)) = rows.pop() {
+            // Close the quote on the last line of prose rather than orphaning it.
+            let closed = format!("{plain}\u{201d}");
+            let _ = rendered;
+            rows.push((closed.clone(), format!("{ITALIC}{GREY}{closed}{RESET}")));
+        }
+
+        if !card.stats.is_empty() {
+            rows.push((String::new(), String::new()));
+            let label_width = card
+                .stats
+                .iter()
+                .map(|(label, _)| label.chars().count())
+                .max()
+                .unwrap_or(0);
+            for (label, value) in card.stats {
+                let bar = stat_bar(*value);
+                let plain = format!("  {label:<label_width$}  {bar}  {value:>3}");
+                let rendered = format!(
+                    "{GREY}  {label:<label_width$}  {RESET}{color}{bar}{RESET}{GREY}  {value:>3}{RESET}"
+                );
+                rows.push((plain, rendered));
+            }
+        }
+
+        if let Some(footer) = &card.footer {
+            rows.push((String::new(), String::new()));
+            let plain = format!("  {footer}");
+            rows.push((plain.clone(), format!("{DIM}{plain}{RESET}")));
+        }
+
+        let left = " ".repeat(self.width.saturating_sub(CARD_INNER + 2) / 2);
+        let rule = "\u{2500}".repeat(CARD_INNER);
+        let mut out = io::stdout();
+
+        println!("{left}{DIM}\u{256d}{rule}\u{256e}{RESET}");
+        let _ = out.flush();
+        self.beat(60);
+        for (plain, rendered) in &rows {
+            let pad = " ".repeat(CARD_INNER.saturating_sub(plain.chars().count()));
+            println!("{left}{DIM}\u{2502}{RESET}{rendered}{pad}{DIM}\u{2502}{RESET}");
+            let _ = out.flush();
+            self.beat(60);
+        }
+        println!("{left}{DIM}\u{2570}{rule}\u{256f}{RESET}");
+        let _ = out.flush();
+
+        // Idle the cat in place. Everything below it — name, prose, stats,
+        // footer, border — has to survive, so the cursor climbs to the cat,
+        // rewrites those rows, and drops back to where it started.
+        if self.fast || cat_frames.len() < 2 {
+            self.beat(300);
+            return;
+        }
+        let below = rows.len() + 1 - cat_start; // +1 for the bottom border
+        let back = below - cat_height;
+        for frame in cat_frames.iter().cycle().skip(1).take(cat_frames.len() * 2) {
+            self.beat(350);
+            print!("\x1b[{below}F");
+            for line in frame.iter() {
+                let plain = format!("    {line}");
+                let pad = " ".repeat(CARD_INNER.saturating_sub(plain.chars().count()));
+                println!(
+                    "\x1b[2K{left}{DIM}\u{2502}{RESET}{color}{plain}{RESET}{pad}{DIM}\u{2502}{RESET}"
+                );
+            }
+            if back > 0 {
+                print!("\x1b[{back}E");
+            }
+            let _ = out.flush();
+        }
+        self.beat(300);
+    }
+
     fn wait(&self) {
         if self.fast {
             return;
@@ -425,7 +630,7 @@ impl Story {
 
     // ---- chapters -----------------------------------------------------------
 
-    fn title(&self) {
+    pub(super) fn title(&self) {
         self.fresh_page();
         self.blank();
         println!("{}", self.center(&format!("{GREY}ovm presents{RESET}"), 12));
@@ -467,7 +672,7 @@ impl Story {
         self.beat(1200);
     }
 
-    fn chapter_quelpaw(&self) {
+    pub(super) fn chapter_quelpaw(&self) {
         self.fresh_page();
         self.blank();
         println!("{}", self.center(&format!("{SILVER}i. quelpaw{RESET}"), 10));
@@ -510,6 +715,27 @@ impl Story {
             10,
             0,
         );
+        self.wait();
+
+        // The card gets a page to itself. It is twenty-odd rows, so sharing a
+        // screen with the narration would push one of them off an 80x24
+        // terminal — and reading about the hatching first turns the card into
+        // a reveal instead of a title card.
+        self.fresh_page();
+        self.blank();
+        println!("{}", self.center(&format!("{SILVER}i. quelpaw{RESET}"), 10));
+        self.blank();
+        self.card(
+            &Card {
+                rarity: Some(("\u{2605} COMMON", "CHONK")),
+                name: "Quelpaw",
+                personality: QUELPAW_PERSONALITY,
+                stats: &QUELPAW_STATS,
+                footer: Some("hatched 1 april 2026".into()),
+            },
+            &[&QUELPAW, &QUELPAW_EAR, &QUELPAW, &QUELPAW_TAIL],
+            SILVER,
+        );
         self.blank();
         self.say(
             "For me, it was just nice to have them around.",
@@ -550,7 +776,64 @@ impl Story {
         self.wait();
     }
 
-    fn chapter_mochi(&self) {
+    /// The reader's own buddy, if they hatched one before 2.1.97.
+    ///
+    /// The removal took the reader, not the record: `/buddy` wrote a
+    /// `companion` object into the top-level Claude config and nothing has
+    /// touched it in the seventeen releases since. So for anyone who was there,
+    /// this is their cat, off their own disk — and the chapter stops being
+    /// about someone else's.
+    ///
+    /// Rarity and stat bars are absent on purpose. 2.1.96 derived them at
+    /// render time and that code went with the feature; making some up would be
+    /// the only invented thing in a story that is otherwise all recovered.
+    pub(super) fn chapter_your_buddy(&self, buddy: &Buddy) {
+        self.fresh_page();
+        self.blank();
+        println!("{}", self.center(&format!("{SILVER}i. quelpaw{RESET}"), 10));
+        self.blank();
+        self.say("You hatched one too.", "", 12, 300);
+        self.blank();
+        self.card(
+            &Card {
+                rarity: None,
+                name: &buddy.name,
+                personality: &buddy.personality,
+                stats: &[],
+                footer: Some(format!("hatched {}", buddy.hatched_on())),
+            },
+            &[&QUELPAW, &QUELPAW_EAR, &QUELPAW, &QUELPAW_TAIL],
+            SILVER,
+        );
+        self.blank();
+        self.say(
+            "Still in your config, where nothing has read them since",
+            "",
+            10,
+            300,
+        );
+        self.say(
+            "2.1.97 — the removal took the reader, not the cat.",
+            "",
+            10,
+            0,
+        );
+        self.blank();
+        self.say("They're still yours.", SILVER, 12, 400);
+        self.blank();
+        self.say(
+            "And Anthropic could bring them back. Ask, kindly:",
+            "",
+            10,
+            400,
+        );
+        let issue = self.link(BUDDY_ISSUE_URL, "open an issue on claude-code");
+        let post = self.link(BUDDY_POST_URL, "say it on x");
+        self.say(&format!("{issue}, or {post}."), GREY, 10, 0);
+        self.wait();
+    }
+
+    pub(super) fn chapter_mochi(&self) {
         self.fresh_page();
         self.blank();
         println!("{}", self.center(&format!("{MAGENTA}ii. mochi{RESET}"), 9));
@@ -645,7 +928,7 @@ impl Story {
         self.wait();
     }
 
-    fn chapter_echo(&self) {
+    pub(super) fn chapter_echo(&self) {
         self.fresh_page();
         self.blank();
         println!("{}", self.center(&format!("{ORANGE}iii. echo{RESET}"), 9));
@@ -685,7 +968,12 @@ impl Story {
         self.wait();
     }
 
-    fn fin(&self) {
+    /// The tour's pause before the globe: same prompt the chapters use.
+    pub(super) fn wait_for_fin(&self) {
+        self.wait();
+    }
+
+    pub(super) fn fin(&self) {
         self.fresh_page();
         self.blank();
         let mask = decal_mask();
@@ -779,6 +1067,11 @@ impl Story {
         self.beat(700);
         println!("{}", self.center(&format!("{GREY}ovm.sh{RESET}"), 6));
         self.blank();
+        println!(
+            "{}",
+            self.center(&format!("{DIM}thank you for using ovm{RESET}"), 23)
+        );
+        self.blank();
     }
 }
 
@@ -789,13 +1082,15 @@ fn terminal_width() -> usize {
 }
 
 pub fn run(fast: bool) -> Result<()> {
-    let fast = fast || !io::stdout().is_terminal() || !io::stdin().is_terminal();
-    let story = Story {
-        fast,
-        width: terminal_width(),
-    };
+    let story = Story::new(fast);
     story.title();
     story.chapter_quelpaw();
+    // Only for readers who were there before 2.1.97. Everyone else goes
+    // straight on to Mochi — an absent buddy is the ordinary case now, not
+    // something to apologise for.
+    if let Some(buddy) = Buddy::load() {
+        story.chapter_your_buddy(&buddy);
+    }
     story.chapter_mochi();
     story.chapter_echo();
     story.fin();
@@ -805,6 +1100,61 @@ pub fn run(fast: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The recorded card fills seven of ten cells for DEBUGGING 75 and leaves
+    /// PATIENCE 2 empty. Rounding gets both wrong, so this is the test that
+    /// keeps the reproduction a reproduction.
+    #[test]
+    fn stat_bars_truncate_the_way_the_recording_did() {
+        assert_eq!(stat_bar(75), "███████░░░");
+        assert_eq!(stat_bar(2), "░░░░░░░░░░");
+        assert_eq!(stat_bar(13), "█░░░░░░░░░");
+        assert_eq!(stat_bar(100), "██████████");
+        assert_eq!(stat_bar(255), "██████████");
+    }
+
+    #[test]
+    fn wrapping_keeps_every_word_and_respects_the_width() {
+        let wrapped = wrap(QUELPAW_PERSONALITY, CARD_INNER - 4);
+        assert!(wrapped.len() > 1, "the personality is longer than one line");
+        for line in &wrapped {
+            assert!(
+                line.chars().count() <= CARD_INNER - 4,
+                "line overflows the card: {line:?}"
+            );
+        }
+        assert_eq!(
+            wrapped.join(" ").split_whitespace().count(),
+            QUELPAW_PERSONALITY.split_whitespace().count()
+        );
+    }
+
+    /// A word longer than the card cannot be broken, but it must not be
+    /// silently dropped — the personality is model-written and unbounded.
+    #[test]
+    fn wrapping_survives_a_word_wider_than_the_card() {
+        let wrapped = wrap("hi supercalifragilisticexpialidocious", 8);
+        assert_eq!(wrapped, vec!["hi", "supercalifragilisticexpialidocious"]);
+    }
+
+    /// The card is centred as a block inside `CARD_INNER + 2` columns, so every
+    /// row it can draw has to fit that budget or an 80-column terminal wraps
+    /// the whole thing into nonsense. Stat rows are the widest fixed content.
+    #[test]
+    fn every_archived_stat_row_fits_the_card() {
+        let label_width = QUELPAW_STATS
+            .iter()
+            .map(|(label, _)| label.chars().count())
+            .max()
+            .expect("stats are not empty");
+        for (label, value) in QUELPAW_STATS {
+            let row = format!("  {label:<label_width$}  {}  {value:>3}", stat_bar(value));
+            assert!(
+                row.chars().count() <= CARD_INNER,
+                "stat row overflows the card: {row:?}"
+            );
+        }
+    }
 
     #[test]
     fn buddy_gate_accepts_the_command_in_any_dress() {

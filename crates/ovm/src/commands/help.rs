@@ -32,7 +32,7 @@ pub fn run_short() -> Result<()> {
     // thing being kept short, and the ceiling test counts those separately.
     println!(
         "{}\n",
-        style("There's a story behind the cats: `ovm story`").dim()
+        style("New here? `ovm tour` sets you up · the story behind the cats: `ovm story`").dim()
     );
     Ok(())
 }
@@ -108,6 +108,7 @@ pub fn run() -> Result<()> {
     println!("\nOther:");
     println!("  completions  Generate shell completions");
     println!("  story        A tale of two cats and an echo (--fast plays it through)");
+    println!("  tour         Guided onboarding — the story with install stops, or a tldr");
     println!("  help         Show this overview");
     // One pattern, two examples — not the eight-row cross product of two flags
     // and two products. The exhaustive table lives in `ovm help launch`.

@@ -16,7 +16,10 @@ bash tests/scripts/export-oss.sh
 ```
 
 For a standalone local snapshot, run `./scripts/dev-install.sh`. Re-run it after
-code changes: building alone does not replace the installed snapshot.
+code changes: building alone does not replace the installed snapshot. Validate
+through the installed `ovm`, not `./target/debug/ovm` — `cargo build -p ovm`
+skips the workspace's plugin binaries, so bundled-plugin paths silently fail
+under the direct binary.
 
 ## Code and security
 

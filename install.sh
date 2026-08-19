@@ -1055,6 +1055,33 @@ echo "  ovm self current"
 echo ""
 echo "There's a story behind the cats:  ovm story"
 
+# Guided tour for fresh machines. Same two rules as the claudex chain below:
+# the install is COMPLETE before any of this runs (release the lock first —
+# the tour can hand the terminal to long-lived sessions), and a declined or
+# failed tour never fails the installer. Fresh means no managed products yet:
+# a returning user upgrading OVM has chosen their setup already and gets the
+# story pointer above, not a prompt. `curl | sh` without a terminal skips
+# silently — the tour itself also refuses non-tty, but the prompt must not
+# try to read an answer from the pipe. Skipped when --claudex was asked for:
+# that flag IS a chosen onboarding path.
+if [ "$CLAUDEX_SETUP" != 1 ] && [ ! -d "$HOME/.ovm/products" ] && (exec < /dev/tty) 2>/dev/null; then
+    echo ""
+    printf "Take the guided tour now? It sets up Claude Code, Codex and claudex. [Y/n] "
+    tour_answer=""
+    IFS= read -r tour_answer < /dev/tty || tour_answer="n"
+    case "$tour_answer" in
+        [Nn]*) echo "Anytime later:  ovm tour" ;;
+        *)
+            release_operation_lock
+            PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" tour < /dev/tty || {
+                echo ""
+                echo "The tour did not finish — the OVM install itself succeeded."
+                echo "Pick it back up anytime with:  ovm tour"
+            }
+            ;;
+    esac
+fi
+
 if [ "$CLAUDEX_SETUP" = 1 ]; then
     echo ""
     # Guided claudex onboarding. The install above is COMPLETE, so two rules:

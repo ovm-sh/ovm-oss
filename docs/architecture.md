@@ -81,7 +81,11 @@ https://ovm.sh/api/pi.json
 https://ovm.sh/api/registry.json     # product index
 ```
 
-Each product JSON lists all versions with publish dates. Refreshed by `scripts/update-registry.sh`. OVM fetches the registry with a short timeout (5s) and falls back to direct upstream calls if unreachable.
+Each product JSON lists all versions with publish dates. `registry.json` is the
+small aggregate: it carries the stable latest and summary counts for every
+product. Refreshed by `scripts/update-registry.sh`, it has an HTTP ETag. OVM
+uses a five-second timeout and falls back to direct upstream calls for explicit
+resolution when the registry is unreachable.
 
 ### Plugin System
 
@@ -161,18 +165,23 @@ User: ovm select
 ```
 User: ovm cc exec main.py
   → bypass clap (raw args passthrough)
-  → resolve and install latest release first if auto-update policy is `on`
-  → spawn a background all-product registry refresh if cache is due
+  → read the previously validated local latest snapshot
+  → install it first if auto-update policy is `on` and it is newer
+  → arm a detached conditional request for registry.json if the probe is due
   → prune inactive old installs according to cleanup retention
   → auto-install if no active version (for `latest` / bare version args)
   → export OVM_PRODUCT + OVM_VERSION for the launched process
   → exec the product binary with remaining args
 ```
 
-The background refresh is registry-only and protected by a short-lived lock, so
-parallel terminals do not stampede the registry. Explicit `latest` requests and
-launches with auto-update enabled may still fall back to upstream APIs when the
-registry is unavailable.
+The detached worker coalesces invocations to at most one product probe per
+minute and sends the cached ETag. An unchanged registry returns `304` with no
+body. A changed aggregate refreshes only the full product indexes whose summary
+changed; an interrupted index download stays pending and is retried after later
+`304`s. Offline failures back off exponentially to one hour. A short-lived lock
+prevents parallel terminals from stampeding the registry. The foreground launch
+never waits for this request and only consumes validated local state; explicit
+`latest` requests may still fall back to upstream APIs.
 
 Install cleanup is local-only. The default retention is 30 days; it removes
 inactive release installs older than the configured window and skips active

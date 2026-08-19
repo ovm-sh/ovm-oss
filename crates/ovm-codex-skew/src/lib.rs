@@ -44,8 +44,8 @@ pub struct Migration {
 
 // CODEX_STATE_MIGRATIONS_BEGIN
 // Codex `state` migrator — generated from openai/codex codex-rs/state/migrations
-// at rust-v0.147.0 (regenerate with scripts/gen-codex-migration-manifest.py).
-// source commit: be6e8eac029b183056b7e4402879f15d2c85f61b
+// at rust-v0.148.0 (regenerate with scripts/gen-codex-migration-manifest.py).
+// source commit: 3ba0f711642a888aec92a611a3f3b2211157ff89
 // Keep in version
 // order; `breaking` flags removals only.
 #[rustfmt::skip]
@@ -96,6 +96,8 @@ const CODEX_STATE_MIGRATIONS: &[Migration] = &[
     Migration { version: 44, description: "external agent config imports provider id", breaking: false },
     Migration { version: 45, description: "threads section", breaking: false },
     Migration { version: 46, description: "threads section order", breaking: false },
+    Migration { version: 47, description: "rollout migration state", breaking: false },
+    Migration { version: 48, description: "thread section appearance", breaking: false },
 ];
 // CODEX_STATE_MIGRATIONS_END
 

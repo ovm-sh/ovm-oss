@@ -358,6 +358,17 @@ fn now_unix() -> u64 {
         .as_secs()
 }
 
+/// PATH for a claudex child under test: the fake bin first, then only the
+/// system tool directories (sh, ps, lsof, kill). The real PATH is deliberately
+/// absent — it contains this machine's real `ovm` and `claude`, and appending
+/// it turned any fixture miss into a silent escape: a failing run on
+/// 2026-08-18 left a genuine Claude Code 2.1.233 transcript inside its temp
+/// home, meaning a test launched the real tool on the real account. With the
+/// real PATH gone, a bypass fails loudly as command-not-found instead.
+fn sandbox_path(bin: &Path) -> String {
+    format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display())
+}
+
 /// A fake `ovm` on PATH that records its argv and env, then exits 0.
 fn fake_ovm(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
     let bin = temp.join("bin");
@@ -482,11 +493,7 @@ fn launch_wires_model_env_and_scrubs_ambient_credentials() {
     adopt_running_proxy(temp.path(), true);
     let (bin, args_file, env_file) = fake_ovm(temp.path());
 
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
         .args(["-p", "hello"])
@@ -542,11 +549,7 @@ fn launch_prepares_newer_managed_proxy_once_without_interrupting_legacy_daemon()
 
     let archive = proxy_tarball(b"new-proxy");
     let releases = fake_release_server("7.2.74", archive);
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     for _ in 0..2 {
         let output = Command::cargo_bin("ovm-claudex")
@@ -656,11 +659,7 @@ fn launch_prepares_the_registry_pinned_version_over_a_newer_github_release() {
         b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
     });
     let base_url = format!("http://127.0.0.1:{port}");
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
@@ -723,11 +722,7 @@ fn next_safe_launch_activates_and_verifies_prepared_proxy() {
         "7.2.74",
         proxy_tarball(&std::fs::read(compiled_proxy).unwrap()),
     );
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
         .args(["-p", "hello"])
@@ -779,11 +774,7 @@ fn failed_proxy_activation_rolls_back_current_and_restarts_previous_binary() {
     )
     .unwrap();
     let (bin, _, _) = fake_ovm(temp.path());
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     let old_binary = temp.path().join("proxy/versions/7.2.72/cliproxyapi");
     compile_fake_proxy(&old_binary);
@@ -845,11 +836,7 @@ fn auto_update_stands_down_when_the_registry_cannot_vouch() {
     )
     .unwrap();
     let (bin, _, _) = fake_ovm(temp.path());
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     let old_binary = temp.path().join("proxy/versions/7.2.72/cliproxyapi");
     compile_fake_proxy(&old_binary);
@@ -910,11 +897,7 @@ fn overlapping_session_stages_once_then_next_idle_launch_activates() {
     )
     .unwrap();
     let (bin, args_file, _) = fake_ovm(temp.path());
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     let old_binary = temp.path().join("proxy/versions/7.2.72/cliproxyapi");
     compile_fake_proxy(&old_binary);
@@ -1091,11 +1074,7 @@ fn launch_honors_disabled_proxy_auto_update_policy() {
     std::os::unix::fs::symlink(&old_binary, temp.path().join("proxy/current")).unwrap();
 
     let releases = fake_release_server("7.2.74", proxy_tarball(b"new-proxy"));
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
         .args(["-p", "hello"])
@@ -1124,11 +1103,7 @@ fn launch_fails_open_when_release_lookup_is_offline() {
     std::fs::create_dir_all(old_binary.parent().unwrap()).unwrap();
     std::fs::write(&old_binary, b"proxy").unwrap();
     std::os::unix::fs::symlink(&old_binary, temp.path().join("proxy/current")).unwrap();
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
@@ -1167,11 +1142,7 @@ fn launch_refuses_verified_proxy_that_cannot_be_proven_to_match_pin() {
     std::fs::create_dir_all(pinned.parent().unwrap()).unwrap();
     std::fs::write(&pinned, b"proxy").unwrap();
     std::os::unix::fs::symlink(&pinned, temp.path().join("proxy/current")).unwrap();
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
@@ -1200,11 +1171,7 @@ fn launch_fast_selects_fast_aliases() {
     adopt_running_proxy(temp.path(), true);
     let (bin, args_file, env_file) = fake_ovm(temp.path());
 
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
         .args(["--fast", "-p", "hello"])
@@ -1227,11 +1194,7 @@ fn launch_exec_propagates_the_claude_exit_code() {
     seeded_home(temp.path(), port);
     adopt_running_proxy(temp.path(), true);
     let (bin, _, _) = fake_ovm(temp.path());
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
 
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
@@ -1274,11 +1237,7 @@ fn launch_refuses_a_listener_that_is_not_our_proxy() {
     seeded_home(temp.path(), port);
     let (bin, args_file, _) = fake_ovm(temp.path());
 
-    let path_env = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = sandbox_path(&bin);
     let output = Command::cargo_bin("ovm-claudex")
         .unwrap()
         .args(["-p", "hello"])

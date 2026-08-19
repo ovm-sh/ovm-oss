@@ -1,4 +1,5 @@
 mod autoupdate;
+mod buddy;
 mod bundle_manifest;
 mod claude_install;
 mod cli;
@@ -77,8 +78,8 @@ fn run() -> Result<()> {
     self_manager::proxy_if_needed(&args)?;
     claim_claudex_session_lease()?;
     // Single pre-dispatch lifecycle hook: every invocation that reaches real
-    // work keeps OVM and the version indexes fresh. It sits above dispatch on
-    // purpose — built-ins, product launchers, claudex aliases, and PATH
+    // work keeps OVM and the aggregate registry probe fresh. It sits above
+    // dispatch on purpose — built-ins, product launchers, claudex aliases, and PATH
     // plugins all leave through different early returns (or `exit`), so a
     // per-branch call is one refactor away from silently skipping a path.
     spawn_background_refresh_if_due(&args);
@@ -266,6 +267,7 @@ fn run() -> Result<()> {
         }
         Commands::Stats => commands::stats::run(),
         Commands::Story { fast } => commands::story::run(fast),
+        Commands::Tour => commands::tour::run(),
         Commands::Select { product, version } => {
             commands::select::run_top(product.as_deref(), version.as_deref())
         }
@@ -387,11 +389,11 @@ fn invoked_as_product_launcher(argv0: Option<&String>) -> Option<Product> {
 }
 
 /// Fire the same due-gated, detached background refresh that product launches
-/// use, so OVM itself (and the product version indexes) stay fresh for users
+/// use, so OVM itself and the aggregate product snapshot stay fresh for users
 /// who only run the CLI and never launch a product through it. `ovm self …`
 /// is exempt: those commands manage versions deliberately and hold the self
 /// operation lock themselves. Fail-open — config or dirs errors just skip
-/// it — and cheap when nothing is due (a handful of cache-file stats).
+/// it — and cheap when nothing is due (a couple of local cache reads).
 fn spawn_background_refresh_if_due(args: &[String]) {
     // The detached refresh child must never spawn another refresh.
     if args.get(1).map(String::as_str) == Some("__refresh-cache")
@@ -406,7 +408,7 @@ fn spawn_background_refresh_if_due(args: &[String]) {
         return;
     };
     let config = config::OvmConfig::load(&dirs.config_file).unwrap_or_default();
-    commands::refresh_cache::spawn_all_products_if_due(&dirs, &config);
+    commands::refresh_cache::spawn_if_due(&dirs, &config);
 }
 
 fn run_yolo_launch(product: Product, args: &[String]) -> Result<()> {

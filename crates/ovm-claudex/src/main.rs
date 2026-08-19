@@ -41,7 +41,9 @@ fn main() {
     // the launch path so `claudex --continue`, `claudex -p "…"` etc. behave
     // exactly like the corresponding `claude` invocation.
     let result = match args.first().map(String::as_str) {
-        Some("setup") => setup::run_guided(true),
+        // `--no-launch` suppresses the final launch offer: `ovm tour` runs
+        // setup as one act among several and owns the wrap-up itself.
+        Some("setup") => setup::run_guided(!args.iter().any(|arg| arg == "--no-launch")),
         Some("doctor") => doctor::run(),
         Some("feedback") => codex_feedback::run(&args[1..]),
         Some("feedback-id") => feedback::print_feedback_id(args.get(1).map(String::as_str)),

@@ -20,6 +20,9 @@ pub struct OvmConfig {
     pub check_for_updates: bool,
 
     #[serde(default = "default_update_interval")]
+    /// Legacy maintenance cadence in hours, still used for self-update and
+    /// cleanup surveys. Product discovery uses the cheap aggregate ETag probe
+    /// instead, so a long maintenance interval cannot hide a new tool release.
     pub update_check_interval: u64,
 
     #[serde(default)]

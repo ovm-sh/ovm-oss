@@ -249,6 +249,9 @@ pub enum Commands {
         fast: bool,
     },
 
+    /// Guided onboarding — the story with install stops, or a tldr fast path
+    Tour,
+
     /// Install bare launch shortcuts (ccy, cxy, ccx, ccxy, claudex) as ~/.local/bin shims — no shell rc edits
     Shortcuts {
         /// Install without prompting

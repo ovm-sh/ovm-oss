@@ -393,10 +393,11 @@ update_codex() {
     echo "  Updating codex..."
 
     python3 -c "
-import json, os, re, subprocess, sys, time, urllib.request
+import json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
 SEMVER_RE = re.compile(r'^rust-v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$')
 CODEX_ASSET_RE = re.compile(r'^codex-(?:aarch64|x86_64)-(?:apple-darwin(?:-unsigned)?|unknown-linux-musl)\.tar\.gz$')
+ANONYMOUS_EXACT_TAG_LIMIT = 40
 
 def github_headers():
     headers = {'User-Agent': 'ovm-registry'}
@@ -530,6 +531,47 @@ def is_installable_codex_release(release):
         return False
     return any(CODEX_ASSET_RE.match(asset.get('name', '')) for asset in release.get('assets', []))
 
+def is_github_listing_cap(error):
+    if error.code != 422:
+        return False
+    try:
+        payload = json.loads(error.read())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return isinstance(payload, dict) and str(payload.get('message', '')).startswith(
+        'Only the first 1000 results are available'
+    )
+
+def exact_installable_release(tag):
+    encoded = urllib.parse.quote(tag, safe='')
+    url = f'https://api.github.com/repos/openai/codex/releases/tags/{encoded}'
+    req = urllib.request.Request(url, headers=github_headers())
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                release = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return False
+            if attempt == 3:
+                print(f'GitHub exact-tag error after {attempt + 1} attempts: {error}', file=sys.stderr)
+                raise SystemExit(1)
+            print(f'GitHub exact-tag error (attempt {attempt + 1}, retrying): {error}', file=sys.stderr)
+            time.sleep(5 * 2 ** attempt)
+        except Exception as error:
+            if attempt == 3:
+                print(f'GitHub exact-tag error after {attempt + 1} attempts: {error}', file=sys.stderr)
+                raise SystemExit(1)
+            print(f'GitHub exact-tag error (attempt {attempt + 1}, retrying): {error}', file=sys.stderr)
+            time.sleep(5 * 2 ** attempt)
+    if not isinstance(release, dict) or release.get('tag_name') != tag:
+        raise SystemExit(
+            f'GitHub exact-tag response for {tag} was not that release '
+            f'({release!r:.200}); refusing to overwrite registry'
+        )
+    return is_installable_codex_release(release)
+
 def semver_key(tag):
     value = tag.removeprefix('rust-v')
     value = value.split('+', 1)[0]
@@ -546,6 +588,8 @@ def semver_key(tag):
 # Fetch all releases from GitHub API (paginated)
 versions = []
 page = 1
+listing_capped = False
+oldest_release_date = None
 while True:
     url = f'https://api.github.com/repos/openai/codex/releases?per_page=100&page={page}'
     req = urllib.request.Request(url, headers=github_headers())
@@ -557,12 +601,24 @@ while True:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 releases = json.loads(resp.read())
             break
+        except urllib.error.HTTPError as e:
+            if is_github_listing_cap(e):
+                listing_capped = True
+                break
+            if attempt == 3:
+                print(f'GitHub API error after {attempt + 1} attempts: {e}', file=sys.stderr)
+                raise SystemExit(1)
+            print(f'GitHub API error (attempt {attempt + 1}, retrying): {e}', file=sys.stderr)
+            time.sleep(5 * 2 ** attempt)
         except Exception as e:
             if attempt == 3:
                 print(f'GitHub API error after {attempt + 1} attempts: {e}', file=sys.stderr)
                 raise SystemExit(1)
             print(f'GitHub API error (attempt {attempt + 1}, retrying): {e}', file=sys.stderr)
             time.sleep(5 * 2 ** attempt)
+
+    if listing_capped:
+        break
 
     # A GitHub error body ({'message': 'API rate limit exceeded'}) parses fine
     # and is not empty, and iterating it yields strings whose .get() blows up
@@ -579,6 +635,8 @@ while True:
     for r in releases:
         tag = r.get('tag_name', '')
         date = (r.get('published_at') or '')[:10]
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date):
+            oldest_release_date = min(oldest_release_date or date, date)
         if is_installable_codex_release(r):
             versions.append({'version': tag, 'date': date})
 
@@ -586,6 +644,79 @@ while True:
 
 if not versions:
     raise SystemExit('No installable Codex versions found; refusing to overwrite registry')
+
+path = '$API_DIR/codex.json'
+previous = load_previous(path)
+if listing_capped:
+    if not previous:
+        raise SystemExit(
+            'GitHub releases listing capped at 1000 results, but no previous Codex '
+            'registry exists to supply the older history; refusing to write an '
+            'incomplete registry'
+        )
+    fetched = {entry['version'] for entry in versions}
+    oldest_installable = min(
+        (semver_key(entry['version']) for entry in versions),
+        default=None,
+    )
+
+    def definitely_before_cap(entry):
+        version = entry.get('version')
+        date = entry.get('date')
+        return (
+            isinstance(version, str)
+            and SEMVER_RE.match(version)
+            and isinstance(date, str)
+            and oldest_release_date is not None
+            and oldest_installable is not None
+            and date <= oldest_release_date
+            and semver_key(version) <= oldest_installable
+        )
+
+    active_missing = [
+        entry for entry in previous.get('versions', [])
+        if entry.get('version') not in fetched
+    ]
+    retired_missing = [
+        entry for entry in previous.get('retired_versions', [])
+        if entry.get('version') not in fetched
+    ]
+    exact_candidates = [
+        entry for entry in active_missing if not definitely_before_cap(entry)
+    ] + retired_missing
+    if not os.environ.get('GITHUB_TOKEN') and len(exact_candidates) > ANONYMOUS_EXACT_TAG_LIMIT:
+        raise SystemExit(
+            f'GitHub releases listing is capped and {len(exact_candidates)} exact-tag '
+            f'checks are needed, over the anonymous safety limit of '
+            f'{ANONYMOUS_EXACT_TAG_LIMIT}. Set GITHUB_TOKEN so the refresh can '
+            f'reconcile capped history without exhausting the 60-request quota.'
+        )
+
+    preserved = 0
+    for entry in active_missing:
+        version = entry.get('version')
+        if not definitely_before_cap(entry) and not exact_installable_release(version):
+            continue
+        versions.append(entry.copy())
+        fetched.add(version)
+        preserved += 1
+    restored = 0
+    for entry in retired_missing:
+        version = entry.get('version')
+        if not exact_installable_release(version):
+            continue
+        active_entry = {
+            key: value for key, value in entry.items()
+            if key not in ('last_seen_at', 'retired_at')
+        }
+        versions.append(active_entry)
+        fetched.add(version)
+        restored += 1
+    print(
+        f'warning: GitHub releases listing capped at 1000 results; preserved '
+        f'{preserved} older Codex versions and restored {restored} from retired history',
+        file=sys.stderr,
+    )
 
 versions.sort(key=lambda entry: semver_key(entry['version']))
 stable_versions = [
@@ -599,8 +730,6 @@ dist_tags = {'latest': latest_stable}
 if latest_any and latest_any != latest_stable:
     dist_tags['latest_prerelease'] = latest_any
 
-path = '$API_DIR/codex.json'
-previous = load_previous(path)
 retired_versions = compute_retired_versions(previous, versions, semver_key)
 registry = {
     'product': 'codex',

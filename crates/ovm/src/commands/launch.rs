@@ -466,8 +466,9 @@ fn install_and_use_latest_skippable(
 /// The version an auto-updating (`on`) launch should move to, decided from
 /// local state only — the launch hot path must never fetch.
 ///
-/// Reads the same cache the `notify` path and the update banner read, kept warm
-/// by the detached `__refresh-cache` child that every invocation arms *before*
+/// Reads the same local caches the `notify` path and the update banner read.
+/// The preferred cache is a tiny aggregate-registry snapshot, validated by a
+/// detached conditional ETag request that every invocation can arm *before*
 /// dispatch (`main::spawn_background_refresh_if_due` → [`super::refresh_cache`]).
 ///
 /// A cold or stale cache deliberately means "launch what is active now, upgrade
@@ -525,7 +526,19 @@ fn checked_latest(config: &OvmConfig, base: &std::path::Path, product: Product) 
     if !config.check_for_updates {
         return None;
     }
-    crate::update_cache::fresh_latest(base, product)
+    let probed = crate::update_cache::fresh_probed_latest(base, product);
+    let indexed = crate::update_cache::fresh_latest(base, product);
+    match (probed, indexed) {
+        (Some(probed), Some(indexed)) => {
+            if product.compare_version_strings(&indexed, &probed).is_gt() {
+                Some(indexed)
+            } else {
+                Some(probed)
+            }
+        }
+        (Some(version), None) | (None, Some(version)) => Some(version),
+        (None, None) => None,
+    }
 }
 
 /// The newest complete, non-prerelease version already installed under OVM.
@@ -1116,6 +1129,58 @@ mod tests {
         assert_eq!(
             cached_upgrade_target(&vm, "2.1.159").as_deref(),
             Some("2.1.170")
+        );
+    }
+
+    #[test]
+    fn upgrade_target_prefers_the_lightweight_aggregate_probe() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        seed_version_index(temp.path(), Product::Claude, &["2.1.159"], 60 * 60);
+        let summary = crate::update_cache::RegistryProductSummary {
+            latest: "2.1.170".into(),
+            version_count: 170,
+            retired_count: 0,
+            updated_at: "2026-08-19T01:22:51Z".into(),
+        };
+        crate::update_cache::record_latest_probe_modified(
+            temp.path(),
+            Some("\"registry-v2\"".into()),
+            std::collections::HashMap::from([(Product::Claude, summary)]),
+            crate::update_cache::now_secs(),
+        )
+        .expect("seed aggregate probe");
+
+        assert_eq!(
+            cached_upgrade_target(&vm, "2.1.159").as_deref(),
+            Some("2.1.170")
+        );
+    }
+
+    #[test]
+    fn upgrade_target_uses_a_newer_full_index_over_an_older_probe() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        seed_version_index(temp.path(), Product::Claude, &["2.1.171"], 60 * 60);
+        let summary = crate::update_cache::RegistryProductSummary {
+            latest: "2.1.170".into(),
+            version_count: 170,
+            retired_count: 0,
+            updated_at: "2026-08-19T01:22:51Z".into(),
+        };
+        crate::update_cache::record_latest_probe_modified(
+            temp.path(),
+            Some("\"registry-v2\"".into()),
+            std::collections::HashMap::from([(Product::Claude, summary)]),
+            crate::update_cache::now_secs(),
+        )
+        .expect("seed aggregate probe");
+        crate::update_cache::record_index_refresh_success(temp.path(), Product::Claude)
+            .expect("mark full index current");
+
+        assert_eq!(
+            cached_upgrade_target(&vm, "2.1.159").as_deref(),
+            Some("2.1.171")
         );
     }
 

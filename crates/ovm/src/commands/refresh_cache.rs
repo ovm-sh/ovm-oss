@@ -1,7 +1,7 @@
 use crate::config::{OvmConfig, OvmDirs};
 use crate::error::Result;
 use crate::product::Product;
-use crate::sources::registry;
+use crate::sources::registry::{self, LatestProbe};
 use crate::update_cache::{self, VersionIndex};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -11,18 +11,16 @@ use std::time::{Duration, SystemTime};
 
 const LOCK_STALE_AFTER: Duration = Duration::from_secs(10 * 60);
 
-pub fn spawn_all_products_if_due(dirs: &OvmDirs, config: &OvmConfig) {
+pub fn spawn_if_due(dirs: &OvmDirs, config: &OvmConfig) {
     if !config.check_for_updates {
         return;
     }
     if std::env::var("OVM_DISABLE_BACKGROUND_REFRESH").is_ok_and(|value| value != "0") {
         return;
     }
-    let products_due = Product::ALL.iter().copied().any(|product| {
-        update_cache::version_index_due(&dirs.base, product, config.update_check_interval)
-    });
+    let latest_probe_due = update_cache::latest_probe_due(&dirs.base);
     let self_due = super::self_autoupdate::self_check_due(&dirs.base, config);
-    if !products_due && !self_due {
+    if !latest_probe_due && !self_due {
         return;
     }
 
@@ -59,10 +57,8 @@ pub fn run_hidden() -> Result<()> {
         return Ok(());
     };
 
-    for product in Product::ALL {
-        if update_cache::version_index_due(&dirs.base, product, config.update_check_interval) {
-            let _ = refresh_product_from_registry(&dirs.base, product);
-        }
+    if update_cache::latest_probe_due(&dirs.base) {
+        let _ = refresh_latest_probe(&dirs.base);
     }
 
     // Keep OVM itself current: refresh the cached latest self version and, under
@@ -72,13 +68,36 @@ pub fn run_hidden() -> Result<()> {
     Ok(())
 }
 
-fn refresh_product_from_registry(base: &Path, product: Product) -> Result<()> {
+fn refresh_latest_probe(base: &Path) -> Result<()> {
+    let etag = update_cache::latest_probe_etag(base);
+    let now = update_cache::now_secs();
+    let pending = match registry::probe_latest_from_registry(etag.as_deref()) {
+        Some(LatestProbe::NotModified) => {
+            update_cache::record_latest_probe_not_modified(base, now)?
+        }
+        Some(LatestProbe::Modified { etag, summaries }) => {
+            update_cache::record_latest_probe_modified(base, etag, summaries, now)?
+        }
+        None => {
+            return update_cache::record_latest_probe_failure(base, now);
+        }
+    };
+    for product in pending {
+        if refresh_product_from_registry(base, product).unwrap_or(false) {
+            let _ = update_cache::record_index_refresh_success(base, product);
+        }
+    }
+    Ok(())
+}
+
+fn refresh_product_from_registry(base: &Path, product: Product) -> Result<bool> {
     let Some((versions, dates)) = registry::list_versions_from_registry(product) else {
-        return Ok(());
+        return Ok(false);
     };
 
     let index = VersionIndex::new(versions, dates);
-    update_cache::save_version_index(base, product, &index)
+    update_cache::save_version_index(base, product, &index)?;
+    Ok(true)
 }
 
 struct RefreshLock {

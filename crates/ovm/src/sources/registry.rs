@@ -1,4 +1,7 @@
 use crate::product::Product;
+use crate::update_cache::RegistryProductSummary;
+use reqwest::header::{ETAG, IF_NONE_MATCH};
+use reqwest::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -20,6 +23,30 @@ struct VersionEntry {
     date: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AggregateRegistry {
+    products: Vec<AggregateProduct>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AggregateProduct {
+    product: String,
+    latest: String,
+    version_count: u64,
+    #[serde(default)]
+    retired_count: u64,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LatestProbe {
+    NotModified,
+    Modified {
+        etag: Option<String>,
+        summaries: HashMap<Product, RegistryProductSummary>,
+    },
+}
+
 /// Versions + dates from the registry.
 pub type VersionsWithDates = (Vec<String>, HashMap<String, String>);
 
@@ -32,6 +59,14 @@ pub type VersionsWithDates = (Vec<String>, HashMap<String, String>);
 /// Set `OVM_VERBOSE=1` to surface the underlying reason on stderr.
 pub fn list_versions_from_registry(product: Product) -> Option<VersionsWithDates> {
     list_versions_at_base(product, &registry_base())
+}
+
+/// Conditionally fetch the 1 KB aggregate registry used by launch-time update
+/// checks. A matching ETag returns `304` with no response body; a changed body
+/// carries enough per-product information to decide which full indexes need a
+/// refresh and which stable versions launches should track next.
+pub(crate) fn probe_latest_from_registry(etag: Option<&str>) -> Option<LatestProbe> {
+    probe_latest_at_base(&registry_base(), etag)
 }
 
 /// A release's stamped asset list, or `None` if this version is not stamped.
@@ -95,24 +130,114 @@ fn list_versions_at_base(product: Product, base: &str) -> Option<VersionsWithDat
     Some((versions, dates))
 }
 
-/// GET a JSON document from the registry, or `None` with the reason logged.
-fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Option<T> {
-    let client = match reqwest::blocking::Client::builder()
-        .user_agent("ovm")
-        .timeout(std::time::Duration::from_secs(5))
-        // Defense in depth: no secret is attached to registry requests, but a
-        // compromised or misconfigured ovm.sh must not be able to redirect us to
-        // a plaintext or cross-host URL. Same HTTPS-only, same-host policy the
-        // other metadata clients use.
-        .redirect(super::https_only_redirect_policy())
-        .build()
-    {
-        Ok(client) => client,
+fn probe_latest_at_base(base: &str, etag: Option<&str>) -> Option<LatestProbe> {
+    let url = format!("{base}/registry.json");
+    let client = registry_client(&url)?;
+    let mut request = client.get(&url);
+    if let Some(etag) = etag {
+        request = request.header(IF_NONE_MATCH, etag);
+    }
+
+    let response = match request.send() {
+        Ok(response) => response,
         Err(error) => {
-            verbose_log(&format!("http client init failed for {url}: {error}"));
+            verbose_log(&format!("request to {url} failed: {error}"));
             return None;
         }
     };
+    if response.status() == StatusCode::NOT_MODIFIED {
+        return Some(LatestProbe::NotModified);
+    }
+    if !response.status().is_success() {
+        verbose_log(&format!("{url} returned {}", response.status()));
+        return None;
+    }
+
+    let response_etag = response
+        .headers()
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let registry: AggregateRegistry = match response.json() {
+        Ok(value) => value,
+        Err(error) => {
+            verbose_log(&format!("{url} returned unparseable JSON: {error}"));
+            return None;
+        }
+    };
+
+    let mut summaries = HashMap::new();
+    for entry in registry.products {
+        let Some(product) = Product::ALL
+            .into_iter()
+            .find(|product| product.canonical_name() == entry.product)
+        else {
+            continue;
+        };
+        if !product.is_official_remote_version(&entry.latest)
+            || !product.is_release_version(&entry.latest)
+        {
+            verbose_log(&format!(
+                "{url} advertised invalid latest {} for {}",
+                entry.latest,
+                product.canonical_name()
+            ));
+            return None;
+        }
+        if summaries
+            .insert(
+                product,
+                RegistryProductSummary {
+                    latest: entry.latest,
+                    version_count: entry.version_count,
+                    retired_count: entry.retired_count,
+                    updated_at: entry.updated_at,
+                },
+            )
+            .is_some()
+        {
+            verbose_log(&format!(
+                "{url} contained duplicate {} summaries",
+                product.canonical_name()
+            ));
+            return None;
+        }
+    }
+    if summaries.len() != Product::ALL.len() {
+        verbose_log(&format!(
+            "{url} omitted one or more managed product summaries"
+        ));
+        return None;
+    }
+
+    Some(LatestProbe::Modified {
+        etag: response_etag,
+        summaries,
+    })
+}
+
+fn registry_client(url: &str) -> Option<reqwest::blocking::Client> {
+    match reqwest::blocking::Client::builder()
+        .user_agent("ovm")
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(super::https_only_redirect_policy())
+        .build()
+    {
+        Ok(client) => Some(client),
+        Err(error) => {
+            verbose_log(&format!("http client init failed for {url}: {error}"));
+            None
+        }
+    }
+}
+
+/// GET a JSON document from the registry, or `None` with the reason logged.
+fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Option<T> {
+    // Defense in depth: no secret is attached to registry requests, but a
+    // compromised or misconfigured ovm.sh must not be able to redirect us to
+    // a plaintext or cross-host URL. Same HTTPS-only, same-host policy the
+    // other metadata clients use.
+    let client = registry_client(url)?;
 
     let response = match client.get(url).send() {
         Ok(response) => response,
@@ -287,5 +412,96 @@ mod tests {
             list_versions_at_base(Product::Pi, &server.url()).expect("registry returned data");
         assert!(versions.is_empty());
         assert!(dates.is_empty());
+    }
+
+    #[test]
+    fn aggregate_probe_sends_the_etag_and_accepts_a_zero_body_304() {
+        let mut server = Server::new();
+        let request = server
+            .mock("GET", "/registry.json")
+            .match_header("if-none-match", "\"registry-v1\"")
+            .with_status(304)
+            .create();
+
+        let result = probe_latest_at_base(&server.url(), Some("\"registry-v1\""))
+            .expect("304 is a successful unchanged probe");
+
+        assert_eq!(result, LatestProbe::NotModified);
+        request.assert();
+    }
+
+    #[test]
+    fn aggregate_probe_returns_validated_managed_product_summaries() {
+        let mut server = Server::new();
+        let request = server
+            .mock("GET", "/registry.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("etag", "\"registry-v2\"")
+            .with_body(
+                r#"{
+                    "products": [
+                        {"product":"claude","latest":"2.1.235","version_count":485,"retired_count":0,"updated_at":"2026-08-19T01:22:51Z"},
+                        {"product":"codex","latest":"rust-v0.148.0","version_count":884,"retired_count":0,"updated_at":"2026-08-19T01:22:51Z"},
+                        {"product":"pi","latest":"0.84.2","version_count":254,"retired_count":0,"updated_at":"2026-08-19T01:22:51Z"},
+                        {"product":"cliproxyapi","latest":"7.2.136","version_count":351,"retired_count":1,"updated_at":"2026-08-19T01:22:51Z"}
+                    ]
+                }"#,
+            )
+            .create();
+
+        let LatestProbe::Modified { etag, summaries } =
+            probe_latest_at_base(&server.url(), None).expect("valid aggregate registry")
+        else {
+            panic!("expected modified aggregate registry");
+        };
+
+        assert_eq!(etag.as_deref(), Some("\"registry-v2\""));
+        assert_eq!(summaries.len(), Product::ALL.len());
+        assert_eq!(summaries[&Product::Codex].latest, "rust-v0.148.0");
+        request.assert();
+    }
+
+    #[test]
+    fn aggregate_probe_rejects_a_prerelease_latest() {
+        let mut server = Server::new();
+        let request = server
+            .mock("GET", "/registry.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "products": [
+                        {"product":"claude","latest":"2.1.235","version_count":485,"updated_at":"2026-08-19T01:22:51Z"},
+                        {"product":"codex","latest":"rust-v0.149.0-alpha.1","version_count":885,"updated_at":"2026-08-19T01:22:51Z"},
+                        {"product":"pi","latest":"0.84.2","version_count":254,"updated_at":"2026-08-19T01:22:51Z"}
+                    ]
+                }"#,
+            )
+            .create();
+
+        assert!(probe_latest_at_base(&server.url(), None).is_none());
+        request.assert();
+    }
+
+    #[test]
+    fn aggregate_probe_rejects_a_missing_managed_product() {
+        let mut server = Server::new();
+        let request = server
+            .mock("GET", "/registry.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "products": [
+                        {"product":"claude","latest":"2.1.235","version_count":485,"updated_at":"2026-08-19T01:22:51Z"},
+                        {"product":"codex","latest":"rust-v0.148.0","version_count":884,"updated_at":"2026-08-19T01:22:51Z"}
+                    ]
+                }"#,
+            )
+            .create();
+
+        assert!(probe_latest_at_base(&server.url(), None).is_none());
+        request.assert();
     }
 }
