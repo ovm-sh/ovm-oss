@@ -380,7 +380,9 @@ pub fn update_command(version: Option<&str>) -> Result<()> {
 /// so a fresh machine never needs brew.
 pub fn install_latest(dirs: &ClaudexDirs) -> Result<PathBuf> {
     let _lock = acquire_update_lock(dirs)?;
-    let version = latest_version()?;
+    // Validated like every other entry point: the version becomes a path
+    // component on the next line, before anything has fetched or 404'd.
+    let version = validate_version(&latest_version()?)?;
     let target = dirs.proxy_versions_dir().join(&version).join("cliproxyapi");
     if !target.is_file() {
         install(dirs, &version)?;

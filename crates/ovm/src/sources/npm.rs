@@ -216,7 +216,10 @@ pub(crate) fn download_tarball_to(
     let pb = ProgressBar::new(content_length.unwrap_or(0));
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {bar:40.cyan/dim} {bytes}/{total_bytes} {msg}")
+            .template(&format!(
+                "{}{{bar:40.cyan/dim}} {{bytes}}/{{total_bytes}} {{msg}}",
+                crate::mochi::indent()
+            ))
             .unwrap()
             .progress_chars("██░"),
     );

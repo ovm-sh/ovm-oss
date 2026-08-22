@@ -229,7 +229,7 @@ fn find_foreign_binary(dirs: &OvmDirs, product: Product) -> Result<PathBuf> {
     })
 }
 
-fn find_foreign_binary_in_paths(
+pub(crate) fn find_foreign_binary_in_paths(
     dirs: &OvmDirs,
     product: Product,
     paths: &[PathBuf],

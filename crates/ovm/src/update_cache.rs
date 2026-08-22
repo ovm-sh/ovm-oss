@@ -305,6 +305,180 @@ pub(crate) fn fresh_probed_latest(base: &Path, product: Product) -> Option<Strin
     fresh_probed_latest_at(base, product, now_secs())
 }
 
+/// Where the served Codex skew-evidence document is cached for the
+/// `ovm-codex-skew` companion. Lives beside the registry indexes so the
+/// companion finds it from the one directory `ovm` names in its env contract
+/// (`OVM_REGISTRY_CACHE`).
+pub fn codex_skew_evidence_path(base: &Path) -> PathBuf {
+    registry_cache_dir(base).join("codex-skew.json")
+}
+
+/// The directory holding cached registry documents.
+pub fn registry_cache_dir(base: &Path) -> PathBuf {
+    base.join("cache").join("registry")
+}
+
+/// After a failed evidence fetch, wait this long before trying again. Keeps a
+/// dead endpoint from being hit on every background refresh of an active
+/// terminal while still recovering well inside the read TTL.
+const CODEX_SKEW_EVIDENCE_RETRY_SECS: u64 = 5 * 60;
+
+/// Marker left beside the cached evidence when a fetch was wanted but failed
+/// (or when Codex's index moved and the refetch did not land). Its presence
+/// keeps the evidence due — an old document must not masquerade as fresh for
+/// 24h just because the one refetch that should have replaced it timed out —
+/// and its mtime paces retries.
+fn codex_skew_evidence_pending_path(base: &Path) -> PathBuf {
+    registry_cache_dir(base).join("codex-skew.pending")
+}
+
+/// True when the evidence should be (re)fetched now: the cached document is
+/// missing, older than the read TTL, or a refetch is pending — and the last
+/// failed attempt is old enough to retry. The observatory republishes at most
+/// a few times a day, so the same 24-hour horizon the version indexes use is
+/// plenty.
+pub(crate) fn codex_skew_evidence_due(base: &Path) -> bool {
+    codex_skew_evidence_due_at(base, SystemTime::now())
+}
+
+fn codex_skew_evidence_due_at(base: &Path, now: SystemTime) -> bool {
+    let age_secs = |path: PathBuf| -> Option<u64> {
+        let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+        // A future mtime (clock rollback, restored cache) counts as ancient:
+        // refreshing rewrites it to now, which is the only way it self-heals.
+        Some(
+            now.duration_since(modified)
+                .map(|age| age.as_secs())
+                .unwrap_or(u64::MAX),
+        )
+    };
+    let pending = age_secs(codex_skew_evidence_pending_path(base));
+    if pending.is_some_and(|age| age < CODEX_SKEW_EVIDENCE_RETRY_SECS) {
+        return false;
+    }
+    if pending.is_some() {
+        return true;
+    }
+    age_secs(codex_skew_evidence_path(base)).is_none_or(|age| age > TTL_SECS)
+}
+
+/// Record that an evidence fetch was wanted and did not land; paces the retry.
+pub(crate) fn mark_codex_skew_evidence_pending(base: &Path) -> Result<()> {
+    let path = codex_skew_evidence_pending_path(base);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{}\n", now_secs()))?;
+    Ok(())
+}
+
+/// How long "knowledge only advances" protects a cached document from being
+/// replaced by one with a smaller key. Bounded so a lagging replica or a
+/// partial publish is shrugged off, but a poisoned or simply wrong document
+/// can never hold the cache for longer than this.
+const CODEX_SKEW_EVIDENCE_MONOTONE_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// When the cached document was last REPLACED (not restamped). Kept beside it
+/// so the TTL restamp on a landed-but-not-newer fetch does not extend the
+/// monotone protection indefinitely.
+fn codex_skew_evidence_saved_at_path(base: &Path) -> PathBuf {
+    registry_cache_dir(base).join("codex-skew.saved-at")
+}
+
+/// Digest of a document's text, as recorded in the saved-at sidecar: the
+/// sidecar protects exactly the document it was written for, not whatever
+/// happens to be at the path.
+fn codex_skew_evidence_digest(text: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// True while the cached document is still within its monotone window — i.e.
+/// a fetched document with a smaller key should NOT replace it yet. Only a
+/// sidecar whose digest matches the cached document counts: a sidecar written
+/// for a document whose rename never landed protects nothing.
+pub(crate) fn codex_skew_evidence_is_protected(base: &Path) -> bool {
+    let Some(sidecar) = std::fs::read_to_string(codex_skew_evidence_saved_at_path(base)).ok()
+    else {
+        return false;
+    };
+    let mut fields = sidecar.split_whitespace();
+    let Some(saved_at) = fields.next().and_then(|text| text.parse::<u64>().ok()) else {
+        return false;
+    };
+    let Some(digest) = fields.next() else {
+        return false;
+    };
+    let matches_document = std::fs::read_to_string(codex_skew_evidence_path(base))
+        .ok()
+        .is_some_and(|text| codex_skew_evidence_digest(&text) == digest);
+    // A saved-at in the future (clock rollback, restored cache) does not
+    // protect anything: it would otherwise protect until that time plus a week.
+    let now = now_secs();
+    matches_document && saved_at <= now && now - saved_at <= CODEX_SKEW_EVIDENCE_MONOTONE_SECS
+}
+
+/// A fetch landed but carried nothing newer than the cached document: clear
+/// the pending marker and restamp the cached document as validated now, so
+/// it is neither retried nor treated as expired on the next cycle.
+pub(crate) fn touch_codex_skew_evidence(base: &Path) {
+    let _ = std::fs::remove_file(codex_skew_evidence_pending_path(base));
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .append(true)
+        .open(codex_skew_evidence_path(base))
+    {
+        let _ = file.set_modified(SystemTime::now());
+    }
+}
+
+/// The cached evidence document's text, if any.
+pub(crate) fn load_codex_skew_evidence_text(base: &Path) -> Option<String> {
+    std::fs::read_to_string(codex_skew_evidence_path(base)).ok()
+}
+
+/// Atomically replace the cached evidence document and clear any pending
+/// marker. Callers pass text the registry client already validated; a
+/// half-written file is never visible.
+///
+/// Order matters, the other way from a first guess: the DOCUMENT is renamed
+/// into place first, then the sidecar is written (itself atomically). A rename
+/// failure — the common failure, and the one that used to strip the still-
+/// active old document of its protection — now returns before the sidecar is
+/// touched, so the previous document AND its sidecar stay intact. A crash
+/// after the rename but before the sidecar lands leaves the new (correct)
+/// document active but briefly unprotected: it re-protects on the next fetch,
+/// which is the mild direction. `is_protected` requires the sidecar's digest
+/// to match the active document, so the stale pre-rename sidecar protects
+/// nothing until the new one is in place.
+pub(crate) fn save_codex_skew_evidence(base: &Path, text: &str) -> Result<()> {
+    let path = codex_skew_evidence_path(base);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)?;
+    if let Err(error) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error.into());
+    }
+    let _ = std::fs::remove_file(codex_skew_evidence_pending_path(base));
+    // Best-effort, atomic, bound to the document now in place. A partial write
+    // can never be observed (write to tmp, then rename), and a failure here
+    // leaves the document usable and merely unprotected, not corrupt.
+    let sidecar = codex_skew_evidence_saved_at_path(base);
+    let sidecar_tmp = registry_cache_dir(base).join("codex-skew.saved-at.tmp");
+    let payload = format!("{} {}\n", now_secs(), codex_skew_evidence_digest(text));
+    if std::fs::write(&sidecar_tmp, payload).is_ok()
+        && std::fs::rename(&sidecar_tmp, &sidecar).is_err()
+    {
+        let _ = std::fs::remove_file(&sidecar_tmp);
+    }
+    Ok(())
+}
+
 /// Seconds since the Unix epoch, saturating to 0 if the clock is before it.
 /// Shared so callers can compare against `VersionIndex::fetched_at`.
 pub fn now_secs() -> u64 {
@@ -575,5 +749,143 @@ mod tests {
             Some("rust-v0.148.0"),
             "a validated unchanged aggregate extends the matching full index"
         );
+    }
+}
+
+#[cfg(test)]
+mod codex_skew_evidence_tests {
+    use super::*;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    #[test]
+    fn evidence_is_due_when_missing_or_older_than_the_ttl_and_saved_atomically() {
+        let dir = tempdir().unwrap();
+        assert!(codex_skew_evidence_due(dir.path()), "nothing cached yet");
+
+        save_codex_skew_evidence(dir.path(), "{\"schema_version\":1}").expect("save");
+        let path = codex_skew_evidence_path(dir.path());
+        assert_eq!(path, registry_cache_dir(dir.path()).join("codex-skew.json"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"schema_version\":1}"
+        );
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "no temp file left behind"
+        );
+
+        let now = SystemTime::now();
+        assert!(!codex_skew_evidence_due_at(dir.path(), now));
+        assert!(!codex_skew_evidence_due_at(
+            dir.path(),
+            now + Duration::from_secs(TTL_SECS - 60)
+        ));
+        assert!(codex_skew_evidence_due_at(
+            dir.path(),
+            now + Duration::from_secs(TTL_SECS + 60)
+        ));
+        // A future-dated cache (clock rollback) is due, not trusted.
+        assert!(codex_skew_evidence_due_at(
+            dir.path(),
+            now - Duration::from_secs(60 * 60)
+        ));
+    }
+
+    #[test]
+    fn a_saved_document_is_protected_for_a_week_then_replaceable() {
+        let dir = tempdir().unwrap();
+        assert!(
+            !codex_skew_evidence_is_protected(dir.path()),
+            "nothing saved"
+        );
+        save_codex_skew_evidence(dir.path(), "{}").expect("save");
+        assert!(codex_skew_evidence_is_protected(dir.path()));
+        // A restamp does not extend the protection window.
+        touch_codex_skew_evidence(dir.path());
+        let sidecar =
+            std::fs::read_to_string(codex_skew_evidence_saved_at_path(dir.path())).unwrap();
+        let (saved_at, digest) = sidecar.trim().split_once(' ').unwrap();
+        assert!(now_secs().saturating_sub(saved_at.parse::<u64>().unwrap()) < 60);
+        // Backdate the save past the window: no longer protected.
+        std::fs::write(
+            codex_skew_evidence_saved_at_path(dir.path()),
+            format!(
+                "{} {digest}\n",
+                now_secs() - CODEX_SKEW_EVIDENCE_MONOTONE_SECS - 1
+            ),
+        )
+        .unwrap();
+        assert!(!codex_skew_evidence_is_protected(dir.path()));
+        // A future-dated save (clock rollback) protects nothing either.
+        std::fs::write(
+            codex_skew_evidence_saved_at_path(dir.path()),
+            format!("{} {digest}\n", now_secs() + 3600),
+        )
+        .unwrap();
+        assert!(!codex_skew_evidence_is_protected(dir.path()));
+        // A sidecar for a document that never landed protects nothing: the
+        // cached text no longer matches its digest.
+        std::fs::write(
+            codex_skew_evidence_saved_at_path(dir.path()),
+            format!("{} {digest}\n", now_secs()),
+        )
+        .unwrap();
+        assert!(codex_skew_evidence_is_protected(dir.path()));
+        std::fs::write(codex_skew_evidence_path(dir.path()), "{\"other\":1}").unwrap();
+        assert!(!codex_skew_evidence_is_protected(dir.path()));
+    }
+
+    /// A wanted refetch that failed must keep the evidence due — paced, not
+    /// forgotten — until a fetch lands, even though the old document is still
+    /// inside its TTL.
+    #[test]
+    fn a_pending_refetch_keeps_fresh_evidence_due_and_paces_retries() {
+        let dir = tempdir().unwrap();
+        save_codex_skew_evidence(dir.path(), "{}").expect("save");
+        let now = SystemTime::now();
+        assert!(!codex_skew_evidence_due_at(dir.path(), now));
+
+        mark_codex_skew_evidence_pending(dir.path()).expect("mark");
+        // Just failed: back off. (`now` is taken after the marker is written —
+        // a marker from the future would count as ancient, by design.)
+        let now = SystemTime::now();
+        assert!(!codex_skew_evidence_due_at(dir.path(), now));
+        // Past the retry window: due again although the document is fresh.
+        assert!(codex_skew_evidence_due_at(
+            dir.path(),
+            now + Duration::from_secs(CODEX_SKEW_EVIDENCE_RETRY_SECS + 1)
+        ));
+        // A successful save clears the marker.
+        save_codex_skew_evidence(dir.path(), "{}").expect("save again");
+        assert!(!codex_skew_evidence_due_at(
+            dir.path(),
+            now + Duration::from_secs(CODEX_SKEW_EVIDENCE_RETRY_SECS + 1)
+        ));
+        assert!(!codex_skew_evidence_pending_path(dir.path()).exists());
+
+        // A landed-but-not-newer fetch restamps an expired document.
+        let old = now - Duration::from_secs(TTL_SECS + 600);
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(codex_skew_evidence_path(dir.path()))
+            .unwrap();
+        file.set_modified(old).unwrap();
+        drop(file);
+        assert!(codex_skew_evidence_due_at(dir.path(), now));
+        mark_codex_skew_evidence_pending(dir.path()).expect("mark");
+        touch_codex_skew_evidence(dir.path());
+        assert!(!codex_skew_evidence_pending_path(dir.path()).exists());
+        assert!(!codex_skew_evidence_due_at(dir.path(), SystemTime::now()));
+
+        // Missing cache + recent failure: also backs off, then retries.
+        std::fs::remove_file(codex_skew_evidence_path(dir.path())).unwrap();
+        mark_codex_skew_evidence_pending(dir.path()).expect("mark");
+        let now = SystemTime::now();
+        assert!(!codex_skew_evidence_due_at(dir.path(), now));
+        assert!(codex_skew_evidence_due_at(
+            dir.path(),
+            now + Duration::from_secs(CODEX_SKEW_EVIDENCE_RETRY_SECS + 1)
+        ));
     }
 }

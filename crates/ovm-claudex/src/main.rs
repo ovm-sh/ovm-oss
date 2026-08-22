@@ -41,7 +41,7 @@ fn main() {
     // the launch path so `claudex --continue`, `claudex -p "…"` etc. behave
     // exactly like the corresponding `claude` invocation.
     let result = match args.first().map(String::as_str) {
-        // `--no-launch` suppresses the final launch offer: `ovm tour` runs
+        // `--no-launch` suppresses the final launch offer: `ovm hatch` runs
         // setup as one act among several and owns the wrap-up itself.
         Some("setup") => setup::run_guided(!args.iter().any(|arg| arg == "--no-launch")),
         Some("doctor") => doctor::run(),

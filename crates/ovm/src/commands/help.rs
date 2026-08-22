@@ -19,7 +19,7 @@ pub fn run_short() -> Result<()> {
     println!("  install / use       add a version, switch to one");
     println!("  ls / current        what's available, what's active");
     println!("  update              update to latest");
-    println!("  cc, cx, pi          launch (y = yolo, f = fast — ccy, cxyf, …)");
+    println!("  cc, cx, pi          launch (y = yolo; f = fast, Codex only — ccy, cxf)");
     println!("  help                everything else");
 
     println!(
@@ -32,7 +32,7 @@ pub fn run_short() -> Result<()> {
     // thing being kept short, and the ceiling test counts those separately.
     println!(
         "{}\n",
-        style("New here? `ovm tour` sets you up · the story behind the cats: `ovm story`").dim()
+        style("New here? `ovm hatch` sets you up — and tells the story behind the cats.").dim()
     );
     Ok(())
 }
@@ -70,29 +70,35 @@ pub fn run() -> Result<()> {
     println!("  ovm <command> <product> [args]");
     println!("  ovm <product> [args]\n");
 
-    println!("Interactive:");
-    println!("  select       Pick a version interactively (browse, install, switch)");
-    println!("\nVersion management:");
+    // Lead with what a new user does, not the command taxonomy: first-time
+    // setup, then the everyday install/switch/launch loop, then everything else.
+    println!("Getting started:");
+    println!("  hatch        First-time setup — installs Claude, Codex & claudex (with the story)");
+    println!("  select       Browse, install, and switch versions interactively");
+    println!("  cc  cx  pi   Launch the active Claude Code / Codex / Pi  (add y for yolo)");
+    println!("\nVersions:");
+    println!("  install      Install a version (does not switch)");
     println!("  use          Switch to an installed version");
-    println!("  adopt        Import an existing app version without deleting the original");
-    println!("  install      Install a version (no switch)");
-    println!("  uninstall    Remove an installed version");
-    println!("  update       Check for updates, pick installs, tune auto-update (--yes, --check)");
-    println!("\nInspect:");
-    println!("  version      OVM's version + every product's active version");
+    println!("  update       Update to latest; tune auto-update (--yes, --check)");
     println!("  ls           List versions (--remote for available, --all for both)");
     println!("  current      Show the active version");
     println!("  which        Show the active binary path");
     println!("  info         Show release notes for a version");
+    println!("  adopt        Import an existing install without deleting the original");
+    println!("  uninstall    Remove an installed version");
+    println!("\nSystem:");
+    println!("  version      OVM's version + every product's active version");
+    println!("  doctor       Check an installed version for compatibility issues");
     println!("  stats        Installed/archived counts + disk usage per product");
-    println!("\nMaintenance:");
     println!("  clean        Remove cached raw artifacts");
-    println!("  cleanup      Configure old install retention");
+    println!("  cleanup      Configure old-install retention");
     println!("  archive      Archive old versions");
     println!("  self         Update, switch, list, roll back, uninstall, or set OVM's channel");
     println!("  self-update  Update the ovm binary itself (alias for `ovm self update`)");
-    println!("  doctor       Check an installed version for compatibility issues");
-    println!("  shortcuts    Install bare launch-command shims");
+    println!("  shortcuts    Install bare launch shims (ccy, cxy, …)");
+    println!("  statusline   Put Echo in the Claude Code statusline");
+    println!("  completions  Generate shell completions");
+    println!("  help         Show this overview");
     // Discovered plugins (any `ovm-<name>` binary on PATH)
     let plugins: Vec<_> = crate::plugins::discover()
         .into_iter()
@@ -105,29 +111,22 @@ pub fn run() -> Result<()> {
         }
     }
 
-    println!("\nOther:");
-    println!("  completions  Generate shell completions");
-    println!("  story        A tale of two cats and an echo (--fast plays it through)");
-    println!("  tour         Guided onboarding — the story with install stops, or a tldr");
-    println!("  help         Show this overview");
-    // One pattern, two examples — not the eight-row cross product of two flags
-    // and two products. The exhaustive table lives in `ovm help launch`.
+    // One pattern, aligned so the two rows read as one table; the full
+    // cross-product lives in `ovm help launch`.
     println!("\nLaunch shortcuts:");
-    println!("  cc, cx, pi       Launch the active Claude Code / Codex / Pi");
-    println!("  ccx          Launch claudex (Claude Code's interface on GPT-5.6)");
-    println!("  Suffixes stack onto any of those: y = yolo, f = fast (priority tier).");
-    println!("  So cxy is Codex in yolo mode, and ccxyf is claudex in yolo + fast.");
-    println!("  Full table: `ovm help launch`");
+    println!("  cc  cx  pi   Launch the active Claude Code / Codex / Pi");
+    println!("  ccx          Launch claudex — Claude Code on GPT-5.6");
+    println!("  suffixes     y = yolo (any product) · f = fast, Codex + claudex only");
+    println!("               so cxy = Codex + yolo, ccxyf = claudex + yolo + fast");
+    println!("               full table: `ovm help launch`");
 
     println!("\nExamples:");
-    println!("  ovm select                    Pick a product, then a version (interactive)");
+    println!("  ovm hatch                     First-time setup (installs + the story)");
     println!("  ovm install claude latest     Install without switching");
     println!("  ovm ls claude --remote        List available Claude versions");
     println!("  ovm update                    Update every installed product to latest");
-    println!("  ovm update auto codex notify  Ask before updating Codex on launch");
-    println!("  ovm self update               Update OVM itself");
-    println!("  ovm cleanup 60                Keep inactive installs for 60 days");
     println!("  ovm cxy                       Launch active Codex in yolo mode");
+    println!("  ovm self update               Update OVM itself");
 
     println!("\nSee also:");
     println!("  ovm help launch         The full launch-shortcut table");

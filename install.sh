@@ -53,6 +53,7 @@ TMP_DIR=""
 OPERATION_LOCK="$SELF_ROOT/.operation.lock"
 LOCK_FIFO=""
 LOCK_READY=""
+LOCK_WAITING=""
 LOCK_HELPER_PID=""
 LOCK_PIPE_OPEN=0
 ROLLBACK_ON_CLEANUP=0
@@ -112,6 +113,10 @@ release_operation_lock() {
     if [ -n "$LOCK_READY" ]; then
         rm -f "$LOCK_READY"
         LOCK_READY=""
+    fi
+    if [ -n "$LOCK_WAITING" ]; then
+        rm -f "$LOCK_WAITING"
+        LOCK_WAITING=""
     fi
 }
 trap cleanup EXIT
@@ -181,6 +186,17 @@ fetch() {
     # Word-splitting is intended: CURL_RETRY_FLAGS is a flag list we built.
     # shellcheck disable=SC2086
     curl -fsSL $CURL_RETRY_FLAGS "$@"
+}
+
+# Paths shown to the user are printed with ~ rather than the expanded home:
+# they read the same on every machine and never put a username on screen (or
+# in a pasted log).
+display_path() {
+    # shellcheck disable=SC2088  # the literal ~ is the point: display only
+    case "$1" in
+        "$HOME"/*) printf '~/%s\n' "${1#"$HOME"/}" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
 }
 
 # --- PATH wiring -----------------------------------------------------------
@@ -293,7 +309,7 @@ configure_path() {
 
     echo "Added OVM to your PATH in:"
     for file in $written; do
-        echo "  $file"
+        echo "  $(display_path "$file")"
     done
     echo ""
     echo "Open a new terminal, or run this once in this one:"
@@ -307,7 +323,8 @@ acquire_operation_lock() {
     mkdir -p "$SELF_ROOT"
     LOCK_FIFO="$SELF_ROOT/.operation-lock-fifo.$$"
     LOCK_READY="$SELF_ROOT/.operation-lock-ready.$$"
-    rm -f "$LOCK_FIFO" "$LOCK_READY"
+    LOCK_WAITING="$LOCK_READY.waiting"
+    rm -f "$LOCK_FIFO" "$LOCK_READY" "$LOCK_WAITING"
     mkfifo "$LOCK_FIFO"
     OVM_SELF_LOCK_HELPER_PATH="$OPERATION_LOCK" \
     OVM_SELF_LOCK_HELPER_READY="$LOCK_READY" \
@@ -326,7 +343,13 @@ acquire_operation_lock() {
         if [ "$attempts" -ge 1200 ]; then
             fail "timed out waiting for another OVM self-management operation"
         fi
-        if [ "$announced" = "0" ]; then
+        # Announce a wait only when the helper says it is waiting: it writes
+        # this marker after the lock refuses a non-blocking take, i.e. only
+        # when another operation really holds it. Elapsed time cannot tell the
+        # two apart — the helper is a cold exec of a freshly extracted binary,
+        # and on a first run that alone outlasts any threshold worth setting,
+        # which is how a clean install came to announce a wait for nothing.
+        if [ "$announced" = "0" ] && [ -f "$LOCK_WAITING" ]; then
             echo "Waiting for another OVM self-management operation to finish..." >&2
             announced=1
         fi
@@ -932,8 +955,8 @@ EOF
     ROLLBACK_ON_CLEANUP=0
 
     echo "  Installed version: $version"
-    echo "  Active bundle:     $final_dir"
-    echo "  Control plane:     $control"
+    echo "  Active bundle:     $(display_path "$final_dir")"
+    echo "  Control plane:     $(display_path "$control")"
 }
 
 if [ -n "$LOCAL_ARTIFACT_DIR" ]; then
@@ -1053,30 +1076,30 @@ echo "Verify with:"
 echo "  ovm --version"
 echo "  ovm self current"
 echo ""
-echo "There's a story behind the cats:  ovm story"
+echo "There's a story behind the cats — meet them:  ovm hatch"
 
-# Guided tour for fresh machines. Same two rules as the claudex chain below:
-# the install is COMPLETE before any of this runs (release the lock first —
-# the tour can hand the terminal to long-lived sessions), and a declined or
-# failed tour never fails the installer. Fresh means no managed products yet:
+# Hatch on fresh machines. Same two rules as the claudex chain below: the
+# install is COMPLETE before any of this runs (release the lock first — the
+# hatch can hand the terminal to long-lived sessions), and a declined or
+# failed hatch never fails the installer. Fresh means no managed products yet:
 # a returning user upgrading OVM has chosen their setup already and gets the
 # story pointer above, not a prompt. `curl | sh` without a terminal skips
-# silently — the tour itself also refuses non-tty, but the prompt must not
+# silently — the hatch itself also refuses non-tty, but the prompt must not
 # try to read an answer from the pipe. Skipped when --claudex was asked for:
 # that flag IS a chosen onboarding path.
 if [ "$CLAUDEX_SETUP" != 1 ] && [ ! -d "$HOME/.ovm/products" ] && (exec < /dev/tty) 2>/dev/null; then
     echo ""
-    printf "Take the guided tour now? It sets up Claude Code, Codex and claudex. [Y/n] "
-    tour_answer=""
-    IFS= read -r tour_answer < /dev/tty || tour_answer="n"
-    case "$tour_answer" in
-        [Nn]*) echo "Anytime later:  ovm tour" ;;
+    printf "Hatch your setup now? Claude Code, Codex and claudex, with the story. [Y/n] "
+    hatch_answer=""
+    IFS= read -r hatch_answer < /dev/tty || hatch_answer="n"
+    case "$hatch_answer" in
+        [Nn]*) echo "Anytime later:  ovm hatch" ;;
         *)
             release_operation_lock
-            PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" tour < /dev/tty || {
+            PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" hatch < /dev/tty || {
                 echo ""
-                echo "The tour did not finish — the OVM install itself succeeded."
-                echo "Pick it back up anytime with:  ovm tour"
+                echo "The hatch did not finish — the OVM install itself succeeded."
+                echo "Pick it back up anytime with:  ovm hatch"
             }
             ;;
     esac

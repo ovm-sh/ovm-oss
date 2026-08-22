@@ -1,6 +1,6 @@
 [package]
 name = "ovm-codex-skew"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
 description = "Codex state-DB schema-skew guard — an OVM companion plugin"
@@ -20,6 +20,11 @@ path = "src/lib.rs"
 console = "0.15"
 dirs = "6"
 rusqlite = { version = "0.37", features = ["bundled"] }
+# The served evidence document (`codex-skew.json`) is JSON; the guard reads it
+# from OVM's registry cache and never fetches it itself.
+# O_NONBLOCK for the evidence read: a FIFO at the cache path must not hang a launch.
+libc = "0.2"
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -71,7 +71,8 @@ pub fn run_hidden() -> Result<()> {
 fn refresh_latest_probe(base: &Path) -> Result<()> {
     let etag = update_cache::latest_probe_etag(base);
     let now = update_cache::now_secs();
-    let pending = match registry::probe_latest_from_registry(etag.as_deref()) {
+    let probe = registry::probe_latest_from_registry(etag.as_deref());
+    let pending = match probe {
         Some(LatestProbe::NotModified) => {
             update_cache::record_latest_probe_not_modified(base, now)?
         }
@@ -79,15 +80,60 @@ fn refresh_latest_probe(base: &Path) -> Result<()> {
             update_cache::record_latest_probe_modified(base, etag, summaries, now)?
         }
         None => {
-            return update_cache::record_latest_probe_failure(base, now);
+            update_cache::record_latest_probe_failure(base, now)?;
+            Vec::new()
         }
     };
+    let mut codex_index_refreshed = false;
     for product in pending {
         if refresh_product_from_registry(base, product).unwrap_or(false) {
             let _ = update_cache::record_index_refresh_success(base, product);
+            codex_index_refreshed |= product == Product::Codex;
         }
     }
+    // The served skew evidence rides the same refresh, independently of the
+    // aggregate probe's fate (a broken registry.json must not starve it):
+    // refetch when Codex's index was just refreshed (a new upstream stable
+    // usually means new migrations and a new ladder run — and "refreshed",
+    // not "pending", so a failing index refresh cannot refetch evidence every
+    // minute) or when the cached copy has aged out. Best-effort — a failed
+    // fetch keeps the previous document, and the companion copes with none.
+    if codex_index_refreshed || update_cache::codex_skew_evidence_due(base) {
+        refresh_codex_skew_evidence(base);
+    }
     Ok(())
+}
+
+/// Fetch and cache the served Codex skew evidence. Knowledge only advances:
+/// within a week of the last replacement, a document that does not reach at
+/// least as far or no longer carries every cached observation does not replace
+/// the cache (a lagging replica or partial publish must not delete verdicts);
+/// past that week any valid document does, so a wrong document can never hold
+/// the cache for long. Whatever does not land — fetch or save — leaves the
+/// evidence pending (paced) rather than letting an old document pass as fresh
+/// until its TTL runs out.
+fn refresh_codex_skew_evidence(base: &Path) {
+    let Some(text) = registry::codex_skew_evidence_from_registry() else {
+        let _ = update_cache::mark_codex_skew_evidence_pending(base);
+        return;
+    };
+    let fetched = registry::codex_skew_cache_key(&text);
+    let cached = update_cache::load_codex_skew_evidence_text(base)
+        .and_then(|cached| registry::codex_skew_cache_key(&cached));
+    let regresses = match (&fetched, &cached) {
+        (Some(fetched), Some(cached)) => !fetched.dominates(cached),
+        _ => false,
+    };
+    if regresses && update_cache::codex_skew_evidence_is_protected(base) {
+        // The fetch landed; it just carries nothing newer. Not pending, and
+        // the cached document is as fresh as this fetch — restamp it so the
+        // TTL does not keep it due on every cycle.
+        update_cache::touch_codex_skew_evidence(base);
+        return;
+    }
+    if update_cache::save_codex_skew_evidence(base, &text).is_err() {
+        let _ = update_cache::mark_codex_skew_evidence_pending(base);
+    }
 }
 
 fn refresh_product_from_registry(base: &Path, product: Product) -> Result<bool> {

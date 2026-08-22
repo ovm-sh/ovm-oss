@@ -239,18 +239,25 @@ pub enum Commands {
         version: Option<String>,
     },
 
+    /// Put Echo in the Claude Code statusline
+    Statusline,
+
     /// Show installed/archived counts, active version, and disk usage per product
     Stats,
 
-    /// A tale of two cats and an echo
+    /// A tale of two cats and an echo (archived — `ovm hatch` is the way in now)
+    #[command(hide = true)]
     Story {
         /// Play straight through without waiting for input
         #[arg(long)]
         fast: bool,
     },
 
-    /// Guided onboarding — the story with install stops, or a tldr fast path
-    Tour,
+    /// Hatch your setup — the story with install stops, or a tldr fast path
+    ///
+    /// Named for what it does: `/buddy` hatched a creature, this hatches the
+    /// toolchain around it.
+    Hatch,
 
     /// Install bare launch shortcuts (ccy, cxy, ccx, ccxy, claudex) as ~/.local/bin shims — no shell rc edits
     Shortcuts {

@@ -4,14 +4,16 @@
 //! contract; it can also be run manually as `ovm codex-skew [<codex-binary>]`.
 //!
 //! Env contract:
-//!   OVM_EVENT   — lifecycle event (e.g. `pre-launch`, `post-switch`); advisory
-//!   OVM_PRODUCT — owning product (`codex`); advisory
-//!   OVM_VERSION — the Codex version label being launched/activated
-//!   OVM_BINARY  — path to the Codex binary to assess
+//!   OVM_EVENT          — lifecycle event (e.g. `pre-launch`, `post-switch`); advisory
+//!   OVM_PRODUCT        — owning product (`codex`); advisory
+//!   OVM_VERSION        — the Codex version label being launched/activated
+//!   OVM_BINARY         — path to the Codex binary to assess
+//!   OVM_REGISTRY_CACHE — directory where `ovm` caches registry documents; the
+//!                        served `codex-skew.json` is read from there when present
 //!
 //! Fail-open contract: this guard is advisory and must NEVER block a launch or
 //! switch. It prints at most a warning to stderr and ALWAYS exits 0, whatever
-//! goes wrong (no binary, no DB, unreadable files).
+//! goes wrong (no binary, no DB, unreadable files, unusable evidence).
 
 use std::path::PathBuf;
 
@@ -42,12 +44,12 @@ fn main() {
         return;
     };
 
-    let version = std::env::var("OVM_VERSION").unwrap_or_default();
-    let event = std::env::var("OVM_EVENT").unwrap_or_default();
-
-    let outcome = ovm_codex_skew::assess(&binary);
-
     if classification_only {
+        // The static classifier the observatory records as `staticCompatibility`:
+        // compiled manifest only, no served evidence — otherwise the ladder's
+        // "behavioral vs static" comparison would be comparing evidence with
+        // itself.
+        let outcome = ovm_codex_skew::assess(&binary);
         // "indeterminate" alone cannot distinguish "the migrations were read
         // and one could not be classified" from "the state DB was unreadable"
         // — one is a property of the release, the other is broken plumbing,
@@ -60,18 +62,25 @@ fn main() {
         return;
     }
 
+    let version = std::env::var("OVM_VERSION").unwrap_or_default();
+    let event = std::env::var("OVM_EVENT").unwrap_or_default();
+
+    let evidence = ovm_codex_skew::default_evidence_path()
+        .and_then(|path| ovm_codex_skew::load_evidence(&path));
+    let guard = ovm_codex_skew::guard(&binary, &version, evidence.as_ref());
+
     if event == "doctor" {
         // Manual `ovm doctor codex`: a detailed report to stdout, even when clean.
-        ovm_codex_skew::print_report(&version, &binary, &outcome);
+        ovm_codex_skew::print_report(&version, &binary, &guard);
     } else {
-        match &outcome {
-            ovm_codex_skew::AssessmentOutcome::Assessed(assessment) if assessment.degraded() => {
+        match guard.launch_verdict() {
+            ovm_codex_skew::LaunchVerdict::ObservedDegraded(observation) => {
+                ovm_codex_skew::print_observed_warning(&version, observation);
+            }
+            ovm_codex_skew::LaunchVerdict::StaticDegraded(assessment) => {
                 ovm_codex_skew::print_degraded_warning(&version, assessment);
             }
-            ovm_codex_skew::AssessmentOutcome::Indeterminate(indeterminate) => {
-                ovm_codex_skew::print_indeterminate_warning(indeterminate);
-            }
-            _ => {}
+            ovm_codex_skew::LaunchVerdict::Silent => {}
         }
     }
     // Implicit exit 0 — fail-open.

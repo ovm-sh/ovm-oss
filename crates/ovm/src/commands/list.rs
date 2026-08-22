@@ -27,9 +27,10 @@ fn list_installed(vm: &VersionManager) -> Result<()> {
 
     if versions.is_empty() {
         println!(
-            "No {} versions installed. Run: {}",
+            "No {} versions installed. Run {}, or {} for guided first-time setup.",
             vm.product().canonical_name(),
-            vm.product().install_example("latest")
+            vm.product().install_example("latest"),
+            style("ovm hatch").bold()
         );
         return Ok(());
     }

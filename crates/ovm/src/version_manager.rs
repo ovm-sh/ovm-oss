@@ -1332,7 +1332,8 @@ impl VersionManager {
             )?;
 
             eprintln!(
-                "  {} Installed {} {} {}",
+                "{}{} Installed {} {} {}",
+                crate::mochi::indent(),
                 style("✓").green(),
                 self.product().display_name(),
                 style(&version).green().bold(),
@@ -1696,14 +1697,16 @@ impl VersionManager {
 
     fn install_claude_native(&self, version: &str) -> Result<()> {
         eprintln!(
-            "  {} Downloading native binary v{}...",
+            "{}{} Downloading native binary v{}...",
+            crate::mochi::indent(),
             style("↓").cyan(),
             version
         );
         gcs::download_binary(version, &self.product_dirs.native_bin(version))?;
 
         eprintln!(
-            "  {} Installed {} v{} {}",
+            "{}{} Installed {} v{} {}",
+            crate::mochi::indent(),
             style("✓").green(),
             self.product().display_name(),
             style(version).green().bold(),
@@ -1719,7 +1722,8 @@ impl VersionManager {
         let installed_dir = version_dir.join("npm").join("installed");
 
         eprintln!(
-            "  {} Downloading npm package v{}...",
+            "{}{} Downloading npm package v{}...",
+            crate::mochi::indent(),
             style("↓").cyan(),
             version
         );
@@ -1737,7 +1741,8 @@ impl VersionManager {
         }
 
         eprintln!(
-            "  {} Installed {} v{} {}",
+            "{}{} Installed {} v{} {}",
+            crate::mochi::indent(),
             style("✓").green(),
             self.product().display_name(),
             style(version).green().bold(),
@@ -1747,7 +1752,12 @@ impl VersionManager {
     }
 
     fn install_codex_release(&self, version: &str) -> Result<()> {
-        eprintln!("  {} Downloading release {}...", style("↓").cyan(), version);
+        eprintln!(
+            "{}{} Downloading release {}...",
+            crate::mochi::indent(),
+            style("↓").cyan(),
+            version
+        );
         let metadata = codex::download_release(version, &self.product_dirs.release_bin(version))?;
         write_new_file(
             &self.product_dirs.release_meta_path(version),
@@ -1755,7 +1765,8 @@ impl VersionManager {
         )?;
 
         eprintln!(
-            "  {} Installed {} {} {}",
+            "{}{} Installed {} {} {}",
+            crate::mochi::indent(),
             style("✓").green(),
             self.product().display_name(),
             style(version).green().bold(),
@@ -1766,7 +1777,8 @@ impl VersionManager {
 
     fn install_pi_release(&self, version: &str) -> Result<()> {
         eprintln!(
-            "  {} Downloading release v{}...",
+            "{}{} Downloading release v{}...",
+            crate::mochi::indent(),
             style("↓").cyan(),
             version
         );
@@ -1778,7 +1790,8 @@ impl VersionManager {
         )?;
 
         eprintln!(
-            "  {} Installed {} v{} {}",
+            "{}{} Installed {} v{} {}",
+            crate::mochi::indent(),
             style("✓").green(),
             self.product().display_name(),
             style(version).green().bold(),

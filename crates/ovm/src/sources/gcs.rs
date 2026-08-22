@@ -5,8 +5,22 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::Path;
 
-const CDN_BASE: &str = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
+const DEFAULT_CDN_BASE: &str = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
 const GCS_DOWNLOAD_HOSTS: &[&str] = &["storage.googleapis.com"];
+
+/// Dev/test override for the Claude CDN, mirroring every other source's
+/// `OVM_*_URL` hook. Unset in production, so the bucket stays the only host.
+const CDN_URL_ENV: &str = "OVM_CLAUDE_CDN_URL";
+
+/// Resolve the CDN base. A local mirror (the `ovm hatch` recording harness, or
+/// a test mock) serves the same `/latest`, `/<version>/manifest.json` and
+/// `/<version>/<platform>/<binary>` layout over loopback HTTP.
+fn cdn_base() -> String {
+    std::env::var(CDN_URL_ENV)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_CDN_BASE.to_string())
+}
 
 #[derive(Debug, Deserialize, serde::Serialize)]
 pub(crate) struct Manifest {
@@ -35,7 +49,7 @@ fn platform_for(target_os: &str, target_arch: &str) -> Result<&'static str> {
         ("linux", "aarch64") => Ok("linux-arm64"),
         ("linux", "x86_64") => Ok("linux-x64"),
         _ => Err(OvmError::DownloadFailed {
-            url: CDN_BASE.to_string(),
+            url: cdn_base(),
             message: format!(
                 "Unsupported platform: no Claude Code GCS binary for target_os={} target_arch={}",
                 target_os, target_arch
@@ -49,7 +63,7 @@ fn platform() -> Result<&'static str> {
 }
 
 pub fn get_latest_version() -> Result<String> {
-    let url = format!("{}/latest", CDN_BASE);
+    let url = format!("{}/latest", cdn_base());
     let response = super::http_client(15)?.get(&url).send()?;
 
     if !response.status().is_success() {
@@ -63,7 +77,7 @@ pub fn get_latest_version() -> Result<String> {
 }
 
 fn get_manifest(version: &str) -> Result<Manifest> {
-    let url = format!("{}/{}/manifest.json", CDN_BASE, version);
+    let url = format!("{}/{}/manifest.json", cdn_base(), version);
     let response = super::http_client(15)?.get(&url).send()?;
 
     if !response.status().is_success() {
@@ -81,7 +95,7 @@ pub fn download_binary(version: &str, dest: &Path) -> Result<()> {
         .platforms
         .get(plat)
         .ok_or_else(|| OvmError::DownloadFailed {
-            url: format!("{}/{}/{}/{}", CDN_BASE, version, plat, "claude"),
+            url: format!("{}/{}/{}/{}", cdn_base(), version, plat, "claude"),
             message: format!("No binary available for platform {}", plat),
         })?;
 
@@ -95,19 +109,26 @@ pub fn download_binary(version: &str, dest: &Path) -> Result<()> {
         || platform_info.binary.contains("..")
     {
         return Err(OvmError::DownloadFailed {
-            url: format!("{}/{}/{}", CDN_BASE, version, plat),
+            url: format!("{}/{}/{}", cdn_base(), version, plat),
             message: format!("manifest binary name is unsafe: {}", platform_info.binary),
         });
     }
-    let url = format!("{}/{}/{}/{}", CDN_BASE, version, plat, platform_info.binary);
+    let url = format!(
+        "{}/{}/{}/{}",
+        cdn_base(),
+        version,
+        plat,
+        platform_info.binary
+    );
 
     crate::util::ensure_parent_dir(dest)?;
     let temp_dest = dest.with_extension("part");
     let _ = std::fs::remove_file(&temp_dest);
 
-    // GCS has no dev/test URL override; the CDN host is fixed, so loopback is
-    // never a legitimate download target here.
-    super::validate_download_url(&url, GCS_DOWNLOAD_HOSTS, false)?;
+    // Loopback is a legitimate target only while the CDN override is set —
+    // in production it is unset, so the bucket host remains the only one.
+    let allow_loopback = super::test_override_active(CDN_URL_ENV);
+    super::validate_download_url(&url, GCS_DOWNLOAD_HOSTS, allow_loopback)?;
     let mut response = super::download_http_client(120, GCS_DOWNLOAD_HOSTS)?
         .get(&url)
         .send()
@@ -115,7 +136,7 @@ pub fn download_binary(version: &str, dest: &Path) -> Result<()> {
             url: url.clone(),
             message: e.to_string(),
         })?;
-    super::validate_download_url(response.url().as_str(), GCS_DOWNLOAD_HOSTS, false)?;
+    super::validate_download_url(response.url().as_str(), GCS_DOWNLOAD_HOSTS, allow_loopback)?;
 
     if !response.status().is_success() {
         return Err(OvmError::DownloadFailed {
@@ -128,7 +149,10 @@ pub fn download_binary(version: &str, dest: &Path) -> Result<()> {
     progress.set_style(
         ProgressStyle::default_bar()
             .template(
-                "  {bar:36.cyan/dim} {bytes}/{total_bytes} ({percent}%) {bytes_per_sec} ETA {eta}",
+                &format!(
+                    "{}{{bar:36.cyan/dim}} {{bytes}}/{{total_bytes}} ({{percent}}%) {{bytes_per_sec}} ETA {{eta}}",
+                    crate::mochi::indent()
+                ),
             )
             .expect("valid progress template")
             .progress_chars("██░"),

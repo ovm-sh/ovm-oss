@@ -216,6 +216,205 @@ fn probe_latest_at_base(base: &str, etag: Option<&str>) -> Option<LatestProbe> {
     })
 }
 
+/// Largest `codex-skew.json` the refresh will accept. The real document is
+/// ~20 KB; anything past this is not evidence and must not be cached, where
+/// every Codex launch would read it.
+const CODEX_SKEW_EVIDENCE_MAX_BYTES: u64 = 1024 * 1024;
+
+/// The shape `ovm-codex-skew` parses (mirrored here so `ovm` only caches what
+/// the companion will accept — a structurally broken document must not evict a
+/// good cached one and then sit there, fresh, suppressing the next fetch).
+#[derive(Deserialize)]
+struct CodexSkewDocument {
+    schema_version: u64,
+    product: String,
+    #[serde(default)]
+    manifest: CodexSkewManifest,
+    #[serde(default)]
+    observed: Vec<CodexSkewObservation>,
+}
+
+#[derive(Default, Deserialize)]
+struct CodexSkewManifest {
+    #[serde(default)]
+    migrations: Vec<CodexSkewMigration>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)] // parsed for shape validation only
+struct CodexSkewMigration {
+    version: u32,
+    description: String,
+    breaking: bool,
+}
+
+#[derive(Deserialize)]
+struct CodexSkewObservation {
+    db_migration: u32,
+    version: String,
+    verdict: String,
+    /// Lenient, like the companion: anything that is not a u64 counts as
+    /// unstamped rather than rejecting the whole document.
+    #[serde(default)]
+    run_number: serde_json::Value,
+}
+
+/// The companion clips version labels to this many chars; key on the same
+/// text so a malformed long label cannot become "knowledge" the companion
+/// never matches.
+const CODEX_SKEW_MAX_VERSION_CHARS: usize = 300;
+
+/// The served Codex skew-evidence document (`codex-skew.json`), as raw JSON
+/// text, or `None` on any failure. It is cached verbatim for the
+/// `ovm-codex-skew` companion, which reads it from disk and never fetches.
+pub(crate) fn codex_skew_evidence_from_registry() -> Option<String> {
+    codex_skew_evidence_at_base(&registry_base())
+}
+
+fn codex_skew_evidence_at_base(base: &str) -> Option<String> {
+    use std::io::Read;
+
+    let url = format!("{base}/codex-skew.json");
+    let client = registry_client(&url)?;
+    let response = match client.get(&url).send() {
+        Ok(response) => response,
+        Err(error) => {
+            verbose_log(&format!("request to {url} failed: {error}"));
+            return None;
+        }
+    };
+    if !response.status().is_success() {
+        verbose_log(&format!("{url} returned {}", response.status()));
+        return None;
+    }
+    // Bounded read: take one byte past the cap so an oversized body is
+    // detected without ever buffering it.
+    let mut bytes = Vec::new();
+    if let Err(error) = response
+        .take(CODEX_SKEW_EVIDENCE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+    {
+        verbose_log(&format!("{url} body could not be read: {error}"));
+        return None;
+    }
+    if bytes.len() as u64 > CODEX_SKEW_EVIDENCE_MAX_BYTES {
+        verbose_log(&format!(
+            "{url} exceeds {CODEX_SKEW_EVIDENCE_MAX_BYTES} bytes; not cached"
+        ));
+        return None;
+    }
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) => {
+            verbose_log(&format!("{url} is not UTF-8: {error}"));
+            return None;
+        }
+    };
+    let document: CodexSkewDocument = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(error) => {
+            verbose_log(&format!("{url} is not a codex skew document: {error}"));
+            return None;
+        }
+    };
+    if document.schema_version != 1 || document.product != "codex" {
+        verbose_log(&format!(
+            "{url} is not a schema-1 codex skew document (schema={}, product={:?})",
+            document.schema_version, document.product
+        ));
+        return None;
+    }
+    // The publisher always emits the full manifest, contiguous from 1 with
+    // non-empty descriptions. Anything else teaches the companion nothing it
+    // can use and must not evict a document that does.
+    if codex_skew_cache_key_of(&document).is_none() {
+        verbose_log(&format!(
+            "{url} does not carry a contiguous migration manifest; not cached"
+        ));
+        return None;
+    }
+    let _ = &document.observed;
+    Some(text)
+}
+
+/// Sanity ceilings on a served document — aligned with the companion's own
+/// caps (`ovm-codex-skew`: 128-byte descriptions, 1024 observations) so what
+/// core counts is what the companion can use, and bounding how far a manifest
+/// may claim to reach so one document cannot poison the cache key for long.
+const CODEX_SKEW_MAX_MANIFEST_LEN: usize = 1024;
+const CODEX_SKEW_MAX_DESCRIPTION_BYTES: usize = 128;
+const CODEX_SKEW_MAX_OBSERVATIONS: usize = 1024;
+
+/// What a cached document is compared on: how far its contiguous 1..=N
+/// manifest reaches, and WHICH (migration, version) pairs it carries
+/// observations for, each with the newest run observed. Knowledge of upstream
+/// only ever advances — the publisher re-emits the full manifest and the
+/// ledger is append-only — so a fetched document replaces the cache only when
+/// it reaches at least as far and still carries every cached pair at a run
+/// at least as new (see [`CodexSkewCacheKey::dominates`]); counts alone would
+/// let a document about other versions delete a cached verdict, and pairs
+/// alone would let a lagging replica roll a verdict back to an older run.
+/// `None` when the text is not a schema-1 codex document with a contiguous
+/// 1..=N manifest of non-empty, bounded descriptions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexSkewCacheKey {
+    pub manifest_max: u32,
+    /// (db_migration, version) → newest run number observed (0 if unstamped).
+    pub observed: std::collections::BTreeMap<(u32, String), u64>,
+}
+
+impl CodexSkewCacheKey {
+    pub fn dominates(&self, other: &Self) -> bool {
+        self.manifest_max >= other.manifest_max
+            && other
+                .observed
+                .iter()
+                .all(|(pair, run)| self.observed.get(pair).is_some_and(|mine| mine >= run))
+    }
+}
+
+pub(crate) fn codex_skew_cache_key(text: &str) -> Option<CodexSkewCacheKey> {
+    let document: CodexSkewDocument = serde_json::from_str(text).ok()?;
+    if document.schema_version != 1 || document.product != "codex" {
+        return None;
+    }
+    codex_skew_cache_key_of(&document)
+}
+
+fn codex_skew_cache_key_of(document: &CodexSkewDocument) -> Option<CodexSkewCacheKey> {
+    let migrations = &document.manifest.migrations;
+    let contiguous = migrations.iter().enumerate().all(|(index, m)| {
+        m.version as usize == index + 1
+            && !m.description.is_empty()
+            && m.description.len() <= CODEX_SKEW_MAX_DESCRIPTION_BYTES
+    });
+    if migrations.is_empty() || migrations.len() > CODEX_SKEW_MAX_MANIFEST_LEN || !contiguous {
+        return None;
+    }
+    // Only what the companion will keep: known verdicts, up to its cap, with
+    // the version label clipped as the companion clips it.
+    let mut observed = std::collections::BTreeMap::new();
+    for o in document
+        .observed
+        .iter()
+        .filter(|o| matches!(o.verdict.as_str(), "compatible" | "degraded" | "broken"))
+        .take(CODEX_SKEW_MAX_OBSERVATIONS)
+    {
+        let version: String = o
+            .version
+            .chars()
+            .take(CODEX_SKEW_MAX_VERSION_CHARS)
+            .collect();
+        let run = o.run_number.as_u64().unwrap_or(0);
+        let entry = observed.entry((o.db_migration, version)).or_insert(run);
+        *entry = (*entry).max(run);
+    }
+    Some(CodexSkewCacheKey {
+        manifest_max: migrations.last()?.version,
+        observed,
+    })
+}
+
 fn registry_client(url: &str) -> Option<reqwest::blocking::Client> {
     match reqwest::blocking::Client::builder()
         .user_agent("ovm")
@@ -288,6 +487,146 @@ mod tests {
             assert!(manifest.is_none(), "{tag:?} must be refused");
         }
         assert!(!any.matched(), "no request may leave for an unsafe tag");
+    }
+
+    #[test]
+    fn skew_evidence_is_cached_only_when_it_is_a_codex_schema_1_document() {
+        let mut server = Server::new();
+        let good = r#"{"schema_version":1,"product":"codex","manifest":{"migrations":[{"version":1,"description":"threads","breaking":false}]},"observed":[]}"#;
+        let _m = server
+            .mock("GET", "/codex-skew.json")
+            .with_status(200)
+            .with_body(good)
+            .create();
+        assert_eq!(
+            codex_skew_evidence_at_base(&server.url()).as_deref(),
+            Some(good),
+            "a valid document is returned verbatim for caching"
+        );
+
+        for bad in [
+            r#"{"schema_version":2,"product":"codex"}"#,
+            r#"{"schema_version":1,"product":"claude"}"#,
+            r#"{"schema_version":1,"product":"codex","observed":{}}"#,
+            r#"{"schema_version":1,"product":"codex"}"#,
+            r#"{"schema_version":1,"product":"codex","manifest":{"migrations":[]}}"#,
+            r#"{"schema_version":1,"product":"codex","manifest":{"migrations":[{"version":2,"description":"gap","breaking":false}]}}"#,
+            r#"{"schema_version":1,"product":"codex","manifest":{"migrations":[{"version":1,"description":"","breaking":false}]}}"#,
+            r#"{"schema_version":1,"product":"codex","manifest":{"migrations":[{"version":"x"}]}}"#,
+            r#"{"schema_version":1,"product":"codex","observed":[{"db_migration":1}]}"#,
+            r#"[]"#,
+            "not json",
+        ] {
+            let mut server = Server::new();
+            let _m = server
+                .mock("GET", "/codex-skew.json")
+                .with_status(200)
+                .with_body(bad)
+                .create();
+            assert!(
+                codex_skew_evidence_at_base(&server.url()).is_none(),
+                "{bad:?} must not be cached"
+            );
+        }
+
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/codex-skew.json")
+            .with_status(404)
+            .create();
+        assert!(codex_skew_evidence_at_base(&server.url()).is_none());
+
+        // An oversized body is refused without being buffered whole: pad a
+        // valid document past the cap with trailing whitespace.
+        let mut server = Server::new();
+        let mut huge = String::from(good);
+        huge.push_str(&" ".repeat((CODEX_SKEW_EVIDENCE_MAX_BYTES + 16) as usize));
+        let _m = server
+            .mock("GET", "/codex-skew.json")
+            .with_status(200)
+            .with_body(huge)
+            .create();
+        assert!(codex_skew_evidence_at_base(&server.url()).is_none());
+    }
+
+    #[test]
+    fn skew_cache_key_requires_a_contiguous_bounded_schema_1_manifest() {
+        let two = r#"{"schema_version":1,"product":"codex","manifest":{"migrations":[{"version":1,"description":"a","breaking":false},{"version":2,"description":"b","breaking":true}]},"observed":[{"db_migration":2,"version":"v","verdict":"compatible"},{"db_migration":2,"version":"v","verdict":"mystery"}]}"#;
+        let key = codex_skew_cache_key(two).expect("valid");
+        assert_eq!(key.manifest_max, 2);
+        let odd_run = two.replace(
+            r#""verdict":"compatible"}"#,
+            r#""verdict":"compatible","run_number":true}"#,
+        );
+        assert_eq!(
+            codex_skew_cache_key(&odd_run).map(|k| k.manifest_max),
+            Some(2),
+            "a mistyped run_number is unstamped, not a rejection"
+        );
+        assert_eq!(
+            key.observed.into_iter().collect::<Vec<_>>(),
+            vec![((2, "v".to_string()), 0)],
+            "only companion-usable verdicts count"
+        );
+        let wrong_schema = two.replace(r#""schema_version":1"#, r#""schema_version":2"#);
+        assert_eq!(codex_skew_cache_key(&wrong_schema), None);
+        let wrong_product = two.replace(r#""product":"codex""#, r#""product":"claude""#);
+        assert_eq!(codex_skew_cache_key(&wrong_product), None);
+        let gap = r#"{"schema_version":1,"product":"codex","manifest":{"migrations":[{"version":1,"description":"a","breaking":false},{"version":3,"description":"c","breaking":false}]}}"#;
+        assert_eq!(codex_skew_cache_key(gap), None);
+        let long = format!(
+            r#"{{"schema_version":1,"product":"codex","manifest":{{"migrations":[{{"version":1,"description":"{}","breaking":false}}]}}}}"#,
+            "d".repeat(CODEX_SKEW_MAX_DESCRIPTION_BYTES + 1)
+        );
+        assert_eq!(codex_skew_cache_key(&long), None);
+        let huge = format!(
+            r#"{{"schema_version":1,"product":"codex","manifest":{{"migrations":[{}]}}}}"#,
+            (1..=CODEX_SKEW_MAX_MANIFEST_LEN + 1)
+                .map(|v| format!(r#"{{"version":{v},"description":"m","breaking":false}}"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert_eq!(codex_skew_cache_key(&huge), None);
+        assert_eq!(codex_skew_cache_key("nope"), None);
+    }
+
+    /// A document replaces the cache only when it reaches at least as far AND
+    /// still carries every cached observation pair at a run at least as new:
+    /// a document about other versions, one with a new manifest and no
+    /// observations, or a lagging replica with an older run for the same pair
+    /// must not win.
+    #[test]
+    fn skew_cache_key_dominance_requires_observation_inclusion_and_recency() {
+        let key = |manifest_max: u32, pairs: &[(u32, &str, u64)]| CodexSkewCacheKey {
+            manifest_max,
+            observed: pairs
+                .iter()
+                .map(|(m, v, run)| ((*m, v.to_string()), *run))
+                .collect(),
+        };
+        let cached = key(50, &[(50, "A", 101)]);
+        assert!(key(51, &[(50, "A", 101), (51, "A", 102)]).dominates(&cached));
+        assert!(key(50, &[(50, "A", 101), (50, "B", 90)]).dominates(&cached));
+        assert!(
+            key(50, &[(50, "A", 105)]).dominates(&cached),
+            "newer run, same pair"
+        );
+        assert!(
+            !key(51, &[]).dominates(&cached),
+            "new manifest, verdicts dropped"
+        );
+        assert!(
+            !key(50, &[(50, "B", 101)]).dominates(&cached),
+            "same count, other version"
+        );
+        assert!(
+            !key(49, &[(50, "A", 101), (50, "B", 101)]).dominates(&cached),
+            "manifest regressed"
+        );
+        assert!(
+            !key(50, &[(50, "A", 100)]).dominates(&cached),
+            "lagging replica, older run"
+        );
     }
 
     #[test]

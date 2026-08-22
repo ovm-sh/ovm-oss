@@ -7,11 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-22
+
+### Added
+
+- **`ovm statusline` puts Echo in the Claude Code statusline.** The active
+  Claude version, the companion, and the model, rendered where Claude Code
+  already shows a status line. Installing it keeps whatever statusline is
+  already configured unless you say otherwise, so it cannot quietly replace a
+  setup you built yourself.
+
+- **`ovm hatch` adopts what is already on the machine.** An unmanaged Claude,
+  Codex or Pi found on `PATH` is imported instead of ignored or overwritten,
+  and the original binary is left where it is. Onboarding a machine that has
+  been in use for a year no longer starts by pretending it is empty.
+
+- **`ovm hatch` offers to keep your Claude chat history.** The hatch runs
+  against a config directory of its own; when it finishes it asks before
+  carrying the existing conversation history across, rather than deciding for
+  you in either direction.
+
+- **`ovm hatch` records each act's outcome for machines.** Every act appends a
+  structured result, so a scripted or supervised run can tell an act that was
+  skipped because the product was already managed from one that failed.
+
+### Changed
+
+- **`ovm tour` is now `ovm hatch`.** The command is named for what it does —
+  it hatches a setup — and the old `tour` aliases are gone rather than kept as
+  silent synonyms. `ovm story` is mothballed as an archived command: it still
+  runs, but the front door is `hatch`, and an empty machine is nudged toward it.
+
+- **`ovm help` is task-first.** The overview is organised as Getting started
+  (hatch, select, the launch shortcuts) → Versions → System, instead of one
+  flat alphabetical list, and the launch rows line up with the shortcut table
+  in `ovm help launch`.
+
+- - **The Codex schema-skew guard now learns from the observatory, not just
+  from its build.** `ovm-codex-skew` used to reason from a migration manifest
+  compiled into the binary, so a released OVM only knew the Codex migrations
+  that existed when it shipped: every Codex stable since then made the guard
+  report INDETERMINATE on every launch until the next OVM release — a weekly
+  "?" that people learn to ignore. The deep run now publishes
+  `api/codex-skew.json` next to the version registry: the synced migration
+  manifest plus the ladder's observed downgrade/recovery verdicts (every older
+  Codex stable run against a state DB migrated by the newest one). `ovm`'s
+  background refresh caches it beside the registry indexes and hands the
+  companion the directory (`OVM_REGISTRY_CACHE`); the companion never fetches.
+  Two consequences: a served manifest extends the compiled one, so a stale
+  build keeps classifying new migrations; and an observed verdict outranks the
+  static guess — a DROP the ladder passed stays quiet (the ladder has passed
+  every breaking migration the manifest flags, hundreds of contracts, zero
+  observed degradation), and a regression the ladder saw warns even when no
+  migration looks breaking. Among applicable observations the newest run wins,
+  so a flap a later run cleared does not keep warning. Indeterminate checks no
+  longer interrupt a launch at all; `ovm doctor codex` still explains them, and
+  now also shows the manifest source, evidence freshness, and the observation
+  that applied. `--classification` (what the observatory records as
+  `staticCompatibility`) is unchanged and ignores served evidence, so
+  "behavioral vs static" never compares evidence with itself. Without the
+  document the guard behaves exactly as before.
+
+### Fixed
+
+- **The story's animations no longer flash.** Each frame is drawn in one
+  synchronized write, so a frame can never be seen half-drawn as black rows;
+  the cursor stays hidden through the animation; and the creature's reveal
+  holds long enough to read instead of flashing past. The cat and rabbit
+  frames lost to an earlier edit are recovered.
+
+- **`ovm hatch` keeps an existing statusline by default,** and its Pi act
+  ✓-skips a Pi that is already managed, the way the Claude and Codex acts
+  already did.
+
+- **The installer says less, and only says true things.** It prints paths as
+  `~/…` rather than absolute ones, announces a lock or self-management wait
+  only when a wait is actually happening, and its post-install offer runs
+  `ovm hatch` rather than the retired `ovm tour`.
+
 ## [0.1.5] - 2026-08-19
 
 ### Added
 
-- **`ovm tour` — guided onboarding, two ways.** An opening fork offers the
+- **`ovm hatch` — guided onboarding, two ways.** An opening fork offers the
   story (the `ovm story` chapters with an install stop after each one — Claude
   after Quelpaw, Codex after Mochi, claudex after Echo) or a tldr path that
   just installs Claude, Codex, and claudex in order, with Pi offered as an
@@ -19,7 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hatch: a one-off launch of Claude Code 2.1.96 to type `/buddy` in, leaving
   their current selection untouched. Every act is fail-open and auto-skips
   products that are already managed, so re-running the tour never moves an
-  existing install.
+  existing install. On a fresh machine the installer ends by offering it
+  (`Hatch your setup now? [Y/n]`), so the first `curl | sh` runs straight
+  into onboarding.
 
 - **`ovm story` shows the companion card, and shows you yours.** Chapter i now
   draws Quelpaw's `/buddy` card as Claude Code 2.1.96 drew it — rarity, the
@@ -1003,7 +1083,10 @@ the real first public release carries the version the public repo ships.
 
 <!-- v0.0.3-alpha.4 is the first tag on the repaired public history; older
      versions predate it and intentionally have no public link targets. -->
-[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.1-alpha.3...v0.1.1

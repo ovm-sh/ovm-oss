@@ -192,9 +192,18 @@ fn help_shortcuts_still_documents_the_shortcuts_command() {
         .stdout(predicate::str::contains("~/.local/bin"));
 }
 
+/// Runs with an EMPTY `PATH` on purpose. `ovm help` lists every `ovm-*` plugin
+/// it finds there, so a developer machine prints a Plugins section a clean
+/// checkout does not — and `ovm-codex-skew` alone satisfied a plain
+/// `contains("codex")`. The help rework that stopped naming the products in
+/// lowercase therefore stayed green on every dev box and went red only on CI,
+/// where no plugin is installed. The overview is a property of the binary;
+/// assert it against the binary alone.
 #[test]
 fn ovm_help_redirected_stdout_is_ansi_free_and_shows_full_overview() {
+    let no_plugins = tempfile::tempdir().expect("tempdir");
     let output = ovm()
+        .env("PATH", no_plugins.path())
         .arg("help")
         .assert()
         .success()
@@ -208,21 +217,23 @@ fn ovm_help_redirected_stdout_is_ansi_free_and_shows_full_overview() {
         "redirected help stdout must not contain ANSI escapes: {stdout:?}"
     );
     for expected in [
-        "Interactive:",
-        "Version management:",
-        "Inspect:",
-        "Maintenance:",
+        "Getting started:",
+        "Versions:",
+        "System:",
         "update",
         "Launch shortcuts:",
         "Examples:",
-        "claude",
-        "codex",
-        "pi",
         "self-update",
         "doctor",
         "shortcuts",
     ] {
         assert!(stdout.contains(expected), "missing help entry: {expected}");
+    }
+    // The managed products, however the overview happens to case them: prose
+    // says "Claude Code, Codex, and Pi", the shortcut rows say `cc cx pi`.
+    let lowered = stdout.to_lowercase();
+    for product in ["claude", "codex", "pi"] {
+        assert!(lowered.contains(product), "missing help entry: {product}");
     }
 }
 

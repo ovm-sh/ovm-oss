@@ -1,4 +1,4 @@
-//! `ovm tour` — the interactive contract.
+//! `ovm hatch` — the interactive contract.
 //!
 //! The tour is a terminal conversation, so almost all of it can only be
 //! exercised by a person. What a test CAN pin down is the boundary: run
@@ -15,7 +15,7 @@ fn tour_without_a_terminal_refuses_and_names_the_scripted_path() {
     let assert = cmd
         .env("HOME", home.path())
         .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
-        .arg("tour")
+        .arg("hatch")
         .write_stdin("2\n")
         .assert()
         .failure();
@@ -41,5 +41,5 @@ fn tour_is_listed_in_help() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
-    assert!(stdout.contains("tour"), "help should list tour: {stdout}");
+    assert!(stdout.contains("hatch"), "help should list hatch: {stdout}");
 }

@@ -4,6 +4,26 @@
 //! Each face is padded so all three lines are the same column width,
 //! which lets callers align trailing text consistently.
 
+/// The left margin every line of OVM output shares.
+///
+/// Defaults to the two spaces every command has always used. `ovm hatch`
+/// centres its 62-column story block and sets this to match, so the installs
+/// it runs line up with the prose above them instead of hugging the terminal
+/// edge — the download progress and "Installed" lines come from the shared
+/// install path, which has no idea it is being run inside the tour.
+static INDENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Set the shared margin. First caller wins; later calls are ignored, so a
+/// nested command can never shift output out from under its parent.
+pub fn set_indent(indent: String) {
+    let _ = INDENT.set(indent);
+}
+
+/// The shared margin, or the flush-left default when nothing set one.
+pub fn indent() -> &'static str {
+    INDENT.get().map_or("  ", String::as_str)
+}
+
 /// Default curious expression.
 pub const DEFAULT: &str = "  /\\_/\\ \n ( o.o )\n  > ^ < ";
 

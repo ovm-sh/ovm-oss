@@ -2,6 +2,7 @@ mod autoupdate;
 mod buddy;
 mod bundle_manifest;
 mod claude_install;
+mod claude_settings;
 mod cli;
 mod commands;
 mod companions;
@@ -267,7 +268,8 @@ fn run() -> Result<()> {
         }
         Commands::Stats => commands::stats::run(),
         Commands::Story { fast } => commands::story::run(fast),
-        Commands::Tour => commands::tour::run(),
+        Commands::Hatch => commands::hatch::run(),
+        Commands::Statusline => commands::statusline::run(),
         Commands::Select { product, version } => {
             commands::select::run_top(product.as_deref(), version.as_deref())
         }

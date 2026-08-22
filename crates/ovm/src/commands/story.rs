@@ -271,6 +271,15 @@ fn escape_run(chars: &[char], start: usize) -> Option<usize> {
 
 /// Where a reader can ask for `/buddy` back. Pre-filled but user-sent — the
 /// story only ever links; it never posts anything on anyone's behalf.
+/// The recipe claudex is built on, shared publicly by OpenAI's Codex lead.
+const CLAUDEX_TWEET_URL: &str = "https://x.com/thsottiaux/status/2076119366647894371";
+
+/// Anthropic's own Claude Code lead, replying in the thread that followed: no
+/// one is banned for pointing the harness at another model. Worth linking
+/// because "is this allowed?" is the first thing anyone thinks here, and the
+/// answer came from Anthropic rather than from us.
+const CLAUDEX_BLESSING_URL: &str = "https://x.com/bcherny/status/2086173812253729118";
+
 const BUDDY_ISSUE_URL: &str =
     "https://github.com/anthropics/claude-code/issues/new?title=Bring+back+%2Fbuddy";
 const BUDDY_POST_URL: &str =
@@ -430,6 +439,7 @@ impl Story {
     /// side, the animated cat looked like the still one — the opposite of the
     /// intent. Both entrances now match; only what happens next differs.
     fn animate(&self, frame_sets: &[&[&str]], color: &str, loops: usize, hold_ms: u64) {
+        let _cursor = self.hide_cursor();
         let height = frame_sets[0].len();
         let widest = frame_sets
             .iter()
@@ -442,19 +452,24 @@ impl Story {
         let mut out = io::stdout();
         for _ in 0..loops {
             for frames in frame_sets {
-                if !first {
-                    print!("\x1b[{height}F");
-                }
-                for line in frames.iter() {
-                    println!("\x1b[2K{left}{color}{line}{RESET}");
-                    // Only the very first frame is revealed; redraws must stay
-                    // instant or the flicks turn into a stutter.
-                    if first {
+                if first {
+                    // The very first frame is revealed a row at a time.
+                    for line in frames.iter() {
+                        println!("\x1b[2K{left}{color}{line}{RESET}");
                         let _ = out.flush();
                         self.beat(80);
                     }
+                } else {
+                    // Every redraw is one atomic, synchronized write, so a
+                    // frame grabber never samples it half-erased (see fin()).
+                    let mut buf = format!("\x1b[?2026h\x1b[{height}F");
+                    for line in frames.iter() {
+                        buf.push_str(&format!("\x1b[2K{left}{color}{line}{RESET}\n"));
+                    }
+                    buf.push_str("\x1b[?2026l");
+                    let _ = out.write_all(buf.as_bytes());
+                    let _ = out.flush();
                 }
-                let _ = out.flush();
                 first = false;
                 self.beat(hold_ms);
             }
@@ -620,6 +635,19 @@ impl Story {
         format!("\x1b]8;;{url}\x1b\\{UNDERLINE}{text}{UNDERLINE_OFF}\x1b]8;;\x1b\\")
     }
 
+    /// Hide the terminal cursor for an in-place animation.
+    ///
+    /// The globe and the cats redraw by walking the cursor back up and
+    /// reprinting, which leaves it parked inside the art — a blinking block
+    /// clipping through the frame. Hiding it for the duration fixes that.
+    ///
+    /// Restoring is handled on Drop AND on ctrl-c: leaving someone's terminal
+    /// with no cursor at all would be a worse bug than the one this fixes,
+    /// and ctrl-c through an animation is exactly how people leave.
+    fn hide_cursor(&self) -> CursorHidden {
+        CursorHidden::new()
+    }
+
     /// Every chapter opens on a clean screen.
     fn fresh_page(&self) {
         if !self.fast {
@@ -692,7 +720,12 @@ impl Story {
             12,
             0,
         );
-        self.say("Nine releases on, the changelog owned up to it:", "", 12, 0);
+        self.say(
+            "Seven releases on, the changelog owned up to it:",
+            "",
+            12,
+            0,
+        );
         self.blank();
         let quote = format!("{ITALIC}{GREY}");
         self.say(
@@ -759,7 +792,7 @@ impl Story {
         self.animate(&[&QUELPAW_GONE], SILVER, 1, 0);
         self.blank();
         self.say(
-            "Seventeen releases they rode along. Then 2.1.97 removed them.",
+            "Fourteen releases they rode along. Then 2.1.97 removed them.",
             "",
             12,
             300,
@@ -780,29 +813,58 @@ impl Story {
     ///
     /// The removal took the reader, not the record: `/buddy` wrote a
     /// `companion` object into the top-level Claude config and nothing has
-    /// touched it in the seventeen releases since. So for anyone who was there,
+    /// touched it in any release since. So for anyone who was there,
     /// this is their cat, off their own disk — and the chapter stops being
     /// about someone else's.
     ///
-    /// Rarity and stat bars are absent on purpose. 2.1.96 derived them at
-    /// render time and that code went with the feature; making some up would be
-    /// the only invented thing in a story that is otherwise all recovered.
+    /// Rarity, species and the creature itself all come back out of the
+    /// personality line 2.1.96 left behind ("A uncommon octopus of few
+    /// words."), drawn with that release's own frames — see [`buddy_art`].
+    /// Showing a cat to someone who hatched an octopus was the one place this
+    /// chapter told them something untrue about their own record.
+    ///
+    /// Stat bars stay absent: those really were derived at render time and
+    /// nothing wrote them down, so they are the one thing that would have to
+    /// be invented.
     pub(super) fn chapter_your_buddy(&self, buddy: &Buddy) {
         self.fresh_page();
         self.blank();
-        println!("{}", self.center(&format!("{SILVER}i. quelpaw{RESET}"), 10));
+        // Their buddy's name, not Quelpaw's: by this page the chapter has
+        // handed over to the reader's own cat.
+        let title = buddy.name.to_lowercase();
+        println!(
+            "{}",
+            self.center(&format!("{SILVER}{title}{RESET}"), title.chars().count())
+        );
         self.blank();
         self.say("You hatched one too.", "", 12, 300);
         self.blank();
+        let (rarity, species) = super::buddy_art::read_personality(&buddy.personality);
+        let label = rarity.map(|tier| {
+            (
+                format!("{} {}", super::buddy_art::stars(tier), tier.to_uppercase()),
+                species.unwrap_or_default().to_uppercase(),
+            )
+        });
+        // A personality line we cannot read leaves the chapter's own cat, which
+        // is at least honest about being the story's rather than theirs.
+        let frames: &[&[&str]] = species.and_then(super::buddy_art::frames_for).unwrap_or(&[
+            &QUELPAW,
+            &QUELPAW_EAR,
+            &QUELPAW,
+            &QUELPAW_TAIL,
+        ]);
         self.card(
             &Card {
-                rarity: None,
+                rarity: label
+                    .as_ref()
+                    .map(|(tier, name)| (tier.as_str(), name.as_str())),
                 name: &buddy.name,
                 personality: &buddy.personality,
                 stats: &[],
                 footer: Some(format!("hatched {}", buddy.hatched_on())),
             },
-            &[&QUELPAW, &QUELPAW_EAR, &QUELPAW, &QUELPAW_TAIL],
+            frames,
             SILVER,
         );
         self.blank();
@@ -906,15 +968,15 @@ impl Story {
         self.blank();
         self.say(
             &format!(
-                "Learn about ccy and cxy at {}",
-                self.link("https://mochiexists.com/yolo/", "mochiexists.com/yolo")
+                "Learn about their story at {}",
+                self.link("https://mochiexists.com/story/", "mochiexists.com/story")
             ),
             "",
             10,
             300,
         );
         // Two offers, not a list: the blank line keeps "buy a plate" from
-        // reading as a second bullet of the ccy/cxy line above it.
+        // reading as a second bullet of the story line above it.
         self.blank();
         self.say(
             &format!(
@@ -968,6 +1030,56 @@ impl Story {
         self.wait();
     }
 
+    /// The aside after the last chapter — Anthropic's harness on OpenAI's
+    /// model, which is the whole of OVM's argument in one command. Kept
+    /// separate from chapter iii on purpose: the story is over, and this is
+    /// the "oh, one more thing" that follows it.
+    pub(super) fn one_more_thing(&self) {
+        self.fresh_page();
+        self.blank();
+        self.say("oh — one more thing.", GREY, 12, 700);
+        self.blank();
+        self.say("Have you heard of claudex?", ORANGE, 12, 500);
+        self.blank();
+        self.say(
+            "Claude Code stays the harness. GPT-5.6 becomes the model,",
+            "",
+            10,
+            0,
+        );
+        self.say("through your own ChatGPT subscription.", "", 10, 0);
+        self.blank();
+        self.say(
+            &format!(
+                "The recipe, shared publicly by OpenAI's Codex lead: {}",
+                self.link(CLAUDEX_TWEET_URL, "the tweet")
+            ),
+            "",
+            10,
+            300,
+        );
+        self.blank();
+        self.say(
+            &format!(
+                "And Anthropic, on using their harness with another model: {}",
+                self.link(CLAUDEX_BLESSING_URL, "the reply")
+            ),
+            "",
+            10,
+            300,
+        );
+        self.say(
+            "\u{201c}We don\u{2019}t ban people for using harnesses",
+            GREY,
+            10,
+            200,
+        );
+        self.say(" with other models.\u{201d}", GREY, 10, 0);
+        self.blank();
+        self.say("hi tibo \u{1F44B} hi boris \u{1F44B}", MAGENTA, 12, 400);
+        self.wait();
+    }
+
     /// The tour's pause before the globe: same prompt the chapters use.
     pub(super) fn wait_for_fin(&self) {
         self.wait();
@@ -976,6 +1088,7 @@ impl Story {
     pub(super) fn fin(&self) {
         self.fresh_page();
         self.blank();
+        let _cursor = self.hide_cursor();
         let mask = decal_mask();
         let indent = self.width.saturating_sub((RX * 2 + 1) as usize) / 2;
         let steps = if self.fast { 3 } else { 42 };
@@ -985,12 +1098,25 @@ impl Story {
             let t = i as f64 / (steps - 1).max(1) as f64;
             let lon = 200.0 * (1.0 - ease_out(t));
             let frame = sphere_frame(&mask, lon, indent);
+            // One atomic, synchronized write per frame. Walking the cursor up
+            // and reprinting line by line lets a frame grabber (VHS records on
+            // its own 30fps clock, not on our flush) sample a frame after some
+            // rows are erased but before they are repainted — the flashing
+            // black rows in the reveal. Wrapping the whole redraw in the DEC
+            // 2026 synchronized-output batch tells the terminal to show the
+            // previous complete frame until the batch closes, and emitting it
+            // as a single write keeps it atomic even where 2026 is ignored.
+            let mut buf = String::from("\x1b[?2026h");
             if !first {
-                print!("\x1b[{GRID_H}F");
+                buf.push_str(&format!("\x1b[{GRID_H}F"));
             }
             for line in &frame {
-                println!("\x1b[2K{line}");
+                buf.push_str("\x1b[2K");
+                buf.push_str(line);
+                buf.push('\n');
             }
+            buf.push_str("\x1b[?2026l");
+            let _ = out.write_all(buf.as_bytes());
             let _ = out.flush();
             first = false;
             self.beat(55);
@@ -1072,6 +1198,45 @@ impl Story {
             self.center(&format!("{DIM}thank you for using ovm{RESET}"), 23)
         );
         self.blank();
+    }
+}
+
+/// Restores the cursor however the animation ends.
+struct CursorHidden;
+
+impl CursorHidden {
+    fn new() -> Self {
+        print!("\x1b[?25l");
+        let _ = io::stdout().flush();
+        // SAFETY: installing a handler for SIGINT; `restore_cursor_and_exit`
+        // only calls write(2) and _exit(2), both async-signal-safe.
+        unsafe {
+            libc::signal(
+                libc::SIGINT,
+                restore_cursor_and_exit as extern "C" fn(libc::c_int) as libc::sighandler_t,
+            );
+        }
+        Self
+    }
+}
+
+impl Drop for CursorHidden {
+    fn drop(&mut self) {
+        // SAFETY: restoring the default disposition we replaced.
+        unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
+        print!("\x1b[?25h");
+        let _ = io::stdout().flush();
+    }
+}
+
+/// ctrl-c during an animation must still put the cursor back.
+extern "C" fn restore_cursor_and_exit(_signal: libc::c_int) {
+    const SHOW: &[u8] = b"\x1b[?25h";
+    // SAFETY: write(2) to stdout and _exit(2) are async-signal-safe; nothing
+    // here allocates or takes a lock.
+    unsafe {
+        libc::write(1, SHOW.as_ptr().cast(), SHOW.len());
+        libc::_exit(130);
     }
 }
 

@@ -23,6 +23,9 @@ pub const SELF_CHILD_ENV: &str = "OVM_SELF_MANAGED_CHILD";
 pub const FIRST_SELF_MANAGED_RELEASE: &str = "0.0.3-alpha.1";
 const SELF_LOCK_HELPER_PATH_ENV: &str = "OVM_SELF_LOCK_HELPER_PATH";
 const SELF_LOCK_HELPER_READY_ENV: &str = "OVM_SELF_LOCK_HELPER_READY";
+/// Appended to the helper's ready path to mark a wait the caller may announce.
+/// `install.sh` polls for it; see [`run_lock_helper_if_requested`].
+const LOCK_HELPER_WAITING_SUFFIX: &str = ".waiting";
 
 #[derive(Debug, Clone)]
 pub struct SelfDirs {
@@ -857,7 +860,22 @@ pub fn run_lock_helper_if_requested() -> Result<bool> {
         .create(true)
         .truncate(false)
         .open(lock_path)?;
-    FileExt::lock(&file)?;
+    // Take the lock without blocking first. Only a refusal means another
+    // operation actually holds it, and only then is there anything for the
+    // caller to announce: the marker is what tells `install.sh` the wait is
+    // real, so a cold exec of a freshly extracted binary — slow enough on its
+    // own to look like contention — no longer prints "Waiting for another OVM
+    // self-management operation" on a clean install with nothing to wait for.
+    match FileExt::try_lock(&file) {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            let mut waiting_path = ready_path.clone();
+            waiting_path.push(LOCK_HELPER_WAITING_SUFFIX);
+            std::fs::write(&waiting_path, b"")?;
+            FileExt::lock(&file)?;
+        }
+        Err(TryLockError::Error(error)) => return Err(error.into()),
+    }
     std::fs::write(ready_path, b"")?;
 
     let mut input = std::io::stdin().lock();

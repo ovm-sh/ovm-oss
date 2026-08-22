@@ -65,3 +65,9 @@ site/benchmark.html
 # Python bytecode caches: build output, never source.
 __pycache__/
 *.pyc
+
+# Recording mirror payloads (re-rolled from installed products)
+scripts/media/.tour-mirror-cache/
+
+# Recording and e2e working files: sandboxes, takes, transcripts.
+.artifacts/

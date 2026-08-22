@@ -33,10 +33,15 @@ impl Event {
     }
 }
 
+/// Env var naming the directory of cached registry documents. Companions that
+/// consume served evidence (`ovm-codex-skew` reads `codex-skew.json`) look
+/// there; `ovm`'s background refresh keeps it current. Companions never fetch.
+pub const REGISTRY_CACHE_ENV: &str = "OVM_REGISTRY_CACHE";
+
 /// Run every companion bound to `product` for `event`, passing the env contract
-/// (`OVM_EVENT`/`OVM_PRODUCT`/`OVM_VERSION`/`OVM_BINARY`). Best-effort and
-/// fail-open: spawn errors and non-zero exits are swallowed so a guard can never
-/// block a launch or switch.
+/// (`OVM_EVENT`/`OVM_PRODUCT`/`OVM_VERSION`/`OVM_BINARY`/`OVM_REGISTRY_CACHE`).
+/// Best-effort and fail-open: spawn errors and non-zero exits are swallowed so
+/// a guard can never block a launch or switch.
 pub fn run(dirs: &OvmDirs, product: Product, event: Event, version: &str, binary: &Path) {
     for name in product.companions() {
         let Some(exe) = resolve(dirs, name) else {
@@ -47,6 +52,10 @@ pub fn run(dirs: &OvmDirs, product: Product, event: Event, version: &str, binary
             .env("OVM_PRODUCT", product.canonical_name())
             .env("OVM_VERSION", version)
             .env("OVM_BINARY", binary)
+            .env(
+                REGISTRY_CACHE_ENV,
+                crate::update_cache::registry_cache_dir(&dirs.base),
+            )
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -115,6 +124,52 @@ mod tests {
         let dirs = OvmDirs::at(dir.path().to_path_buf());
         // A name that won't exist next to the test runner exe either.
         assert_eq!(resolve(&dirs, "ovm-nonexistent-companion-xyz"), None);
+    }
+
+    /// The companion must be told where `ovm` caches registry documents, or
+    /// it can never see the served skew evidence and falls back to its
+    /// compiled manifest for every launch.
+    #[cfg(unix)]
+    #[test]
+    fn companions_receive_the_registry_cache_dir_in_their_env() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let dirs = OvmDirs::at(dir.path().to_path_buf());
+        let companions = dir.path().join("companions");
+        std::fs::create_dir_all(&companions).unwrap();
+        let target = companions.join("ovm-codex-skew");
+        let capture = dir.path().join("env.txt");
+        std::fs::write(
+            &target,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' \"$OVM_REGISTRY_CACHE\" \"$OVM_EVENT\" \"$OVM_VERSION\" > '{}'\n",
+                capture.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        run(
+            &dirs,
+            Product::Codex,
+            Event::PreLaunch,
+            "rust-v0.1.0",
+            Path::new("/bin/true"),
+        );
+
+        let captured = std::fs::read_to_string(&capture).expect("companion ran");
+        let lines: Vec<&str> = captured.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                crate::update_cache::registry_cache_dir(&dirs.base)
+                    .to_string_lossy()
+                    .as_ref(),
+                "pre-launch",
+                "rust-v0.1.0"
+            ]
+        );
     }
 
     #[test]

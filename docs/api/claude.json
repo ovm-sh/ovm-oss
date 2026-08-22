@@ -2,11 +2,11 @@
   "product": "claude",
   "display_name": "Claude Code",
   "source": "npm:@anthropic-ai/claude-code",
-  "updated_at": "2026-08-19T01:22:51Z",
+  "updated_at": "2026-08-22T15:06:50Z",
   "dist_tags": {
-    "stable": "2.1.227",
-    "latest": "2.1.235",
-    "next": "2.1.235"
+    "stable": "2.1.231",
+    "latest": "2.1.240",
+    "next": "2.1.240"
   },
   "versions": [
     {
@@ -2917,6 +2917,46 @@
     {
       "version": "2.1.235",
       "date": "2026-08-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "2.1.236",
+      "date": "2026-08-19",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "2.1.237",
+      "date": "2026-08-19",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "2.1.238",
+      "date": "2026-08-20",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "2.1.239",
+      "date": "2026-08-21",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "2.1.240",
+      "date": "2026-08-22",
       "verified": {
         "linux-auth": true,
         "macos-auth": true
