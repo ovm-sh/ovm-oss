@@ -130,6 +130,25 @@ if [ "$SRC_CHANGES" -gt 5 ] && [ "$HAS_BACKLOG" -eq 0 ]; then
     echo "REMINDER: Large change — check if any BACKLOG.md items should be updated."
 fi
 
+# Long-lived local file servers. Nothing ends a bare `python3 -m http.server`,
+# and low ports stay off the port panel, so leaked site previews accumulated
+# unseen for weeks. Commits are frequent, so naming a stray here surfaces it
+# within minutes of it being forgotten. Warn only — a stray blocks nothing.
+if command -v pgrep >/dev/null 2>&1; then
+    STRAY_SERVERS=$(pgrep -u "$(id -u)" -f 'http\.server' 2>/dev/null || true)
+    for stray_pid in $STRAY_SERVERS; do
+        # etime is [DD-]HH:MM:SS or MM:SS — an hours or days field means this
+        # one outlived whatever task started it.
+        stray_age=$(ps -o etime= -p "$stray_pid" 2>/dev/null | tr -d ' ' || true)
+        case "$stray_age" in
+            *-* | *:*:*)
+                echo "REMINDER: http.server pid $stray_pid has been running $stray_age — a leaked preview?"
+                echo "          Find it: bash scripts/preview-site.sh --status"
+                ;;
+        esac
+    done
+fi
+
 if [ -n "$NOT_RUN" ]; then
     echo "[8/8] Pre-commit INCOMPLETE — checks that did NOT RUN:$NOT_RUN"
     echo "      They did not pass; they never executed. CI runs them all."

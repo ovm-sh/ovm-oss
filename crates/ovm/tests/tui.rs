@@ -90,7 +90,7 @@ fn install_codex_version(home: &Path, version: &str) -> MockEnv {
     let asset_size = tarball.len();
 
     releases_server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/{version}/{asset_name}").as_str())
         .with_status(200)
         .with_body(tarball)
         .create();

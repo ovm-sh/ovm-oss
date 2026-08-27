@@ -24,6 +24,57 @@ const ROW_PREFIX_WIDTH: usize = 3;
 // Must match the column widths in `VersionEntry::display_line`.
 const TABLE_FIXED_WIDTH: usize = 47;
 
+/// Where a picker's keystrokes come from.
+///
+/// The tour performs the switch gesture on the reader's behalf: they answer
+/// one question and OVM drives the picker, so they watch the navigation they
+/// would otherwise have to be told about in prose. The picker still renders
+/// every frame it always renders — only the input changes — which is what
+/// makes the demonstration honest rather than a mock-up of one.
+///
+/// Each scripted key carries the pause that PRECEDES it, because the pause is
+/// the point: a gesture replayed at machine speed teaches nothing.
+pub(crate) enum Keys {
+    /// A person is driving. Read the real terminal.
+    User,
+    /// A scripted gesture, played back one key at a time.
+    Guided(std::collections::VecDeque<(Duration, Key)>),
+}
+
+impl Keys {
+    pub(crate) fn guided(steps: impl IntoIterator<Item = (Duration, Key)>) -> Self {
+        Keys::Guided(steps.into_iter().collect())
+    }
+
+    /// The next scripted step, if the script has one left.
+    ///
+    /// Separate from [`Keys::next`] so the sequencing is testable without a
+    /// terminal and without actually sleeping through a demonstration.
+    fn scripted(&mut self) -> Option<(Duration, Key)> {
+        match self {
+            Keys::User => None,
+            Keys::Guided(steps) => steps.pop_front(),
+        }
+    }
+
+    /// The next keystroke.
+    ///
+    /// A script that runs dry falls back to the terminal rather than quitting
+    /// or deadlocking: a gesture that reaches a prompt its author did not
+    /// anticipate hands control back to the reader, who is sitting right there.
+    fn next(&mut self, term: &Term) -> Result<Key> {
+        match self.scripted() {
+            Some((pause, key)) => {
+                std::thread::sleep(pause);
+                Ok(key)
+            }
+            None => term
+                .read_key()
+                .map_err(|e| OvmError::Message(e.to_string())),
+        }
+    }
+}
+
 /// Outcome of a single pass through the version picker.
 pub(super) enum SelectAction {
     Select(usize),
@@ -124,6 +175,10 @@ fn product_picker_entries() -> Vec<(String, ProductPick)> {
 
 /// Pick a product interactively. Returns None if the user pressed Esc.
 pub fn pick_product() -> Result<Option<ProductPick>> {
+    pick_product_with(&mut Keys::User)
+}
+
+pub(crate) fn pick_product_with(keys: &mut Keys) -> Result<Option<ProductPick>> {
     let term = Term::stderr();
     let entries = product_picker_entries();
     let items: Vec<&str> = entries.iter().map(|(label, _)| label.as_str()).collect();
@@ -162,9 +217,7 @@ pub fn pick_product() -> Result<Option<ProductPick>> {
                 .map_err(|e| OvmError::Message(e.to_string()))?;
         }
 
-        let key = term
-            .read_key()
-            .map_err(|e| OvmError::Message(e.to_string()))?;
+        let key = keys.next(&term)?;
 
         screen.clear_frame(lines.len())?;
 
@@ -852,6 +905,7 @@ fn wait_for_input(
     term: &Term,
     refresh: &Option<RefreshHandle>,
     live_deadline: Instant,
+    keys: &mut Keys,
 ) -> Result<Wait> {
     loop {
         if let Some(handle) = refresh {
@@ -871,9 +925,7 @@ fn wait_for_input(
                 }
             }
         }
-        let key = term
-            .read_key()
-            .map_err(|e| OvmError::Message(e.to_string()))?;
+        let key = keys.next(term)?;
         return Ok(Wait::Key(key));
     }
 }
@@ -884,6 +936,7 @@ fn wait_for_input(
 pub(super) fn interactive_select(
     entries: &mut Vec<VersionEntry>,
     session: &mut PickerSession,
+    keys: &mut Keys,
 ) -> Result<SelectAction> {
     let term = Term::stderr();
     let visible = 15; // max visible rows
@@ -953,7 +1006,7 @@ pub(super) fn interactive_select(
                 .map_err(|e| OvmError::Message(e.to_string()))?;
         }
 
-        let event = wait_for_input(&term, &session.refresh, live_deadline)?;
+        let event = wait_for_input(&term, &session.refresh, live_deadline, keys)?;
         screen.clear_frame(lines.len())?;
 
         let key = match event {
@@ -1329,8 +1382,8 @@ mod tests {
     use super::{
         build_rows, first_selectable, is_codex_prerelease, product_picker_entries, relative_time,
         render_self_row, render_version_picker_frame, self_menu_rows, status_line, DownloadJobs,
-        PickerSession, ProductPick, RefreshHandle, Row, SelfMenuRow, SelfMenuState,
-        VersionPickerFrame,
+        Duration, Key, Keys, PickerSession, ProductPick, RefreshHandle, Row, SelfMenuRow,
+        SelfMenuState, VersionPickerFrame,
     };
     use crate::commands::select::{SelfVersionRow, VersionEntry};
     use crate::product::Product;
@@ -1843,5 +1896,40 @@ mod tests {
         assert_eq!(relative_time(now.saturating_sub(5 * 60)), "5m ago");
         assert_eq!(relative_time(now.saturating_sub(3 * 3600)), "3h ago");
         assert_eq!(relative_time(now.saturating_sub(2 * 86_400)), "2d ago");
+    }
+
+    /// The tour's gesture is a SEQUENCE — Claude, then `b`, then Enter. A
+    /// queue that reordered or dropped a step would drive the picker
+    /// somewhere the narration says it did not go.
+    #[test]
+    fn a_guided_script_plays_its_keys_in_order() {
+        let beat = Duration::from_millis(10);
+        let mut keys = Keys::guided([
+            (beat, Key::Enter),
+            (beat, Key::Char('b')),
+            (beat, Key::Enter),
+        ]);
+
+        assert_eq!(keys.scripted().map(|(_, k)| k), Some(Key::Enter));
+        assert_eq!(keys.scripted().map(|(_, k)| k), Some(Key::Char('b')));
+        assert_eq!(keys.scripted().map(|(_, k)| k), Some(Key::Enter));
+    }
+
+    /// A script that runs dry must hand the keyboard back, not repeat its last
+    /// key forever: `next` falls through to the terminal only when `scripted`
+    /// says there is nothing left.
+    #[test]
+    fn a_spent_script_yields_nothing_further() {
+        let mut keys = Keys::guided([(Duration::from_millis(0), Key::Enter)]);
+        assert!(keys.scripted().is_some());
+        assert!(keys.scripted().is_none());
+        assert!(keys.scripted().is_none());
+    }
+
+    /// A picker driven by a person has no script at all — the same call must
+    /// report "nothing scripted" so `next` reads the terminal.
+    #[test]
+    fn a_user_driven_picker_is_never_scripted() {
+        assert!(Keys::User.scripted().is_none());
     }
 }

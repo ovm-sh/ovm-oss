@@ -141,7 +141,11 @@ pub fn download_release(version: &str, bundle_dir: &Path) -> Result<ReleaseInsta
             (Some(release), Some(asset)) => (
                 release.tag_name.clone(),
                 asset.name.clone(),
-                asset.browser_download_url.clone(),
+                // Built, not taken: release metadata names the assets a
+                // release publishes, it does not choose where the bytes come
+                // from. `fetch_release` has already bound the tag, so this is
+                // the same URL the metadata-less path below would use.
+                direct_release_asset_url(&release.tag_name, &asset.name),
                 Some(crate::sources::codex::declared_asset_size(asset)?),
             ),
             _ => {
@@ -230,6 +234,29 @@ fn format_tag(version: &str) -> String {
 }
 
 fn fetch_release(version: &str) -> Result<Release> {
+    let release = fetch_release_metadata(version)?;
+    require_requested_tag(version, &release)?;
+    Ok(release)
+}
+
+/// A release must be the one that was asked for. The tag decides the download
+/// URL and is recorded as the installed version, so metadata answering a
+/// different tag would install one release's bytes under another's name.
+/// `latest` is the one query with no tag to check against.
+fn require_requested_tag(version: &str, release: &Release) -> Result<()> {
+    if version == "latest" || release.tag_name == version {
+        return Ok(());
+    }
+    Err(OvmError::DownloadFailed {
+        url: format!("{}/tags/{version}", releases_api_base()),
+        message: format!(
+            "release metadata is for `{}`, not the requested `{version}`",
+            release.tag_name
+        ),
+    })
+}
+
+fn fetch_release_metadata(version: &str) -> Result<Release> {
     let path = if version == "latest" {
         "latest".to_string()
     } else {
@@ -354,7 +381,14 @@ fn published_checksum(release: Option<&Release>, tag: &str, asset_name: &str) ->
             .iter()
             .find(|asset| asset.name == CHECKSUMS_ASSET)
         {
-            Some(asset) => fetch_published_checksum(&asset.browser_download_url, asset_name, true),
+            // The asset entry says a manifest exists; where it lives is still
+            // ours to decide. A digest fetched from a metadata-supplied URL
+            // would only vouch for bytes that same metadata chose.
+            Some(_) => fetch_published_checksum(
+                &direct_release_asset_url(tag, CHECKSUMS_ASSET),
+                asset_name,
+                true,
+            ),
             None => PublishedChecksum::NotPublished,
         },
         None => fetch_published_checksum(
@@ -690,8 +724,9 @@ fn extract_full_archive(archive_path: &Path, dest: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        download_release, extract_full_archive, format_tag, get_latest_npm_release_version_at,
-        get_latest_version, list_remote_versions_at, manifest_entry, ManifestEntry,
+        direct_release_asset_url, download_release, extract_full_archive, fetch_release,
+        format_tag, get_latest_npm_release_version_at, get_latest_version, list_remote_versions_at,
+        manifest_entry, ManifestEntry,
     };
     use flate2::write::GzEncoder;
     use flate2::Compression;
@@ -701,6 +736,44 @@ mod tests {
     use tempfile::tempdir;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The asset URL is ovm's to build, not the metadata's to supply. The
+    /// digest manifest too: a checksum fetched from a metadata-supplied URL
+    /// would only vouch for bytes that same metadata chose.
+    #[test]
+    fn the_asset_url_is_built_from_the_tag_and_never_taken_from_the_metadata() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::remove_var("OVM_PI_RELEASES_URL");
+
+        assert_eq!(
+            direct_release_asset_url("v0.67.6", "pi-bundle.tar.gz"),
+            "https://github.com/earendil-works/pi/releases/download/v0.67.6/pi-bundle.tar.gz"
+        );
+    }
+
+    /// A release must be the one that was asked for: the tag decides the
+    /// download URL and is recorded as the installed version.
+    #[test]
+    fn metadata_answering_a_different_tag_is_refused() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/tags/v0.67.6")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"tag_name":"v9.9.9","assets":[]}"#)
+            .create();
+
+        std::env::set_var("OVM_PI_RELEASES_URL", server.url());
+        let result = fetch_release("v0.67.6");
+        std::env::remove_var("OVM_PI_RELEASES_URL");
+
+        let message = result
+            .expect_err("a release for another tag must not be accepted")
+            .to_string();
+        assert!(message.contains("v9.9.9"), "{message}");
+        assert!(message.contains("v0.67.6"), "{message}");
+    }
 
     /// Pi paginates the same way Codex does and shares the same IP quota, so it
     /// needs the same remedy in the same place.

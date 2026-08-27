@@ -80,7 +80,7 @@ fn setup_pi_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, String)
 
     // Asset download endpoint
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/v{version}/{asset_name}").as_str())
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
         .with_body(asset_body)
@@ -138,7 +138,7 @@ fn setup_pi_update_mock(
     server
         .mock(
             "GET",
-            format!("/assets/{old_version}/{asset_name}").as_str(),
+            format!("/download/v{old_version}/{asset_name}").as_str(),
         )
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
@@ -150,7 +150,7 @@ fn setup_pi_update_mock(
     server
         .mock(
             "GET",
-            format!("/assets/{latest_version}/{asset_name}").as_str(),
+            format!("/download/v{latest_version}/{asset_name}").as_str(),
         )
         .with_status(200)
         .with_header("content-type", "application/octet-stream")

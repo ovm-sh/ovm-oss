@@ -107,9 +107,10 @@ fn setup_codex_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, Stri
     let asset_body = make_tarball(asset_entry, binary_contents);
     let asset_size = asset_body.len();
 
-    // /assets/<asset_name> serves the tarball bytes
+    // The asset lives at the path ovm builds from the tag and the name it
+    // expects — not at whatever the metadata's URL says.
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/{version}/{asset_name}").as_str())
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
         .with_body(asset_body)
@@ -289,13 +290,16 @@ fn setup_codex_mock_with_sidecar(
     let sidecar_size = sidecar_body.len();
 
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/{version}/{asset_name}").as_str())
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
         .with_body(asset_body)
         .create();
     server
-        .mock("GET", format!("/assets/{sidecar_asset_name}").as_str())
+        .mock(
+            "GET",
+            format!("/download/{version}/{sidecar_asset_name}").as_str(),
+        )
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
         .with_body(sidecar_body)
@@ -519,6 +523,7 @@ fn concurrent_codex_install_waits_and_reuses_single_download() {
     let address = listener.local_addr().expect("server address");
     let base_url = format!("http://{address}");
     let asset_url = format!("{base_url}/assets/{asset_name}");
+    let asset_path = format!("/download/{version}/{asset_name}");
     let release_body = format!(
         r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#
     );
@@ -553,7 +558,7 @@ fn concurrent_codex_install_waits_and_reuses_single_download() {
             }
 
             assert!(
-                request.starts_with(&format!("GET /assets/{asset_name} ")),
+                request.starts_with(&format!("GET {asset_path} ")),
                 "unexpected request: {request}"
             );
             asset_requests_for_server.fetch_add(1, Ordering::SeqCst);
@@ -659,16 +664,15 @@ fn setup_codex_mock_two_versions(
     let asset_body = make_tarball(asset_entry, binary_contents);
     let asset_size = asset_body.len();
 
-    // Serve the same tarball bytes for every asset fetch in this test.
-    server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
-        .with_status(200)
-        .with_header("content-type", "application/octet-stream")
-        .with_body(asset_body)
-        .expect_at_least(1)
-        .create();
-
     for version in [version_a, version_b] {
+        // Each tag has its own asset path, so the same bytes are served twice.
+        server
+            .mock("GET", format!("/download/{version}/{asset_name}").as_str())
+            .with_status(200)
+            .with_header("content-type", "application/octet-stream")
+            .with_body(asset_body.clone())
+            .expect_at_least(1)
+            .create();
         let asset_url = format!("{}/assets/{asset_name}", server.url());
         let release_json = format!(
             r#"{{"tag_name":"{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,

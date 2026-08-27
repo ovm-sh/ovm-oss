@@ -2,9 +2,9 @@
   "product": "cliproxyapi",
   "display_name": "CLIProxyAPI",
   "source": "github:router-for-me/CLIProxyAPI",
-  "updated_at": "2026-08-22T15:06:50Z",
+  "updated_at": "2026-08-27T12:45:32Z",
   "dist_tags": {
-    "latest": "7.2.140"
+    "latest": "7.2.143"
   },
   "versions": [
     {
@@ -2842,6 +2842,30 @@
     {
       "version": "7.2.140",
       "date": "2026-08-22",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.141",
+      "date": "2026-08-24",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.142",
+      "date": "2026-08-25",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.143",
+      "date": "2026-08-26",
       "verified": {
         "linux-auth": true,
         "macos-auth": true

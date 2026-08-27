@@ -69,6 +69,59 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// The built `ovm` binary, checked to actually be there.
+///
+/// `cargo_bin!` hands back a path, not a guarantee. If the artifact has been
+/// removed while cargo still considers it fresh, cargo skips the relink and
+/// every copy below fails with a bare `NotFound` that names neither the file
+/// nor the remedy — which reads like a product failure and is not one. Say
+/// what is missing, once, out loud. (Seen locally 2026-08-25; CI has not hit
+/// it.)
+///
+/// The remedy depends on WHY it is missing, and the two causes want opposite
+/// commands. A deleted artifact wants a rebuild. A MOVED CHECKOUT wants a
+/// clean: `cargo_bin!` bakes an absolute path in at compile time, so a
+/// relocated repository hands these tests a path under the old location,
+/// where nothing will ever exist again — and `cargo build` cheerfully
+/// succeeds without fixing it, because the artifact it builds is not the
+/// artifact the macro is pointing at. Telling that user to rebuild sends them
+/// in a circle, so compare the baked path against this checkout and say which
+/// case they are in. (Second cause seen 2026-08-26, after the repo moved.)
+fn built_ovm() -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(assert_cmd::cargo::cargo_bin!("ovm"));
+    if path.exists() {
+        return path;
+    }
+
+    // `CARGO_MANIFEST_DIR` is where this crate lives NOW; the baked path is
+    // where it lived when the test binary was compiled. Different roots mean
+    // the checkout moved.
+    let moved = !path.starts_with(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .find(|dir| dir.join("Cargo.lock").exists())
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+
+    if moved {
+        panic!(
+            "the built ovm binary is missing at {} — that path is outside this \
+             checkout, so the repository was MOVED after these tests were last \
+             compiled and cargo baked the old location in. A rebuild will not \
+             fix it: run `cargo clean -p ovm`, then re-run. This is a stale \
+             build artifact, not a failing behaviour.",
+            path.display()
+        );
+    }
+
+    panic!(
+        "the built ovm binary is missing at {} — cargo believes it is fresh but \
+         nothing is on disk. Rebuild it (`cargo build -p ovm`) and re-run: this \
+         is a stale build artifact, not a failing behaviour.",
+        path.display()
+    );
+}
+
 #[test]
 fn control_plane_switches_old_versions_and_can_always_rollback() {
     let temp = tempdir().unwrap();
@@ -78,8 +131,8 @@ fn control_plane_switches_old_versions_and_can_always_rollback() {
     fs::create_dir_all(&bin).unwrap();
     fs::create_dir_all(&self_root).unwrap();
 
-    let built_ovm = assert_cmd::cargo::cargo_bin!("ovm");
-    fs::copy(built_ovm, bin.join("ovm")).unwrap();
+    let built_ovm = built_ovm();
+    fs::copy(&built_ovm, bin.join("ovm")).unwrap();
     fs::write(
         self_root.join("launcher-dir"),
         format!("{}\n", bin.display()),
@@ -96,7 +149,7 @@ fn control_plane_switches_old_versions_and_can_always_rollback() {
         home,
         "new",
         MAIN_ONLY_MANIFEST,
-        &fs::read(built_ovm).unwrap(),
+        &fs::read(&built_ovm).unwrap(),
     );
     symlink(self_root.join("versions/old"), self_root.join("current")).unwrap();
     symlink("ovm", bin.join("ovm-side")).unwrap();
@@ -245,10 +298,10 @@ fn direct_update_downloads_verifies_and_activates_release() {
     let self_root = home.join(".ovm/self");
     fs::create_dir_all(&bin).unwrap();
 
-    let built_ovm = assert_cmd::cargo::cargo_bin!("ovm");
-    fs::copy(built_ovm, bin.join("ovm")).unwrap();
+    let built_ovm = built_ovm();
+    fs::copy(&built_ovm, bin.join("ovm")).unwrap();
     let archive_path = temp.path().join("release.tar.gz");
-    write_release_archive(&archive_path, &fs::read(built_ovm).unwrap());
+    write_release_archive(&archive_path, &fs::read(&built_ovm).unwrap());
     let archive = fs::read(&archive_path).unwrap();
     let digest = hex_digest(&archive);
     let archive_name = format!("ovm-{}.tar.gz", target_triple());
@@ -314,7 +367,7 @@ fn direct_update_downloads_verifies_and_activates_release() {
         home,
         "9.9.8",
         MAIN_ONLY_MANIFEST,
-        &fs::read(built_ovm).unwrap(),
+        &fs::read(&built_ovm).unwrap(),
     );
     symlink(self_root.join("versions/9.9.8"), self_root.join("previous")).unwrap();
     write_executable(

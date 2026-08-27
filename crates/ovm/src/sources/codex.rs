@@ -9,6 +9,12 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_RELEASES_API_BASE: &str = "https://api.github.com/repos/openai/codex/releases";
 const CODEX_NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@openai/codex";
+/// Where Codex release assets are served from. Pinned: the release metadata
+/// names assets, it does not choose the repository they come from.
+const CODEX_RELEASE_DOWNLOAD_BASE: &str = "https://github.com/openai/codex/releases";
+/// Test-only seam for the asset host, kept separate from the metadata
+/// overrides so neither of those can relocate the bytes on its own.
+const CODEX_DOWNLOAD_URL_ENV: &str = "OVM_CODEX_DOWNLOAD_URL";
 
 /// Helper binaries that newer Codex releases ship alongside `codex` and spawn
 /// at runtime from the same directory (0.144.0 introduced
@@ -52,6 +58,41 @@ fn releases_api_base() -> String {
         .unwrap_or_else(|_| DEFAULT_RELEASES_API_BASE.to_string())
 }
 
+/// Where a Codex release asset actually lives.
+///
+/// Built from the pinned repository, the release tag, and an asset name ovm
+/// chose itself (`expected_asset_names` / [`SIDECAR_BINARIES`]) — never from
+/// `browser_download_url`. Release metadata may say *which* assets a release
+/// publishes; it does not get to say where the bytes come from. Without this,
+/// a metadata response that satisfied the host allowlist could serve the
+/// install from any repository on GitHub.
+fn release_asset_url(tag: &str, file_name: &str) -> String {
+    let base = release_download_base();
+    format!("{}/download/{tag}/{file_name}", base.trim_end_matches('/'))
+}
+
+/// Base for release *asset* URLs.
+///
+/// `OVM_REGISTRY_BASE_URL` is deliberately not consulted. Its job is to say
+/// where release *metadata* is read from, and a stamp that could also name its
+/// own download host would hand back exactly the trust this pin removes. A
+/// stamped-path test that needs its bytes from a mock says so with
+/// `OVM_CODEX_DOWNLOAD_URL`, which exists for that and nothing else. In
+/// production no override is set and the base is the pinned repository.
+fn release_download_base() -> String {
+    if let Ok(base) = std::env::var(CODEX_DOWNLOAD_URL_ENV) {
+        if !base.is_empty() {
+            return base;
+        }
+    }
+    let api_base = releases_api_base();
+    if api_base == DEFAULT_RELEASES_API_BASE {
+        CODEX_RELEASE_DOWNLOAD_BASE.to_string()
+    } else {
+        api_base
+    }
+}
+
 fn npm_registry_url() -> String {
     std::env::var("OVM_CODEX_NPM_REGISTRY_URL")
         .unwrap_or_else(|_| CODEX_NPM_REGISTRY_URL.to_string())
@@ -66,6 +107,12 @@ pub struct Release {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReleaseAsset {
     pub name: String,
+    /// Parsed because the API and our stamped manifests both carry it —
+    /// deliberately never followed. Asset URLs are built by
+    /// [`release_asset_url`] from the pinned repository and the release tag,
+    /// so release metadata cannot choose where an install's bytes come from.
+    /// Reading this field again would undo that.
+    #[allow(dead_code)]
     pub browser_download_url: String,
     /// Byte size the releases API records for this asset. It is a second,
     /// independently-fetched declaration of how long the body must be, so a
@@ -265,7 +312,7 @@ fn install_github_release(
 
     let archive_path = dest.with_extension("tar.gz");
     let asset_name = asset.name.clone();
-    let asset_url = asset.browser_download_url.clone();
+    let asset_url = release_asset_url(&release.tag_name, &asset_name);
     let asset_size = declared_asset_size(asset)?;
     let archive_sha256 =
         download_and_extract_single_binary(&asset_url, &archive_path, dest, Some(asset_size))?;
@@ -332,6 +379,32 @@ fn download_npm_release(version: &str, dest: &Path) -> Result<ReleaseInstallMeta
 }
 
 fn fetch_release(version: &str) -> Result<Release> {
+    let release = fetch_release_metadata(version)?;
+    require_requested_tag(version, &release)?;
+    Ok(release)
+}
+
+/// A release must be the one that was asked for.
+///
+/// The tag decides the download URL and is recorded as the installed version,
+/// so metadata answering a different tag would install one release's bytes
+/// under another's name — and `ovm list` would then report a version that is
+/// not what is on disk. `latest` is the one query with no tag to check
+/// against: its answer *is* the tag, by definition.
+fn require_requested_tag(version: &str, release: &Release) -> Result<()> {
+    if version == "latest" || release.tag_name == version {
+        return Ok(());
+    }
+    Err(OvmError::DownloadFailed {
+        url: format!("{}/tags/{version}", releases_api_base()),
+        message: format!(
+            "release metadata is for `{}`, not the requested `{version}`",
+            release.tag_name
+        ),
+    })
+}
+
+fn fetch_release_metadata(version: &str) -> Result<Release> {
     // A stamped release answers this without spending GitHub's per-IP API
     // quota (60/hour unauthenticated). `latest` is deliberately never served
     // from the registry: it is the one query whose answer moves, and a stale
@@ -475,6 +548,7 @@ fn download_asset(url: &str, dest: &Path, metadata_size: Option<u64>) -> Result<
     // than the GitHub-releases override; production metadata must never resolve
     // to loopback because neither override is normally present.
     let allow_loopback = super::test_override_active("OVM_CODEX_RELEASES_URL")
+        || super::test_override_active(CODEX_DOWNLOAD_URL_ENV)
         || super::test_override_active("OVM_REGISTRY_BASE_URL");
     super::validate_download_url(url, super::GITHUB_DOWNLOAD_HOSTS, allow_loopback)?;
     let mut response = release_asset_client()?.get(url).send()?;
@@ -743,10 +817,11 @@ fn install_github_sidecars(release: &Release, version: &str, dest: &Path) -> Res
         };
         let sidecar_dest = bin_dir.join(sidecar);
         let archive_path = sidecar_dest.with_extension("tar.gz");
+        let asset_url = release_asset_url(&release.tag_name, &asset_name);
         let install_result = declared_asset_size(asset)
             .and_then(|size| {
                 download_and_extract_single_binary(
-                    &asset.browser_download_url,
+                    &asset_url,
                     &archive_path,
                     &sidecar_dest,
                     Some(size),
@@ -968,8 +1043,9 @@ mod tests {
         download_github_release, download_release, expected_asset_names, extract_npm_archive,
         extract_release_archive, fetch_release, get_latest_npm_release_version_at,
         install_github_sidecars, is_macos_revoked, latest_release_version, list_remote_versions_at,
-        refuse_macos_revoked, release_target_triple, select_release_asset, Release, ReleaseAsset,
-        ALLOW_REVOKED_ENV, MACOS_REVOCATION_FLOOR,
+        refuse_macos_revoked, release_asset_url, release_target_triple, select_release_asset,
+        Release, ReleaseAsset, ALLOW_REVOKED_ENV, CODEX_DOWNLOAD_URL_ENV,
+        CODEX_RELEASE_DOWNLOAD_BASE, MACOS_REVOCATION_FLOOR,
     };
     use flate2::write::GzEncoder;
     use flate2::Compression;
@@ -1119,6 +1195,87 @@ mod tests {
         assert_eq!(release.assets[0].name, "codex-from-registry.tar.gz");
         assert_eq!(release.assets[0].size, Some(1234));
         manifest.assert();
+    }
+
+    /// The asset URL is ovm's to build, not the metadata's to supply. Release
+    /// metadata says which assets a release publishes; if it also chose where
+    /// they came from, a response that merely satisfied the host allowlist
+    /// could serve the install from any repository on GitHub.
+    #[test]
+    fn the_asset_url_is_built_from_the_tag_and_never_taken_from_the_metadata() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+        std::env::remove_var("OVM_REGISTRY_BASE_URL");
+        std::env::remove_var(CODEX_DOWNLOAD_URL_ENV);
+
+        let url = release_asset_url("rust-v0.148.0", "codex-aarch64-apple-darwin.tar.gz");
+
+        assert_eq!(
+            url,
+            format!("{CODEX_RELEASE_DOWNLOAD_BASE}/download/rust-v0.148.0/codex-aarch64-apple-darwin.tar.gz")
+        );
+        assert!(url.starts_with("https://github.com/openai/codex/"), "{url}");
+    }
+
+    /// The registry override says where release *metadata* is read from. It
+    /// must not also relocate the bytes: a stamp that could name its own
+    /// download host would hand back exactly the trust this pin removed.
+    #[test]
+    fn the_registry_override_cannot_relocate_the_download() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+        std::env::remove_var(CODEX_DOWNLOAD_URL_ENV);
+        std::env::set_var("OVM_REGISTRY_BASE_URL", "http://127.0.0.1:1");
+
+        let url = release_asset_url("rust-v0.148.0", "codex-aarch64-apple-darwin.tar.gz");
+        std::env::remove_var("OVM_REGISTRY_BASE_URL");
+
+        assert!(url.starts_with(CODEX_RELEASE_DOWNLOAD_BASE), "{url}");
+    }
+
+    /// A release must be the one that was asked for. The tag becomes the
+    /// download URL and is recorded as the installed version, so metadata
+    /// answering a different tag would put one release's bytes on disk under
+    /// another release's name.
+    #[test]
+    fn metadata_answering_a_different_tag_is_refused() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/tags/rust-v0.130.0")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"tag_name":"rust-v0.999.0","assets":[]}"#)
+            .create();
+
+        std::env::set_var("OVM_CODEX_RELEASES_URL", server.url());
+        let result = fetch_release("rust-v0.130.0");
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+        let message = result
+            .expect_err("a release for another tag must not be accepted")
+            .to_string();
+        assert!(message.contains("rust-v0.999.0"), "{message}");
+        assert!(message.contains("rust-v0.130.0"), "{message}");
+    }
+
+    /// The same check must not reject `latest`, whose answer is the tag.
+    #[test]
+    fn latest_accepts_whatever_tag_it_resolves_to() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/latest")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"tag_name":"rust-v0.999.0","assets":[]}"#)
+            .create();
+
+        std::env::set_var("OVM_CODEX_RELEASES_URL", server.url());
+        let result = fetch_release("latest");
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
+
+        assert_eq!(result.expect("latest resolves").tag_name, "rust-v0.999.0");
     }
 
     /// An unstamped version must still install. The registry is an
@@ -1714,9 +1871,11 @@ mod tests {
     ) -> (mockito::ServerGuard, Vec<mockito::Mock>) {
         let mut server = Server::new();
         let asset_name = expected_asset_names()[0];
-        let base = server.url();
+        // The metadata URL is deliberately unroutable: the download must come
+        // from the tag-and-name path ovm builds, not from anything the release
+        // metadata points at.
         let release_json = format!(
-            r#"{{"tag_name":"rust-v0.130.0","assets":[{{"name":"{asset_name}","browser_download_url":"{base}/assets/{asset_name}"{size_field}}}]}}"#
+            r#"{{"tag_name":"rust-v0.130.0","assets":[{{"name":"{asset_name}","browser_download_url":"https://example.invalid/decoy.tar.gz"{size_field}}}]}}"#
         );
         let mocks = vec![
             server
@@ -1726,7 +1885,10 @@ mod tests {
                 .with_body(release_json)
                 .create(),
             server
-                .mock("GET", format!("/assets/{asset_name}").as_str())
+                .mock(
+                    "GET",
+                    format!("/download/rust-v0.130.0/{asset_name}").as_str(),
+                )
                 .with_status(200)
                 .with_header("content-type", "application/octet-stream")
                 .with_body(body)
@@ -1964,11 +2126,11 @@ mod tests {
         );
 
         let mut assets = vec![format!(
-            r#"{{"name":"{main_asset}","browser_download_url":"{base}/assets/{main_asset}","size":{}}}"#,
+            r#"{{"name":"{main_asset}","browser_download_url":"https://example.invalid/decoy.tar.gz","size":{}}}"#,
             main_body.len()
         )];
         let mut mocks = vec![server
-            .mock("GET", format!("/assets/{main_asset}").as_str())
+            .mock("GET", format!("/download/{version}/{main_asset}").as_str())
             .with_status(if main_asset_ok { 200 } else { 500 })
             .with_header("content-type", "application/octet-stream")
             .with_body(if main_asset_ok {
@@ -1980,12 +2142,12 @@ mod tests {
         for triple in sidecar_triples {
             let name = format!("codex-code-mode-host-{triple}.tar.gz");
             assets.push(format!(
-                r#"{{"name":"{name}","browser_download_url":"{base}/assets/{name}","size":{}}}"#,
+                r#"{{"name":"{name}","browser_download_url":"https://example.invalid/decoy.tar.gz","size":{}}}"#,
                 sidecar_body.len()
             ));
             mocks.push(
                 server
-                    .mock("GET", format!("/assets/{name}").as_str())
+                    .mock("GET", format!("/download/{version}/{name}").as_str())
                     .with_status(200)
                     .with_header("content-type", "application/octet-stream")
                     .with_body(sidecar_body.clone())

@@ -25,9 +25,12 @@ use console::style;
 use std::io::{self, IsTerminal, Write};
 use std::process::Command;
 
-/// The last release whose `/buddy` still hatches. Installed ephemerally for
-/// the hatch act — launched via `--ovm-version`, so the user's selected
-/// version never moves.
+/// The last release whose `/buddy` still hatches.
+///
+/// The hatch act SWITCHES to it rather than borrowing it for one launch: the
+/// act exists to teach `ovm switch`, and a gesture that silently undoes itself
+/// afterwards would teach the wrong thing. The reader is told how to come back
+/// (`ovm cc latest`) once they have met their buddy.
 const HATCH_VERSION: &str = "2.1.96";
 
 /// The story centres its 62-column prose; act output that sits flush-left
@@ -139,7 +142,7 @@ fn choose_path() -> Result<Path> {
         }
     }
     eprintln!();
-    say!("Either way the tour sets up Claude Code, Codex, and claudex (Pi optional).");
+    say!("Hatching sets up Claude Code, Codex, and claudex (Pi optional) — with or without the story.");
     say!(
         "The story is why this exists — two cats and an echo. {} skips straight to setup.",
         style("n").bold()
@@ -297,6 +300,16 @@ fn act_claude_story() -> Result<bool> {
             "  command away, anytime: {}",
             style(format!("ovm cc --ovm-version {HATCH_VERSION}")).bold(),
         );
+        // Report it like every other act. This branch used to return in
+        // silence, so on a machine that already had Claude the ledger held no
+        // Claude act at all — and a missing act reads exactly like one that
+        // never ran, which is the confusion the events sink exists to remove.
+        // Only a re-run reaches here, so no fresh-machine test could see it.
+        event(
+            "install",
+            "ok",
+            &[("product", "claude"), ("version", &current)],
+        );
         return Ok(true);
     }
     if adopt_existing(&vm, Product::Claude) {
@@ -332,7 +345,7 @@ fn act_install_asked(product: Product, question: &str) -> Result<bool> {
     say!(
         "{} Skipped. Anytime: {}",
         style("→").dim(),
-        style(format!("ovm install {} latest", product.canonical_name())).bold(),
+        style(format!("ovm {} latest", product.shortest_alias())).bold(),
     );
     event(
         "install",
@@ -364,6 +377,15 @@ fn act_install(product: Product) -> bool {
         if adopt_existing(&vm, product) {
             return Ok(());
         }
+        // Same teaching move as the hatch act: show the command, then run it.
+        // A tour that installs things FOR you and never names the gesture
+        // leaves you dependent on the tour — the reader should walk away able
+        // to do this on a machine OVM has never seen.
+        say!(
+            "  {} {}",
+            style("$").dim(),
+            style(format!("ovm {} latest", product.shortest_alias())).bold()
+        );
         say!(
             "{} Installing {} (latest)…",
             style("→").dim(),
@@ -413,24 +435,59 @@ fn act_hatch() -> Result<bool> {
         "{} You have no buddy in your config — the window is still open.",
         style("→").dim()
     );
-    say!("  2.1.96 still hatches. It's a one-off launch of an old release");
-    say!("  (~190MB download); your current Claude Code selection stays put.");
+    say!(
+        "  {} still hatches (~190MB). Getting there is one gesture — and",
+        style(HATCH_VERSION).bold()
+    );
+    say!("  rather than describe it, OVM will do it once while you watch.");
     if !confirm_default_no("Hatch your own?")? {
         say!(
-            "{} Skipped. Anytime: {} then type {}",
+            "{} Skipped. Anytime: {} → Claude → {} for the versions that still have one.",
             style("→").dim(),
-            style(format!("ovm cc --ovm-version {HATCH_VERSION}")).bold(),
-            style("/buddy").bold(),
+            style("ovm switch").bold(),
+            style("b").bold(),
         );
         event("hatch", "skipped", &[]);
         return Ok(false);
     }
+
+    // The gesture, performed rather than described. Printing the command the
+    // way a shell would is the whole teaching move: what follows on screen is
+    // what `ovm switch` looks like when THEY run it, because it is the real
+    // picker with a scripted hand on the keys.
+    eprintln!();
+    say!(
+        "{} Watch — this is the gesture, and next time it is yours:",
+        style("→").dim()
+    );
+    eprintln!();
+    say!("  {} {}", style("$").dim(), style("ovm switch").bold());
+    std::thread::sleep(std::time::Duration::from_millis(1400));
+
+    let selected = super::select::run_guided_buddy_switch()?;
+    let Some(version) = selected else {
+        // They took the keyboard back and left the picker. Not a failure —
+        // just a tour that stops teaching and gets out of the way.
+        say!(
+            "{} Left the picker. Anytime: {} → Claude → {}.",
+            style("→").dim(),
+            style("ovm switch").bold(),
+            style("b").bold(),
+        );
+        event("hatch", "skipped", &[("reason", "left the picker")]);
+        return Ok(false);
+    };
+
     eprintln!();
     say!(
         "{} Inside, type {} — then {} brings you back here.",
         style("→").dim(),
         style("/buddy").bold(),
         style("/exit").bold(),
+    );
+    say!(
+        "  When you want the newest Claude Code again: {}",
+        style("ovm cc latest").bold()
     );
     eprintln!();
     // Let the instruction land before the takeover.
@@ -447,7 +504,7 @@ fn act_hatch() -> Result<bool> {
     // when the session ends.
     let own_exe = std::env::current_exe()?;
     let mut cmd = Command::new(own_exe);
-    cmd.args(["cc", "--ovm-version", HATCH_VERSION]);
+    cmd.args(["cc", "--ovm-version", &version]);
     let status = run_shielded(&mut cmd)?;
     if !status.success() {
         say!(
@@ -842,10 +899,7 @@ fn run_shielded(cmd: &mut Command) -> io::Result<std::process::ExitStatus> {
 fn confirm_default_yes(question: &str) -> Result<bool> {
     ask!("{} {question} [Y/n] ", style("›").yellow().bold());
     io::stderr().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+    read_confirm_key(true)
 }
 
 /// A prompt whose safe answer is "no": the optional acts must not run
@@ -853,9 +907,50 @@ fn confirm_default_yes(question: &str) -> Result<bool> {
 fn confirm_default_no(question: &str) -> Result<bool> {
     ask!("{} {question} [y/N] ", style("›").yellow().bold());
     io::stderr().flush()?;
+    read_confirm_key(false)
+}
+
+/// One keypress answers a [Y/n] prompt — `y`, `n`, or Enter for the default —
+/// with no Enter after it. The terminal is in raw mode for the read, so the
+/// answer is echoed here (with the newline that ends the prompt line);
+/// Escape reads as "no", and any other key is ignored rather than guessed at.
+/// Ctrl-C still quits: `read_key` restores the terminal and raises SIGINT on
+/// itself, so the tour ends exactly as it did from a line-reading prompt.
+///
+/// Falls back to reading a line whenever a keypress cannot be read. `read_key`
+/// reports a non-terminal stderr as `Key::Unknown` rather than as an error —
+/// it does not block, so ignoring it as "some other key" would spin forever on
+/// `ovm hatch 2>file`. The line path is what every prompt did before this, so
+/// a redirected or scripted run behaves exactly as it used to.
+fn read_confirm_key(default_yes: bool) -> Result<bool> {
+    let term = console::Term::stderr();
+    if !term.is_term() {
+        return read_confirm_line(default_yes);
+    }
+    loop {
+        let answer = match term
+            .read_key()
+            .map_err(|e| OvmError::Message(e.to_string()))?
+        {
+            console::Key::Enter => default_yes,
+            console::Key::Char('y' | 'Y') => true,
+            console::Key::Char('n' | 'N') | console::Key::Escape => false,
+            console::Key::Unknown => return read_confirm_line(default_yes),
+            _ => continue,
+        };
+        eprintln!("{}", if answer { "y" } else { "n" });
+        return Ok(answer);
+    }
+}
+
+/// The line-reading answer: `y`/`yes`, `n`/`no`, or Enter for the default.
+fn read_confirm_line(default_yes: bool) -> Result<bool> {
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     let answer = input.trim().to_lowercase();
+    if answer.is_empty() {
+        return Ok(default_yes);
+    }
     Ok(answer == "y" || answer == "yes")
 }
 

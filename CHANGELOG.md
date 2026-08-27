@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-27
+
+### Security
+
+- **Codex downloads are pinned to the repository and bound to the tag.** The
+  asset URL is now built from `openai/codex`, the release tag, and the asset
+  name OVM already expects, instead of being read out of the release metadata
+  — which was only checked against a host allowlist, so any repository on
+  GitHub satisfied it. Metadata that answers a tag other than the requested one
+  is refused rather than installed under the requested version's name; the
+  install then falls through to the npm path, which derives its own URL from
+  the version that was asked for, rather than failing outright.
+
+- **Pi downloads get the same treatment.** Both the bundle and the `SHA256SUMS`
+  manifest it is verified against are now fetched from URLs built from
+  `earendil-works/pi` and the release tag. A digest fetched from a
+  metadata-supplied URL could only vouch for bytes that same metadata chose.
+
+- **`OVM_REGISTRY_BASE_URL` can no longer relocate Codex release downloads.**
+  The override now says where registry metadata is read from and nothing
+  else; asset bytes always come from the pinned repository URL. A stamped
+  registry that named its own download host could previously still choose
+  where the bytes came from — the trust the tag pin was added to remove.
+
+### Added
+
+- **`ovm hatch` teaches the install command before running it.** The install
+  act prints `$ ovm cc latest` / `$ ovm cx latest` and then performs it, so a
+  hatch-taker leaves knowing how to install a version themselves, not just
+  that OVM can.
+
+- **`ovm hatch` performs the buddy switch through the real picker.** Instead
+  of describing a four-step gesture, the act drives `ovm switch` → Claude →
+  `b` → newest buddy version through the actual picker at a followable pace —
+  only the input is scripted, so what you watch is what you will do yourself.
+
+### Changed
+
+- **`ovm hatch` answers on the keypress.** Every `[Y/n]` question in the hatch
+  asked for a letter and then waited for Enter, a keystroke the answer does
+  not need. `y` and `n` now answer immediately; Enter alone still takes the
+  default and Escape reads as no. A redirected run still reads a whole line,
+  so scripts behave as before.
+
+- **The hatch says what it does before offering the story.** The opening line
+  read "Either way the tour sets up Claude Code, Codex, and claudex" — "either
+  way" pointing at a fork the reader had not been offered yet, so the first
+  screen began mid-sentence, and it still called itself the tour.
+
+### Fixed
+
+- **cmux per-session shims are no longer read as unmanaged installs.** cmux
+  prepends a per-session shim directory to `PATH` in its terminals; PATH
+  discovery treated that shim as a foreign install, so `ovm install claude`
+  inside cmux warned it "may shadow the managed install" and could even try
+  to adopt the shim. Candidates under a `cmux-cli-shims` directory are
+  skipped.
+
+- **An OVM launcher belonging to another home is never adopted.** "Managed" was
+  judged against the running process's `$HOME/.ovm`, so a launcher under a
+  different home — a sandboxed `$HOME`, another user on a shared machine —
+  passed as a foreign install. Adopting one adopts a wrapper that re-enters
+  OVM, and probing it re-runs OVM's own first-launch bootstrap under a home
+  with no state: `ovm hatch` hung mid-story on "Found Claude Code already on
+  this machine" rather than installing anything.
+
+- **A re-run reports the Claude act.** On a machine that already had Claude,
+  the act finished in silence — the only one that did — so an automated check
+  of the run saw no Claude act at all, which reads exactly like an act that
+  never ran.
+
 ## [0.1.6] - 2026-08-22
 
 ### Added
@@ -43,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flat alphabetical list, and the launch rows line up with the shortcut table
   in `ovm help launch`.
 
-- - **The Codex schema-skew guard now learns from the observatory, not just
+- **The Codex schema-skew guard now learns from the observatory, not just
   from its build.** `ovm-codex-skew` used to reason from a migration manifest
   compiled into the binary, so a released OVM only knew the Codex migrations
   that existed when it shipped: every Codex stable since then made the guard
@@ -1083,7 +1154,8 @@ the real first public release carries the version the public repo ships.
 
 <!-- v0.0.3-alpha.4 is the first tag on the repaired public history; older
      versions predate it and intentionally have no public link targets. -->
-[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.3...v0.1.4

@@ -109,7 +109,7 @@ fn install_fake_codex(home: &Path, version: &str, script: &str) -> (ServerGuard,
     let asset_size = tarball.len();
 
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/{version}/{asset_name}").as_str())
         .with_status(200)
         .with_body(tarball)
         .create();
@@ -272,7 +272,7 @@ fn background_etag_probe_is_consumed_by_the_next_codex_launch() {
     let tarball = make_tarball(entry, latest_script.as_bytes());
     let asset_url = format!("{}/assets/{asset_name}", server.url());
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/{latest}/{asset_name}").as_str())
         .with_status(200)
         .with_body(tarball.clone())
         .create();
@@ -307,6 +307,9 @@ fn background_etag_probe_is_consumed_by_the_next_codex_launch() {
         .env("HOME", home.path())
         .env("OVM_DISABLE_BACKGROUND_REFRESH", "1")
         .env("OVM_REGISTRY_BASE_URL", server.url())
+        // The registry override says where the stamp is read from; it does not
+        // relocate the bytes. A mock that serves the asset too must say so.
+        .env("OVM_CODEX_DOWNLOAD_URL", server.url())
         .env("OVM_CODEX_NPM_REGISTRY_URL", "http://127.0.0.1:9")
         .env("OVM_SKIP_SIGNATURE_VERIFY", "1")
         .args(["codex", "hello"])

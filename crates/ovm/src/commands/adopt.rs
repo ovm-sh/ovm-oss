@@ -237,7 +237,45 @@ pub(crate) fn find_foreign_binary_in_paths(
     paths
         .iter()
         .map(|dir| dir.join(product.binary_name()))
-        .find(|candidate| candidate.is_file() && !is_ovm_managed(dirs, candidate))
+        .find(|candidate| {
+            candidate.is_file()
+                && !is_ovm_managed(dirs, candidate)
+                && !is_session_shim(candidate)
+                && !is_ovm_launcher(candidate)
+        })
+}
+
+/// Whether `candidate` is a per-session wrapper shim another tool injected
+/// into PATH, rather than an install of the product.
+///
+/// cmux writes a `claude`/`codex` shim under `$TMPDIR/cmux-cli-shims/<uuid>/`
+/// for every terminal surface and prepends that directory to PATH, so its
+/// wrapper can inject session tracking before delegating to the real binary
+/// (typically ours). It is not an install: there is nothing to adopt, warning
+/// that it "shadows the managed install" is a false alarm, and the bootstrap
+/// exec fallback could re-enter it. Stale shim directories also outlive their
+/// sessions by weeks, so the one found on PATH may not even be live.
+fn is_session_shim(candidate: &Path) -> bool {
+    candidate
+        .components()
+        .any(|component| component.as_os_str() == "cmux-cli-shims")
+}
+
+/// Whether `candidate` is OVM's own control-plane launcher — from ANY OVM
+/// home, not just this process's. `is_ovm_managed` compares against the
+/// running `$HOME/.ovm`, so a launcher under a different home (a sandboxed
+/// `$HOME`, another user on a shared machine) read as a foreign install to
+/// adopt.
+/// Adopting one adopts a wrapper that re-enters OVM, and probing it under the
+/// mismatched HOME re-runs OVM's own first-launch bootstrap — which is how a
+/// sandboxed `ovm hatch` wedged mid-story on 2026-08-27, "adopting" the real
+/// home's `.ovm/bin/claude`.
+fn is_ovm_launcher(candidate: &Path) -> bool {
+    let Some(parent) = candidate.parent() else {
+        return false;
+    };
+    parent.file_name() == Some(std::ffi::OsStr::new("bin"))
+        && parent.parent().and_then(|dir| dir.file_name()) == Some(std::ffi::OsStr::new(".ovm"))
 }
 
 fn report_path_takeover(vm: &VersionManager) -> bool {
@@ -633,6 +671,65 @@ mod tests {
                 .expect("found foreign binary");
 
         assert_eq!(found, foreign_bin.join("codex"));
+    }
+
+    #[test]
+    fn path_search_skips_cmux_session_shims() {
+        // cmux prepends $TMPDIR/cmux-cli-shims/<uuid>/ to PATH in its terminal
+        // surfaces; the claude/codex wrappers there are session plumbing, not
+        // installs, and must never be reported (or adopted) as foreign.
+        let root = tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(root.path().join(".ovm"));
+        let shim_bin = root
+            .path()
+            .join("cmux-cli-shims")
+            .join("71624E4F-3350-4EA4-A9C6-90D5D04982A9");
+        let foreign_bin = root.path().join("usr-local-bin");
+        fs::create_dir_all(&shim_bin).expect("mkdir shim bin");
+        fs::create_dir_all(&foreign_bin).expect("mkdir foreign bin");
+        fs::write(shim_bin.join("claude"), "#!/usr/bin/env bash\n").expect("write shim");
+        fs::write(foreign_bin.join("claude"), "foreign").expect("write foreign bin");
+
+        let found = find_foreign_binary_in_paths(
+            &dirs,
+            Product::Claude,
+            &[shim_bin.clone(), foreign_bin.clone()],
+        );
+        assert_eq!(found, Some(foreign_bin.join("claude")));
+
+        let only_shim = find_foreign_binary_in_paths(&dirs, Product::Claude, &[shim_bin]);
+        assert_eq!(only_shim, None, "a session shim alone is not an install");
+    }
+
+    #[test]
+    fn path_search_skips_another_homes_ovm_launcher() {
+        // A sandboxed $HOME (or another user on the machine) makes this
+        // process's OvmDirs point somewhere else, so the REAL home's
+        // ~/.ovm/bin/claude passes `is_ovm_managed` and reads as a foreign
+        // install. It is OVM's own launcher: adopting it adopts a wrapper
+        // that re-enters OVM, and probing it re-runs our own first-launch
+        // bootstrap under a HOME with no state — a hang, not an install.
+        let root = tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(root.path().join("sandbox-home").join(".ovm"));
+        let other_home_bin = root.path().join("real-home").join(".ovm").join("bin");
+        let foreign_bin = root.path().join("usr-local-bin");
+        fs::create_dir_all(&other_home_bin).expect("mkdir other home bin");
+        fs::create_dir_all(&foreign_bin).expect("mkdir foreign bin");
+        fs::write(other_home_bin.join("claude"), "ovm launcher").expect("write launcher");
+        fs::write(foreign_bin.join("claude"), "foreign").expect("write foreign bin");
+
+        let found = find_foreign_binary_in_paths(
+            &dirs,
+            Product::Claude,
+            &[other_home_bin.clone(), foreign_bin.clone()],
+        );
+        assert_eq!(found, Some(foreign_bin.join("claude")));
+
+        let only_launcher = find_foreign_binary_in_paths(&dirs, Product::Claude, &[other_home_bin]);
+        assert_eq!(
+            only_launcher, None,
+            "OVM's own launcher from another home is not an install to adopt"
+        );
     }
 
     #[cfg(unix)]

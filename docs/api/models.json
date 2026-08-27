@@ -2,7 +2,7 @@
   "schema_version": 1,
   "updated_at": "2026-07-20T18:30:00Z",
   "base_url": "https://ovm.sh/api",
-  "description": "Foundation-model release + lifecycle registry, cross-referenced against CLI version releases. Sourced from vendor deprecation/lifecycle pages. Dated model IDs carry an exact release date; dateless IDs (Claude 4.6 generation onward) are pinned snapshots whose release date is filled from the vendor models API.",
+  "description": "Foundation-model release + lifecycle registry, cross-referenced against CLI version releases. Sourced from vendor deprecation/lifecycle pages. Dated model IDs carry an exact release date; dateless IDs (Claude 4.6 generation onward) are pinned snapshots whose release date is filled from the vendor models API. Where a vendor accepts a different id at request time than the public one, requestable_id records the id to request (e.g. ChatGPT-auth Codex serves gpt-5.6 only as gpt-5.6-sol).",
   "sources": {
     "claude": "https://platform.claude.com/docs/en/docs/about-claude/model-deprecations",
     "codex": "https://platform.openai.com/docs/models"
@@ -216,6 +216,7 @@
           "family": "gpt",
           "generation": "5.6",
           "codename": "sol",
+          "requestable_id": "gpt-5.6-sol",
           "released": "2026-07-09",
           "state": "active",
           "deprecated": null

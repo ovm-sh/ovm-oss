@@ -5,10 +5,10 @@ use crate::product::Product;
 #[cfg(test)]
 use crate::sources::github_releases;
 use crate::version_manager::{InstallRequest, VersionManager};
-use console::{style, Term};
+use console::{style, Key, Term};
 pub use picker::pick_product;
 use picker::{
-    interactive_select, DownloadJobs, PickerSession, ProductPick, RefreshHandle, SelectAction,
+    interactive_select, DownloadJobs, Keys, PickerSession, ProductPick, RefreshHandle, SelectAction,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -188,6 +188,51 @@ pub fn run_top(product: Option<&str>, direct_version: Option<&str>) -> Result<()
                 }
             }
         }
+    }
+}
+
+/// Perform the switch gesture on the reader's behalf: `ovm switch` → Claude →
+/// `b` → the newest version that still hatches a buddy.
+///
+/// The tour reaches a point where the honest answer to "how do I get one?" is
+/// a four-step gesture through a picker the reader has never seen. Telling
+/// them in prose asks them to hold four steps in their head and trust that the
+/// screens will look the way the sentence said. So OVM performs it instead,
+/// through the real picker, at a pace a person can follow — the reader answers
+/// one question and watches the thing they will do themselves next time.
+///
+/// The pauses are deliberately long. This is a demonstration, not a fast path;
+/// a viewer who cannot see WHICH row the cursor was on when `b` was pressed
+/// has learned nothing.
+///
+/// Returns the version now selected, or `None` if the picker was left without
+/// selecting anything (the reader can always take the keyboard back — see
+/// [`Keys`] — and a gesture they interrupted is not an error).
+pub(crate) fn run_guided_buddy_switch() -> Result<Option<String>> {
+    let beat = std::time::Duration::from_millis(2200);
+    let read_the_list = std::time::Duration::from_millis(3400);
+
+    // Claude is the first row of the product picker, so the cursor is already
+    // on it: the whole gesture is one Enter, and the pause before it is what
+    // shows the reader WHAT is being selected.
+    let mut product_keys = Keys::guided([(beat, Key::Enter)]);
+    match picker::pick_product_with(&mut product_keys)? {
+        Some(ProductPick::Product(Product::Claude)) => {}
+        // The reader took the keyboard back and went somewhere else. Their
+        // call — the tour does not drag them back to Claude.
+        _ => return Ok(None),
+    }
+
+    let vm = VersionManager::new(Product::Claude)?;
+
+    // `b` filters to the versions that still hatch, which also drops the
+    // cursor from the newest release (past the buddy window) onto the first
+    // surviving row: the newest version that still has one. Enter takes it.
+    let mut version_keys =
+        Keys::guided([(read_the_list, Key::Char('b')), (read_the_list, Key::Enter)]);
+    match run_version_picker_with(&vm, false, &mut version_keys, false)? {
+        PickerResult::Selected => Ok(vm.current_version()?),
+        PickerResult::Back => Ok(None),
     }
 }
 
@@ -383,6 +428,22 @@ fn spawn_refresh(product: Product, base: PathBuf) -> RefreshHandle {
 }
 
 fn run_version_picker(vm: &VersionManager, can_go_back: bool) -> Result<PickerResult> {
+    run_version_picker_with(vm, can_go_back, &mut Keys::User, true)
+}
+
+/// The version picker, with the input source and the closing launch prompt
+/// both under the caller's control.
+///
+/// `offer_launch` is false for the tour, which drives this picker to install
+/// and select a buddy version and then does its own launch with the
+/// instruction the reader needs (`/buddy`). Asking twice would be asking the
+/// reader to answer a question the tour is about to answer for them.
+fn run_version_picker_with(
+    vm: &VersionManager,
+    can_go_back: bool,
+    keys: &mut Keys,
+    offer_launch: bool,
+) -> Result<PickerResult> {
     let product = vm.product();
     let base = vm.dirs.base.clone();
     let installed_list = vm.list_installed()?;
@@ -452,7 +513,7 @@ fn run_version_picker(vm: &VersionManager, can_go_back: bool) -> Result<PickerRe
     };
 
     loop {
-        match interactive_select(&mut entries, &mut session)? {
+        match interactive_select(&mut entries, &mut session, keys)? {
             SelectAction::Cancel => return Ok(PickerResult::Back),
             SelectAction::Delete(index) => {
                 let version = entries[index].version.clone();
@@ -500,8 +561,10 @@ fn run_version_picker(vm: &VersionManager, can_go_back: bool) -> Result<PickerRe
                 super::maintain_claude_launcher(vm);
                 show_happy_switch(vm.product().display_name(), &entry.version);
                 super::use_version::note_pin(vm);
-                let choice = prompt_launch(vm.product())?;
-                launch_with_choice(vm.product(), choice)?;
+                if offer_launch {
+                    let choice = prompt_launch(vm.product())?;
+                    launch_with_choice(vm.product(), choice)?;
+                }
                 return Ok(PickerResult::Selected);
             }
         }

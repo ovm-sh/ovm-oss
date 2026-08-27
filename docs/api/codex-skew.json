@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "product": "codex",
-  "generated_at": "2026-08-22T15:06:00.991Z",
+  "generated_at": "2026-08-27T02:20:05.474Z",
   "manifest": {
-    "source_ref": "rust-v0.149.0",
-    "source_commit": "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0",
+    "source_ref": "rust-v0.150.1",
+    "source_commit": "90854393966b21e9ebfd21b122334eb09a20c93d",
     "migrations": [
       {
         "version": 1,
@@ -254,6 +254,11 @@
       {
         "version": 50,
         "description": "threads section empty preview indexes",
+        "breaking": false
+      },
+      {
+        "version": 51,
+        "description": "thread artifacts",
         "breaking": false
       }
     ]
@@ -746,9 +751,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -758,9 +763,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -770,9 +775,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -782,9 +787,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -794,9 +799,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -806,9 +811,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -818,9 +823,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -830,9 +835,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -842,9 +847,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -854,9 +859,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -866,9 +871,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -878,9 +883,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -890,9 +895,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
@@ -902,21 +907,249 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
     },
     {
       "db_migration": 50,
       "version": "rust-v0.149.0",
       "verdict": "compatible",
       "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 15,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
+    },
+    {
+      "db_migration": 50,
+      "version": "rust-v0.149.1",
+      "verdict": "compatible",
+      "passes": {
         "recovery": "compatible",
         "qualification": "compatible"
       },
-      "runs": 6,
-      "run_number": 100,
-      "observed_at": "2026-08-22T15:06:00.991Z"
+      "runs": 8,
+      "run_number": 109,
+      "observed_at": "2026-08-25T23:33:50.415Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.54.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.60.1",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.61.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.63.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.122.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.123.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.124.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.125.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.128.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.144.6",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.145.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.146.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.147.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.148.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 3,
+      "run_number": 112,
+      "observed_at": "2026-08-27T01:30:47.877Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.149.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 3,
+      "run_number": 112,
+      "observed_at": "2026-08-27T01:30:47.877Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.149.1",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 3,
+      "run_number": 112,
+      "observed_at": "2026-08-27T01:30:47.877Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.150.0",
+      "verdict": "compatible",
+      "passes": {
+        "downgrade": "compatible",
+        "recovery": "compatible"
+      },
+      "runs": 4,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
+    },
+    {
+      "db_migration": 51,
+      "version": "rust-v0.150.1",
+      "verdict": "compatible",
+      "passes": {
+        "recovery": "compatible",
+        "qualification": "compatible"
+      },
+      "runs": 1,
+      "run_number": 113,
+      "observed_at": "2026-08-27T02:11:39.303Z"
     }
   ]
 }

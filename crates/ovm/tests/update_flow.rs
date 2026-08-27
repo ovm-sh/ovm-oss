@@ -91,7 +91,7 @@ fn setup_two_version_mock() -> (ServerGuard, String) {
         let body = make_tarball(asset_entry, b"#!/bin/sh\necho fake-codex\n");
         let size = body.len();
         server
-            .mock("GET", format!("/assets/{version}/{asset_name}").as_str())
+            .mock("GET", format!("/download/{version}/{asset_name}").as_str())
             .with_status(200)
             .with_header("content-type", "application/octet-stream")
             .with_body(body)

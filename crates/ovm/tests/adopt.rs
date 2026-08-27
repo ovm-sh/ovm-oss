@@ -153,13 +153,15 @@ fn setup_codex_mock(tag: &str, binary_contents: &[u8]) -> (ServerGuard, String) 
     let asset_size = asset_body.len();
 
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/{tag}/{asset_name}").as_str())
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
         .with_body(asset_body)
         .expect_at_least(1)
         .create();
 
+    // ovm builds the asset URL from the tag and the name it expects, so the
+    // one in the metadata is never followed.
     let asset_url = format!("{}/assets/{asset_name}", server.url());
     let release_json = format!(
         r#"{{"tag_name":"{tag}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
@@ -184,13 +186,15 @@ fn setup_pi_mock(version: &str, binary_contents: &[u8]) -> (ServerGuard, String)
     let asset_size = asset_body.len();
 
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/v{version}/{asset_name}").as_str())
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
         .with_body(asset_body)
         .expect_at_least(1)
         .create();
 
+    // ovm builds the asset URL from the tag and the name it expects, so the
+    // one in the metadata is never followed.
     let asset_url = format!("{}/assets/{asset_name}", server.url());
     let release_json = format!(
         r#"{{"tag_name":"v{version}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
@@ -652,13 +656,15 @@ fn setup_codex_mock_with_latest(tag: &str, binary_contents: &[u8]) -> (ServerGua
     let asset_size = asset_body.len();
 
     server
-        .mock("GET", format!("/assets/{asset_name}").as_str())
+        .mock("GET", format!("/download/{tag}/{asset_name}").as_str())
         .with_status(200)
         .with_header("content-type", "application/octet-stream")
         .with_body(asset_body)
         .expect_at_least(1)
         .create();
 
+    // ovm builds the asset URL from the tag and the name it expects, so the
+    // one in the metadata is never followed.
     let asset_url = format!("{}/assets/{asset_name}", server.url());
     let release_json = format!(
         r#"{{"tag_name":"{tag}","assets":[{{"name":"{asset_name}","browser_download_url":"{asset_url}","size":{asset_size}}}]}}"#,
