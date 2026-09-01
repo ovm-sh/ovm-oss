@@ -4,6 +4,7 @@ use crate::error::{OvmError, Result};
 use crate::product::Product;
 use crate::version_manager::VersionManager;
 use console::style;
+use std::path::{Path, PathBuf};
 
 /// `ovm doctor [product] [version] [--fix]` — report (and optionally repair)
 /// known health issues:
@@ -31,6 +32,7 @@ pub fn run(vm: &VersionManager, version: Option<&str>, fix: bool) -> Result<()> 
             "{} has no shared schema store that ovm tracks — nothing to check.",
             product.display_name()
         );
+        report_unmanaged_state_writers(product);
         return Ok(());
     }
 
@@ -62,6 +64,7 @@ pub fn run(vm: &VersionManager, version: Option<&str>, fix: bool) -> Result<()> 
                 vm.dirs.base.join("companions").join(name).display()
             );
         }
+        report_unmanaged_state_writers(product);
         return Ok(());
     }
 
@@ -75,7 +78,64 @@ pub fn run(vm: &VersionManager, version: Option<&str>, fix: bool) -> Result<()> 
         &version,
         &binary,
     );
+    report_unmanaged_state_writers(product);
     Ok(())
+}
+
+/// Installs that write the product's shared state but never appear on `PATH`.
+///
+/// `ovm adopt` already reports an unmanaged binary found on `PATH`, which
+/// covers Homebrew and npm. It cannot see a GUI app bundle: nothing puts one
+/// on `PATH`, so no part of OVM's view of the machine knows it is there.
+///
+/// That is the install worth naming. A desktop app updates itself on its own
+/// schedule, so it can apply a breaking migration to the shared state DB with
+/// no user action at all — which is exactly how a pinned build rots without
+/// anyone touching it. The skew guard reports the aftermath; this says who
+/// else can cause it.
+fn app_bundle_candidates(product: Product, home: Option<&Path>) -> Vec<PathBuf> {
+    if product != Product::Codex {
+        return Vec::new();
+    }
+    let relative = Path::new("Applications/Codex.app/Contents/Resources/codex");
+    let mut candidates = vec![Path::new("/").join(relative)];
+    if let Some(home) = home {
+        candidates.push(home.join(relative));
+    }
+    candidates
+}
+
+fn existing_state_writers(candidates: &[PathBuf]) -> Vec<PathBuf> {
+    candidates
+        .iter()
+        .filter(|path| path.is_file())
+        .cloned()
+        .collect()
+}
+
+fn report_unmanaged_state_writers(product: Product) {
+    let candidates = app_bundle_candidates(product, dirs::home_dir().as_deref());
+    let found = existing_state_writers(&candidates);
+    if found.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} Also writes {}'s shared state, and is not on PATH so `ovm adopt` cannot see it:",
+        style("!").yellow(),
+        product.display_name()
+    );
+    for path in &found {
+        println!("      {}", style(path.display()).dim());
+    }
+    println!(
+        "  {} A desktop app updates itself, so it can migrate the shared state DB with no",
+        style("·").dim()
+    );
+    println!(
+        "  {} action from you. Keep it current, or remove it, so every writer moves together.",
+        style("·").dim()
+    );
 }
 
 /// Inspect — and with `fix`, repair — the OVM-managed Claude install so OVM
@@ -116,4 +176,38 @@ fn check_claude_hygiene(fix: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn only_codex_has_app_bundle_candidates() {
+        assert!(app_bundle_candidates(Product::Claude, None).is_empty());
+        assert!(!app_bundle_candidates(Product::Codex, None).is_empty());
+    }
+
+    #[test]
+    fn a_home_relative_bundle_is_considered_too() {
+        let home = Path::new("/Users/example");
+        let candidates = app_bundle_candidates(Product::Codex, Some(home));
+        assert!(candidates.iter().any(|path| path.starts_with(home)));
+        assert!(candidates
+            .iter()
+            .any(|path| path.starts_with("/Applications")));
+    }
+
+    #[test]
+    fn only_bundles_that_exist_are_reported() {
+        let dir = tempdir().unwrap();
+        let present = dir.path().join("codex");
+        std::fs::write(&present, b"binary").unwrap();
+        let absent = dir.path().join("missing");
+
+        let found = existing_state_writers(&[present.clone(), absent]);
+
+        assert_eq!(found, vec![present]);
+    }
 }

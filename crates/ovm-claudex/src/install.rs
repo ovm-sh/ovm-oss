@@ -3,6 +3,7 @@
 //! a `current` symlink — so the proxy is pinnable, updatable, and never a
 //! brew dependency.
 
+use crate::output::say;
 use crate::paths::ClaudexDirs;
 use crate::{ClaudexError, Result};
 use console::style;
@@ -287,7 +288,7 @@ pub fn acquire_update_lock(dirs: &ClaudexDirs) -> Result<UpdateLock> {
     match FileExt::try_lock(&file) {
         Ok(()) => return Ok(UpdateLock { _file: file }),
         Err(TryLockError::WouldBlock) => {
-            eprintln!(
+            say!(
                 "  {} Waiting for another OVM process to update the claudex proxy…",
                 style("…").cyan()
             );
@@ -330,7 +331,7 @@ pub fn update_command(version: Option<&str>) -> Result<()> {
     let _lock = acquire_update_lock(&dirs)?;
     let target = dirs.proxy_versions_dir().join(&version).join("cliproxyapi");
     if target.is_file() {
-        eprintln!(
+        say!(
             "  {} cliproxyapi {version} already installed.",
             style("✓").green()
         );
@@ -355,7 +356,7 @@ pub fn update_command(version: Option<&str>) -> Result<()> {
             } else {
                 "publisher-vouched and staged (not yet approved by OVM's registry)"
             };
-            eprintln!(
+            say!(
                 "  {} cliproxyapi {} is {provenance}; it will activate after active claudex sessions exit.",
                 style("…").cyan(),
                 style(&version).green().bold()
@@ -367,7 +368,7 @@ pub fn update_command(version: Option<&str>) -> Result<()> {
         })?;
         switch_current(&dirs, &pending.binary)?;
         clear_pending_update(&dirs)?;
-        eprintln!(
+        say!(
             "  {} cliproxyapi {} is now the managed proxy.",
             style("✓").green(),
             style(&version).green().bold()
@@ -388,7 +389,7 @@ pub fn install_latest(dirs: &ClaudexDirs) -> Result<PathBuf> {
         install(dirs, &version)?;
     }
     switch_current(dirs, &target)?;
-    eprintln!(
+    say!(
         "  {} cliproxyapi {} installed (managed).",
         style("✓").green(),
         style(&version).green().bold()
@@ -426,7 +427,7 @@ pub fn latest_version() -> Result<String> {
     // this path cannot tell them apart, so it must not claim "unreachable" and
     // hide a schema or poisoning failure. Either way, the fallback trusts the
     // upstream publisher for both the version and its checksum.
-    eprintln!(
+    say!(
         "  {} OVM registry did not vouch for a cliproxyapi version — using upstream latest {} \
          (publisher-vouched, not yet verified by OVM's deep lane).",
         style("!").yellow(),
@@ -477,7 +478,7 @@ pub fn maybe_prepare_auto_update(
     // Reached only after `latest_version_cached` returned a registry-approved
     // version, so this automatic candidate is deep-lane vouched by construction.
     let prepared = prepare_update_locked(dirs, &latest, true, true)?;
-    eprintln!(
+    say!(
         "  {} Prepared cliproxyapi {} {} {} for safe activation.",
         style("↓").cyan(),
         style(&current).dim(),
@@ -610,7 +611,7 @@ pub fn install(dirs: &ClaudexDirs, version: &str) -> Result<PathBuf> {
     let download_base = github_download_base()?;
     let base = format!("{}/v{version}", download_base.trim_end_matches('/'));
 
-    eprintln!(
+    say!(
         "  {} Downloading cliproxyapi {version} ({asset})…",
         style("↓").cyan()
     );

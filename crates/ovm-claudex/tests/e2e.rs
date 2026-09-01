@@ -172,6 +172,17 @@ fn unused_local_port() -> u16 {
     listener.local_addr().expect("addr").port()
 }
 
+/// Collapse whitespace so a phrase assertion survives line wrapping.
+///
+/// Every module now folds its output to the width inside the margin, and that
+/// width is the terminal's — 80 in CI, wider on a dev machine. So a message
+/// containing "rolled `current` back" can arrive with a newline and two spaces
+/// of indent sitting inside the phrase, and a plain `contains` passes locally
+/// while failing only in CI. Assert on what was said, not on where it wrapped.
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn compile_fake_proxy(path: &Path) {
     let source = path.with_extension("c");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -423,7 +434,7 @@ fn doctor_fails_clearly_before_setup() {
         .unwrap();
     assert!(!output.status.success(), "virgin home must fail doctor");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ovm claudex setup"), "{stderr}");
+    assert!(flat(&stderr).contains("ovm claudex setup"), "{stderr}");
 }
 
 #[test]
@@ -571,7 +582,7 @@ fn launch_prepares_newer_managed_proxy_once_without_interrupting_legacy_daemon()
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("predates safe session tracking"),
+            flat(&stderr).contains("predates safe session tracking"),
             "{stderr}"
         );
     }
@@ -741,7 +752,7 @@ fn next_safe_launch_activates_and_verifies_prepared_proxy() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Activated and verified cliproxyapi 7.2.74"),
+        flat(&stderr).contains("Activated and verified cliproxyapi 7.2.74"),
         "{stderr}"
     );
     let new_binary = temp.path().join("proxy/versions/7.2.74/cliproxyapi");
@@ -797,7 +808,7 @@ fn failed_proxy_activation_rolls_back_current_and_restarts_previous_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("rolled `current` back"), "{stderr}");
+    assert!(flat(&stderr).contains("rolled `current` back"), "{stderr}");
     assert_eq!(
         std::fs::canonicalize(temp.path().join("proxy/current")).unwrap(),
         std::fs::canonicalize(&old_binary).unwrap()
@@ -971,7 +982,7 @@ fn overlapping_session_stages_once_then_next_idle_launch_activates() {
         "{}",
         String::from_utf8_lossy(&third.stderr)
     );
-    assert!(String::from_utf8_lossy(&third.stderr)
+    assert!(flat(&String::from_utf8_lossy(&third.stderr))
         .contains("Activated and verified cliproxyapi 7.2.74"));
     assert_ne!(proxy_pid(temp.path()), old_pid);
     assert!(!temp.path().join("proxy/pending-update.json").exists());
@@ -1040,7 +1051,7 @@ fn explicit_update_migrates_a_legacy_daemon_after_sessions_are_closed() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stderr)
+    assert!(flat(&String::from_utf8_lossy(&output.stderr))
         .contains("Activated and verified cliproxyapi 7.2.74"));
     assert_ne!(proxy_pid(temp.path()), old_proxy.id() as u64);
     assert_eq!(
@@ -1154,7 +1165,7 @@ fn launch_refuses_verified_proxy_that_cannot_be_proven_to_match_pin() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("does not match pinned version 7.2.72"),
+        flat(&stderr).contains("does not match pinned version 7.2.72"),
         "{stderr}"
     );
     assert!(
@@ -1225,7 +1236,7 @@ fn launch_without_oauth_grant_fails_fast() {
 
     assert!(!output.status.success(), "no-grant launch must fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no Codex OAuth grant"), "{stderr}");
+    assert!(flat(&stderr).contains("no Codex OAuth grant"), "{stderr}");
 }
 
 #[test]
@@ -1249,7 +1260,7 @@ fn launch_refuses_a_listener_that_is_not_our_proxy() {
     assert!(!output.status.success(), "foreign listener must refuse");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("could not confirm it is its own proxy"),
+        flat(&stderr).contains("could not confirm it is its own proxy"),
         "{stderr}"
     );
     assert!(

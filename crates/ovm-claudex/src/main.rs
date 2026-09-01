@@ -15,6 +15,7 @@ mod doctor;
 mod feedback;
 mod install;
 mod launch;
+mod output;
 mod paths;
 mod proxy;
 mod setup;

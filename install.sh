@@ -26,17 +26,44 @@ INSTALL_DIR="${OVM_INSTALL_DIR:-$HOME/.ovm/bin}"
 
 # Options. The installer stays zero-argument for the plain path; --claudex
 # chains into the guided claudex onboarding after a successful install.
+#
+# --version installs an EXACT tag instead of the latest stable. GitHub's
+# releases/latest endpoint excludes prereleases by definition, so without this
+# there is no way for the public one-liner to install an alpha at all — which
+# is what a clean-machine rehearsal of a release candidate needs.
+#
+#   curl -fsSL https://ovm.sh/install | sh -s -- --version v0.1.8-alpha.1
 CLAUDEX_SETUP=0
-for arg in "$@"; do
-    case "$arg" in
+REQUESTED_VERSION="${OVM_INSTALL_VERSION:-}"
+usage() {
+    echo "Usage: curl -fsSL https://ovm.sh/install | sh -s -- [--claudex] [--version <tag>]" >&2
+}
+while [ $# -gt 0 ]; do
+    case "$1" in
         --claudex) CLAUDEX_SETUP=1 ;;
+        --version)
+            shift
+            [ $# -gt 0 ] || { echo "--version needs a release tag" >&2; usage; exit 2; }
+            REQUESTED_VERSION="$1"
+            ;;
+        --version=*) REQUESTED_VERSION="${1#--version=}" ;;
         *)
-            echo "Unknown option: $arg" >&2
-            echo "Usage: curl -fsSL https://ovm.sh/install | sh -s -- [--claudex]" >&2
+            echo "Unknown option: $1" >&2
+            usage
             exit 2
             ;;
     esac
+    shift
 done
+# The tag goes straight into a URL path, so it may hold only what a git tag
+# legitimately holds. Anything else is a caller error, not a request to fetch.
+case "$REQUESTED_VERSION" in
+    "") ;;
+    *[!A-Za-z0-9._+-]*)
+        echo "Not a release tag: $REQUESTED_VERSION" >&2
+        exit 2
+        ;;
+esac
 SELF_ROOT="$HOME/.ovm/self"
 VERSIONS_DIR="$SELF_ROOT/versions"
 CURRENT_LINK="$SELF_ROOT/current"
@@ -242,6 +269,22 @@ write_path_block() {
     printf '%s\n' "$file"
 }
 
+# Append our PATH block to one rc file, recording which of the two things
+# happened: appended (`written`) or already there (`existing`). write_path_block
+# is deliberately silent in both the "already present" and "cannot write" cases,
+# so the caller cannot tell them apart from its output alone.
+wire_rc() {
+    file=$1
+    line=$2
+    if [ -f "$file" ] && grep -Fq "$OVM_PATH_BEGIN" "$file" 2>/dev/null; then
+        existing="$existing $file"
+        return 0
+    fi
+    got=$(write_path_block "$file" "$line") || true
+    [ -n "$got" ] && written="$written $got"
+    return 0
+}
+
 configure_path() {
     install_dir=$1
     # Write $HOME symbolically so the rc line survives a moved home directory.
@@ -250,70 +293,137 @@ configure_path() {
         *) path_line_dir=$install_dir ;;
     esac
 
+    PATH_ACTION_LINE="export PATH=\"$path_line_dir:\$PATH\""
+
     if path_already_has "$install_dir"; then
-        echo "OVM is on your PATH already."
-        echo ""
+        PATH_OUTRO_KIND=already
         return 0
     fi
 
     if [ -n "${OVM_NO_MODIFY_PATH:-}" ]; then
-        echo "OVM_NO_MODIFY_PATH is set, so your shell config was left alone."
-        echo "Add this yourself:"
-        echo "  export PATH=\"$path_line_dir:\$PATH\""
-        echo ""
+        PATH_OUTRO_KIND=not_modified
         return 0
     fi
 
     shell_name=$(basename "${SHELL:-sh}")
     written=""
+    existing=""
     case "$shell_name" in
         zsh)
             # .zshrc covers interactive shells, .zprofile covers login shells —
             # `zsh -lc` reads only the latter, and a PATH that works in one but
             # not the other is its own confusing bug report.
             for rc in "${ZDOTDIR:-$HOME}/.zshrc" "${ZDOTDIR:-$HOME}/.zprofile"; do
-                got=$(write_path_block "$rc" "export PATH=\"$path_line_dir:\$PATH\"") || true
-                [ -n "$got" ] && written="$written $got"
+                wire_rc "$rc" "export PATH=\"$path_line_dir:\$PATH\""
             done
             ;;
         bash)
             for rc in "$HOME/.bashrc" "$HOME/.bash_profile"; do
-                got=$(write_path_block "$rc" "export PATH=\"$path_line_dir:\$PATH\"") || true
-                [ -n "$got" ] && written="$written $got"
+                wire_rc "$rc" "export PATH=\"$path_line_dir:\$PATH\""
             done
             ;;
         fish)
-            got=$(write_path_block "$HOME/.config/fish/conf.d/ovm.fish" \
-                "fish_add_path $install_dir") || true
-            [ -n "$got" ] && written="$written $got"
+            wire_rc "$HOME/.config/fish/conf.d/ovm.fish" "fish_add_path $install_dir"
             ;;
         *)
-            got=$(write_path_block "$HOME/.profile" \
-                "export PATH=\"$path_line_dir:\$PATH\"") || true
-            [ -n "$got" ] && written="$written $got"
+            wire_rc "$HOME/.profile" "export PATH=\"$path_line_dir:\$PATH\""
             ;;
     esac
 
     if [ -z "$written" ]; then
-        # Do not let this read as a clean install. OVM is on disk but the shell
-        # cannot find it, which is precisely the state a user reports as
-        # "the install failed".
-        echo "WARNING: OVM is installed but NOT on your PATH."
-        echo ""
-        echo "Your shell config could not be written, so you must add this line"
-        echo "yourself or ovm will not be found in a new terminal:"
-        echo "  export PATH=\"$path_line_dir:\$PATH\""
-        echo ""
+        # Nothing was appended, for one of two very different reasons — and
+        # conflating them told ordinary upgraders their install was broken.
+        #
+        # The block may ALREADY be in the rc, which is the common shape: run
+        # the one-liner again from the same shell you installed in, and PATH
+        # still lacks the directory while the rc has carried the line all
+        # along. Nothing is wrong; a new terminal works. Saying "your shell
+        # config could not be written" there is simply false.
+        if [ -n "$existing" ]; then
+            PATH_WRITTEN=$existing
+            PATH_OUTRO_KIND=already_wired
+            return 0
+        fi
+        # Or the files really could not be written. OVM on disk that the shell
+        # cannot find is precisely the state users report as a failed install,
+        # so this must never read as a clean one.
+        PATH_OUTRO_KIND=failed
         return 0
     fi
 
-    echo "Added OVM to your PATH in:"
-    for file in $written; do
-        echo "  $(display_path "$file")"
-    done
+    # Recorded, not printed. The hatch below runs between here and the end of
+    # the install, and its first screen clears the terminal — advice printed
+    # now is advice the reader never gets to read.
+    PATH_WRITTEN=$written
+    PATH_OUTRO_KIND=written
+}
+
+# Whether the shell that launched this installer will find `ovm` afterwards.
+# Only `already` and a successful rc write leave a usable shell behind, and a
+# written rc helps NEW shells only — a child cannot alter its parent's PATH.
+path_is_pending() {
+    case "${PATH_OUTRO_KIND:-none}" in
+        already) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# The "what now", printed last so nothing can scroll or clear it away.
+#
+# Stands down when the hatch ran AND the rc write worked: the tour closes with
+# its own version, naming the shortcuts it just installed, and two closing
+# screens disagreeing about what to type next is worse than either alone. When
+# the rc write did NOT happen, the tour's "open a new terminal" is not true —
+# a new terminal will not have it either — so this prints regardless and the
+# accurate warning gets the last word.
+print_path_outro() {
+    if [ "${HATCH_RAN:-0}" = 1 ]; then
+        case "${PATH_OUTRO_KIND:-none}" in
+            already|written) return 0 ;;
+        esac
+    fi
     echo ""
-    echo "Open a new terminal, or run this once in this one:"
-    echo "  export PATH=\"$path_line_dir:\$PATH\""
+    echo "Verify with:"
+    echo "  ovm --version"
+    echo "  ovm self current"
+    echo ""
+    case "${PATH_OUTRO_KIND:-none}" in
+        already)
+            echo "OVM is on your PATH already."
+            ;;
+        already_wired)
+            echo "OVM was already in your PATH configuration:"
+            for file in $PATH_WRITTEN; do
+                echo "  $(display_path "$file")"
+            done
+            echo ""
+            echo "This shell predates it. Open a new terminal, or run here:"
+            echo "  $PATH_ACTION_LINE"
+            ;;
+        written)
+            echo "Added OVM to your PATH in:"
+            for file in $PATH_WRITTEN; do
+                echo "  $(display_path "$file")"
+            done
+            echo ""
+            echo "Open a new terminal, or run this once in this one:"
+            echo "  $PATH_ACTION_LINE"
+            ;;
+        not_modified)
+            echo "OVM_NO_MODIFY_PATH is set, so your shell config was left alone."
+            echo "Add this yourself, or ovm will not be found in any terminal:"
+            echo "  $PATH_ACTION_LINE"
+            ;;
+        failed)
+            echo "WARNING: OVM is installed but NOT on your PATH."
+            echo ""
+            echo "Your shell config could not be written, so you must add this line"
+            echo "yourself or ovm will not be found in a new terminal:"
+            echo "  $PATH_ACTION_LINE"
+            ;;
+    esac
+    echo ""
+    echo "There's a story behind the cats — meet them:  ovm hatch"
     echo ""
 }
 # --- end PATH wiring -------------------------------------------------------
@@ -1035,10 +1145,26 @@ else
     # aborted the whole script under `set -e` before the `fail` below could
     # run, so an unreachable API exited silently with curl's status and no
     # explanation — the user saw nothing at all.
-    release_json=$(fetch "$API_BASE/repos/$REPO/releases/latest") ||
-        fail "could not reach $API_BASE to look up the latest OVM release"
+    # `fetch` reports failure without a status, so a 404 and an unreachable
+    # host arrive identically. Rather than guess, name the tag and both
+    # possibilities — the tag is the actionable half either way.
+    # Two different failures, kept apart. `fetch` reports failure without a
+    # status, so a 404 and an unreachable host arrive identically — name the
+    # tag and both possibilities, since the tag is the actionable half either
+    # way. A response that ARRIVES but carries no tag_name is a third thing
+    # again, and saying "could not reach" about it would be false.
+    if [ -n "$REQUESTED_VERSION" ]; then
+        release_ref="releases/tags/$REQUESTED_VERSION"
+        release_unavailable="no OVM release tagged $REQUESTED_VERSION at $API_BASE — check the tag is published, or drop --version for the latest stable"
+        release_untagged="the release tagged $REQUESTED_VERSION names no version"
+    else
+        release_ref="releases/latest"
+        release_unavailable="could not reach $API_BASE to look up the latest OVM release"
+        release_untagged="could not determine latest stable version"
+    fi
+    release_json=$(fetch "$API_BASE/repos/$REPO/$release_ref") || fail "$release_unavailable"
     VERSION=$(printf '%s\n' "$release_json" | grep '"tag_name"' | cut -d'"' -f4 || true)
-    [ -n "$VERSION" ] || fail "could not determine latest stable version"
+    [ -n "$VERSION" ] || fail "$release_untagged"
     VERSION_ID=${VERSION#v}
 
     URL="$ASSET_BASE/$REPO/releases/download/$VERSION/$BINARY-$TARGET.tar.gz"
@@ -1072,11 +1198,6 @@ fi
 mochi happy "OVM is installed. Happy shipping!"
 echo ""
 configure_path "$INSTALL_DIR"
-echo "Verify with:"
-echo "  ovm --version"
-echo "  ovm self current"
-echo ""
-echo "There's a story behind the cats — meet them:  ovm hatch"
 
 # Hatch on fresh machines. Same two rules as the claudex chain below: the
 # install is COMPLETE before any of this runs (release the lock first — the
@@ -1096,6 +1217,15 @@ if [ "$CLAUDEX_SETUP" != 1 ] && [ ! -d "$HOME/.ovm/products" ] && (exec < /dev/t
         [Nn]*) echo "Anytime later:  ovm hatch" ;;
         *)
             release_operation_lock
+            HATCH_RAN=1
+            # OVM_PATH_PENDING says what the injected PATH below hides: this
+            # installer's own shell got the rc-file line, the shell that
+            # launched it did not, and no child can fix that for its parent.
+            HATCH_PATH_PENDING=""
+            if path_is_pending; then
+                HATCH_PATH_PENDING=1
+            fi
+            OVM_PATH_PENDING="$HATCH_PATH_PENDING" \
             PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" hatch < /dev/tty || {
                 echo ""
                 echo "The hatch did not finish — the OVM install itself succeeded."
@@ -1131,3 +1261,5 @@ if [ "$CLAUDEX_SETUP" = 1 ]; then
         echo "Run it when you have one:  ovm claudex setup"
     fi
 fi
+
+print_path_outro

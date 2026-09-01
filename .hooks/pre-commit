@@ -14,7 +14,7 @@ not_run() {
 }
 
 # Check for PII / path leaks in staged files
-echo "[1/8] Scanning for path leaks..."
+echo "[1/9] Scanning for path leaks..."
 # Scan added lines only and allow explicit placeholder usernames in examples.
 LEAKED_PATHS=$(git diff --staged --unified=0 --no-color | grep -E '^\+' | grep -vE '^\+\+\+' | grep -nE '(^|[^[:alnum:]_])(/Users/[[:alnum:]_.-]+|/home/[[:alnum:]_.-]+)(/|$)' | grep -vE '/Users/(yourname|username|user|example|someone|name)(/|$)|/home/(yourname|username|user|example|someone|name)(/|$)' || true)
 if [ -n "$LEAKED_PATHS" ]; then
@@ -38,7 +38,7 @@ if [ -n "$LEAKED_SECRETS" ]; then
     exit 1
 fi
 
-echo "[2/8] Checking formatting..."
+echo "[2/9] Checking formatting..."
 if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
     cargo fmt -- --check || {
         echo "ERROR: cargo fmt failed. Run: cargo fmt"
@@ -48,7 +48,7 @@ else
     not_run "cargo-fmt" "no Cargo manifest here — formatting was not checked."
 fi
 
-echo "[3/8] Running clippy..."
+echo "[3/9] Running clippy..."
 if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
     cargo clippy --all-targets --all-features -- -D warnings || {
         echo "ERROR: clippy found warnings."
@@ -58,7 +58,7 @@ else
     not_run "clippy" "no Cargo manifest here — clippy did not run."
 fi
 
-echo "[4/8] Running tests..."
+echo "[4/9] Running tests..."
 if [ -f "Cargo.toml" ] || [ -f "crates/ovm/Cargo.toml" ]; then
     cargo test --quiet || {
         echo "ERROR: Tests failed."
@@ -68,7 +68,7 @@ else
     not_run "cargo-test" "no Cargo manifest here — the test suite did not run."
 fi
 
-echo "[5/8] Running shellcheck..."
+echo "[5/9] Running shellcheck..."
 if command -v shellcheck > /dev/null 2>&1; then
     # Only check what this checkout actually has. The public export ships this
     # hook but not every script named here, so a hardcoded list made shellcheck
@@ -94,7 +94,7 @@ else
     not_run "shellcheck" "shellcheck is not installed — shell scripts were not linted (brew install shellcheck)."
 fi
 
-echo "[6/8] Running actionlint..."
+echo "[6/9] Running actionlint..."
 if command -v actionlint > /dev/null 2>&1; then
     actionlint || {
         echo "ERROR: actionlint found issues."
@@ -104,8 +104,42 @@ else
     not_run "actionlint" "actionlint is not installed — workflows were not linted (brew install actionlint)."
 fi
 
+# The repo's own static guards, the ones CI runs as "Scripts smoke". Only the
+# fast static ones belong here — the behavioural smoke scripts take minutes and
+# are pre-push/CI work. These two are ~5s together and catch exactly what has
+# slipped through: a shell syntax error, and an early-exit consumer inside a
+# pipefail pipeline (`grep … | head`), which makes FINDING a string report
+# failure.
+echo "[7/9] Running repo shell guards..."
+guards_missing=""
+for guard in tests/scripts/syntax-check.sh tests/scripts/no-early-exit-pipes.sh; do
+    if [ -f "$guard" ]; then
+        bash "$guard" > /dev/null || {
+            echo "ERROR: $guard failed. Run it directly to see the offending lines."
+            exit 1
+        }
+    else
+        guards_missing="$guards_missing $guard"
+    fi
+done
+[ -n "$guards_missing" ] && not_run "shell-guards" "not in this checkout:$guards_missing"
+
+# site/install is what ovm.sh actually serves. CI checks this on Linux only, so
+# a stale copy reached main and the installer live on ovm.sh was a different
+# program from the one every test exercised.
+echo "[8/9] Checking deployed site assets..."
+if [ -f "install.sh" ] && [ -f "site/install" ]; then
+    if ! diff -q install.sh site/install > /dev/null; then
+        echo "ERROR: site/install is stale — ovm.sh would serve a different installer."
+        echo "       Run: bash scripts/sync-site-assets.sh && git add site/install"
+        exit 1
+    fi
+else
+    not_run "site-assets" "install.sh or site/install absent — deployed copy not checked."
+fi
+
 # Check for devlog and changelog updates on feat/fix commits
-echo "[7/8] Checking dev practices..."
+echo "[9/9] Checking dev practices..."
 STAGED_FILES=$(git diff --staged --name-only)
 
 # Count staged Rust source changes (excluding tests-only changes)
@@ -157,6 +191,6 @@ if [ -n "$NOT_RUN" ]; then
         exit 1
     fi
 else
-    echo "[8/8] Pre-commit checks passed."
+    echo "Pre-commit checks passed."
 fi
 echo ""

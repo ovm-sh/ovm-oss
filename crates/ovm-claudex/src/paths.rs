@@ -137,11 +137,46 @@ pub fn real_claude_config() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".claude.json"))
 }
 
-/// Directory to install the `claudex` shim into: `~/.local/bin` when present
-/// (it's where Claude Code's own launcher lives, so it's on PATH), else none.
+/// Directory to install the `claudex` shim into.
+///
+/// `~/.ovm/bin` first: the OVM installer creates it and writes it into the
+/// shell rc, so a shim there is reachable by construction rather than by luck.
+/// `~/.local/bin` stays as the fallback for a machine that has one but no OVM
+/// bin directory — it is where Claude Code's own launcher lives, so it is
+/// usually on PATH, but nothing puts it there on OVM's behalf.
 pub fn shim_install_dir() -> Option<PathBuf> {
-    let dir = dirs::home_dir()?.join(".local").join("bin");
-    dir.is_dir().then_some(dir)
+    shim_install_dir_at(&dirs::home_dir()?)
+}
+
+/// [`shim_install_dir`] against an explicit home, so the preference order is
+/// testable without touching the process environment.
+pub fn shim_install_dir_at(home: &Path) -> Option<PathBuf> {
+    let ovm_bin = home.join(".ovm").join("bin");
+    if ovm_bin.is_dir() {
+        return Some(ovm_bin);
+    }
+    let local_bin = home.join(".local").join("bin");
+    local_bin.is_dir().then_some(local_bin)
+}
+
+/// Every directory that may hold shims we wrote, current location first.
+///
+/// Install picks one; removal has to sweep both. Otherwise moving the install
+/// location strands whatever an earlier version wrote at the old one — the
+/// orphans [`crate::setup::CLAUDEX_SHIMS`] exists to make impossible.
+pub fn shim_search_dirs() -> Vec<PathBuf> {
+    dirs::home_dir().map_or_else(Vec::new, |home| shim_search_dirs_at(&home))
+}
+
+/// [`shim_search_dirs`] against an explicit home.
+pub fn shim_search_dirs_at(home: &Path) -> Vec<PathBuf> {
+    [
+        home.join(".ovm").join("bin"),
+        home.join(".local").join("bin"),
+    ]
+    .into_iter()
+    .filter(|dir| dir.is_dir())
+    .collect()
 }
 
 /// Human-friendly display of a path, with the home directory shown as `~`.
@@ -157,6 +192,55 @@ pub fn display(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn home_with(subdirs: &[&str]) -> tempfile::TempDir {
+        let home = tempfile::tempdir().expect("tempdir");
+        for dir in subdirs {
+            std::fs::create_dir_all(home.path().join(dir)).expect("mkdir");
+        }
+        home
+    }
+
+    /// The OVM installer creates ~/.ovm/bin and writes it into the shell rc,
+    /// so a shim there is reachable by construction. ~/.local/bin is only
+    /// reachable if something else already put it on PATH.
+    #[test]
+    fn shims_prefer_ovms_own_bin_over_local_bin() {
+        let home = home_with(&[".ovm/bin", ".local/bin"]);
+        assert_eq!(
+            shim_install_dir_at(home.path()),
+            Some(home.path().join(".ovm").join("bin"))
+        );
+    }
+
+    #[test]
+    fn local_bin_is_the_fallback_when_there_is_no_ovm_bin() {
+        let home = home_with(&[".local/bin"]);
+        assert_eq!(
+            shim_install_dir_at(home.path()),
+            Some(home.path().join(".local").join("bin"))
+        );
+    }
+
+    #[test]
+    fn no_bin_directory_means_no_shims() {
+        let home = home_with(&[]);
+        assert_eq!(shim_install_dir_at(home.path()), None);
+    }
+
+    /// Uninstall sweeps both, or the move to ~/.ovm/bin strands whatever an
+    /// earlier version wrote to ~/.local/bin.
+    #[test]
+    fn removal_sweeps_every_directory_that_has_hosted_shims() {
+        let home = home_with(&[".ovm/bin", ".local/bin"]);
+        assert_eq!(
+            shim_search_dirs_at(home.path()),
+            vec![
+                home.path().join(".ovm").join("bin"),
+                home.path().join(".local").join("bin"),
+            ]
+        );
+    }
 
     #[test]
     fn layout_hangs_off_one_base_directory() {

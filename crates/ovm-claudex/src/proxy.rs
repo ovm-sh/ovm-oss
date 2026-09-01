@@ -4,6 +4,7 @@
 //! launches skip straight through.
 
 use crate::config::ClaudexConfig;
+use crate::output::say;
 use crate::paths::{display, ClaudexDirs};
 use crate::{ClaudexError, Result};
 use console::style;
@@ -694,7 +695,7 @@ fn ensure_running_with_session_guard(
     let log = log_opts.open(&log_path)?;
     let log_err = log.try_clone()?;
 
-    eprintln!(
+    say!(
         "  {} Starting cliproxyapi on 127.0.0.1:{}…",
         style("→").dim(),
         config.proxy.port
@@ -818,7 +819,7 @@ fn retire_pid_record(dirs: &ClaudexDirs, pid: u32, dead: bool) {
         let _ = std::fs::remove_file(dirs.proxy_pid_file());
         return;
     }
-    eprintln!(
+    say!(
         "  {} Could not stop the half-started cliproxyapi (pid {pid}); its pidfile is kept at {} so `ovm claudex stop` can retry. If that fails, kill {pid} manually.",
         style("!").yellow(),
         display(&dirs.proxy_pid_file())
@@ -1083,7 +1084,7 @@ pub fn activate_pending_update(
     // vouched record when the registry can still vouch for a newer build.
     if pending.automatic && !pending.verified {
         crate::install::clear_pending_update(dirs)?;
-        eprintln!(
+        say!(
             "  {} A previously staged cliproxyapi {} was discarded: it predates OVM's registry-approved update gate. Run {} to install a registry-approved version.",
             style("!").yellow(),
             style(&pending.version).dim(),
@@ -1092,7 +1093,7 @@ pub fn activate_pending_update(
         return Ok(false);
     }
     if config.pin.is_some() {
-        eprintln!(
+        say!(
             "  {} cliproxyapi {} is installed but remains staged because the Claude/proxy pair is pinned.",
             style("⚲").yellow(),
             style(&pending.version).green().bold()
@@ -1128,7 +1129,7 @@ pub fn activate_pending_update(
     ) == ProxyProbe::Verified
     {
         let Some(record) = read_pid_record(&dirs.proxy_pid_file()) else {
-            eprintln!(
+            say!(
                 "  {} cliproxyapi {} is ready, but the running proxy has no verified pid record; update remains staged. Stop that proxy, then relaunch claudex.",
                 style("!").yellow(),
                 style(&pending.version).green().bold()
@@ -1136,7 +1137,7 @@ pub fn activate_pending_update(
             return Ok(false);
         };
         if pid_matches_record(&record) != Some(true) {
-            eprintln!(
+            say!(
                 "  {} cliproxyapi {} is ready, but the running proxy identity cannot be verified; update remains staged.",
                 style("!").yellow(),
                 style(&pending.version).green().bold()
@@ -1144,7 +1145,7 @@ pub fn activate_pending_update(
             return Ok(false);
         }
         if !record.session_guarded && !explicit {
-            eprintln!(
+            say!(
                 "  {} cliproxyapi {} is ready. This proxy predates safe session tracking, so it was not restarted automatically. After existing sessions exit, run: ovm claudex update",
                 style("!").yellow(),
                 style(&pending.version).green().bold()
@@ -1162,7 +1163,7 @@ pub fn activate_pending_update(
     match ensure_running_for_session(dirs, config) {
         Ok(_) => {
             crate::install::clear_pending_update(dirs)?;
-            eprintln!(
+            say!(
                 "  {} Activated and verified cliproxyapi {}.",
                 style("✓").green(),
                 style(&pending.version).green().bold()
@@ -1194,7 +1195,7 @@ pub fn stop_command() -> Result<()> {
     // stranded: every subsequent request fails. Say so instead of leaving
     // silent zombies.
     if live_sessions_exist(&dirs) {
-        eprintln!(
+        say!(
             "  {} Live claudex session(s) are still running; their requests will fail until the proxy starts again. Close them or run: ovm claudex",
             style("!").yellow()
         );
@@ -1210,7 +1211,7 @@ fn stop_with_attempts(dirs: &ClaudexDirs, wait_attempts: u32) -> Result<()> {
     let pid_file = dirs.proxy_pid_file();
 
     if !pid_file.exists() {
-        eprintln!("  {} Proxy is not running (no pidfile).", style("—").dim());
+        say!("  {} Proxy is not running (no pidfile).", style("—").dim());
         return Ok(());
     }
     let Some(record) = read_pid_record(&pid_file) else {
@@ -1242,7 +1243,7 @@ fn stop_with_attempts(dirs: &ClaudexDirs, wait_attempts: u32) -> Result<()> {
                 }
                 if exited {
                     std::fs::remove_file(&pid_file)?;
-                    eprintln!(
+                    say!(
                         "  {} Stopped cliproxyapi (pid {}).",
                         style("✓").green(),
                         record.pid
@@ -1260,7 +1261,7 @@ fn stop_with_attempts(dirs: &ClaudexDirs, wait_attempts: u32) -> Result<()> {
                     // couldn't verify — fail closed and keep the pidfile.
                     Some(false) => {
                         std::fs::remove_file(&pid_file)?;
-                        eprintln!(
+                        say!(
                             "  {} Process {} disappeared while stopping; cleaned up pidfile.",
                             style("—").dim(),
                             record.pid
@@ -1285,7 +1286,7 @@ fn stop_with_attempts(dirs: &ClaudexDirs, wait_attempts: u32) -> Result<()> {
             // Dead, or the PID was reused by an unrelated process — either
             // way the record is stale and signalling would be wrong.
             std::fs::remove_file(&pid_file)?;
-            eprintln!(
+            say!(
                 "  {} Pid {} no longer belongs to our proxy; removed the stale pidfile without signalling.",
                 style("—").dim(),
                 record.pid

@@ -61,8 +61,8 @@ pub struct Migration {
 
 // CODEX_STATE_MIGRATIONS_BEGIN
 // Codex `state` migrator — generated from openai/codex codex-rs/state/migrations
-// at rust-v0.150.1 (regenerate with scripts/gen-codex-migration-manifest.py).
-// source commit: 90854393966b21e9ebfd21b122334eb09a20c93d
+// at rust-v0.152.0 (regenerate with scripts/gen-codex-migration-manifest.py).
+// source commit: 316795b3cf2a45e90d121d9f46499d4658b2645c
 // Keep in version
 // order; `breaking` flags removals only.
 #[rustfmt::skip]
@@ -118,6 +118,7 @@ const CODEX_STATE_MIGRATIONS: &[Migration] = &[
     Migration { version: 49, description: "projects", breaking: false },
     Migration { version: 50, description: "threads section empty preview indexes", breaking: false },
     Migration { version: 51, description: "thread artifacts", breaking: false },
+    Migration { version: 52, description: "projects recency", breaking: false },
 ];
 // CODEX_STATE_MIGRATIONS_END
 
@@ -636,6 +637,36 @@ fn applied_migrations(
     Ok(versions)
 }
 
+/// Keep only the unbroken run of known migrations from the start of history.
+///
+/// [`versions_present`] matches each migration's *description* as a raw byte
+/// substring, and several descriptions are ordinary English words — "threads"
+/// (1), "logs" (2), "memories" (6), "projects" (49). Those match text that has
+/// nothing to do with a migration, so a build whose history stops at 32 can
+/// report knowing 49 on the strength of the word "projects" appearing
+/// somewhere in it.
+///
+/// A binary embeds a contiguous prefix of history: `sqlx` compiles in every
+/// migration up to the one it was built against and none after it. A match
+/// separated from that prefix by a gap is therefore noise by construction.
+///
+/// Dropping it matters in one direction especially. An inflated ceiling makes
+/// migrations look *understood*, so a breaking migration that happened to be
+/// described in one common word would be counted as known and the guard would
+/// stay silent — the exact failure it exists to catch.
+fn contiguous_prefix(known: &BTreeSet<u32>, manifest: &[KnownMigration]) -> BTreeSet<u32> {
+    let mut versions: Vec<u32> = manifest.iter().map(|migration| migration.version).collect();
+    versions.sort_unstable();
+    let mut kept = BTreeSet::new();
+    for version in versions {
+        if !known.contains(&version) {
+            break;
+        }
+        kept.insert(version);
+    }
+    kept
+}
+
 fn max_version(set: &BTreeSet<u32>) -> u32 {
     set.last().copied().unwrap_or(0)
 }
@@ -703,6 +734,8 @@ fn assess_in_dir(binary: &Path, dir: &Path, manifest: &[KnownMigration]) -> Asse
             })
         }
     };
+
+    let known = contiguous_prefix(&known, manifest);
 
     AssessmentOutcome::Assessed(build_assessment(state_db, &applied, &known, manifest))
 }
@@ -1195,6 +1228,17 @@ mod tests {
         assess_in_dir(binary, dir, &compiled_manifest())
     }
 
+    /// Descriptions for migrations 1..=`through`, the shape a real binary
+    /// carries: `sqlx` compiles in an unbroken prefix of history, never an
+    /// isolated migration from the middle of it.
+    fn history_through(through: u32) -> Vec<String> {
+        compiled_manifest()
+            .into_iter()
+            .filter(|migration| migration.version <= through)
+            .map(|migration| migration.description)
+            .collect()
+    }
+
     #[test]
     fn sqlite_migration_table_is_authoritative_and_read_only() {
         let dir = tempdir().expect("tempdir");
@@ -1206,7 +1250,12 @@ mod tests {
                 (36, "threads visible sort indexes", false),
             ],
         );
-        let binary = write(dir.path(), "codex", &["drop thread goals"]);
+        let history = history_through(34);
+        let binary = write(
+            dir.path(),
+            "codex",
+            &history.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
 
         let outcome = assess_compiled(&binary, dir.path());
         let AssessmentOutcome::Assessed(assessment) = outcome else {
@@ -1894,5 +1943,52 @@ mod tests {
         let path = default_evidence_path();
         std::env::remove_var(REGISTRY_CACHE_ENV);
         assert_eq!(path, Some(dir.path().join(EVIDENCE_FILE_NAME)));
+    }
+
+    #[test]
+    fn contiguous_prefix_drops_a_match_past_a_gap() {
+        // The shape a real dev fork produced: history genuinely ends at 32,
+        // but the word "projects" (migration 49) appears in the binary as
+        // ordinary text, and the raw scan reported knowing 49.
+        let manifest = compiled_manifest();
+        let mut known: BTreeSet<u32> = (1..=32).collect();
+        known.insert(49);
+
+        let kept = contiguous_prefix(&known, &manifest);
+
+        assert_eq!(max_version(&kept), 32);
+        assert!(!kept.contains(&49));
+    }
+
+    #[test]
+    fn contiguous_prefix_keeps_an_unbroken_history() {
+        let manifest = compiled_manifest();
+        let known: BTreeSet<u32> = manifest.iter().map(|m| m.version).collect();
+
+        let kept = contiguous_prefix(&known, &manifest);
+
+        assert_eq!(kept, known);
+    }
+
+    #[test]
+    fn a_generic_description_cannot_hide_a_breaking_migration() {
+        // The failure that matters: if a spurious match let a breaking
+        // migration count as understood, the guard would go quiet on exactly
+        // the case it exists to catch. 34 ("drop thread goals") must stay
+        // unknown to a build whose real history stops at 32.
+        let manifest = compiled_manifest();
+        let mut known: BTreeSet<u32> = (1..=32).collect();
+        known.insert(49);
+        let kept = contiguous_prefix(&known, &manifest);
+
+        let applied: BTreeSet<u32> = (1..=51).collect();
+        let assessment =
+            build_assessment(PathBuf::from("state_5.sqlite"), &applied, &kept, &manifest);
+
+        let breaking: Vec<u32> = assessment.breaking().map(|m| m.version).collect();
+        assert!(breaking.contains(&34), "{breaking:?}");
+        assert!(breaking.contains(&35), "{breaking:?}");
+        assert!(breaking.contains(&42), "{breaking:?}");
+        assert!(assessment.degraded());
     }
 }

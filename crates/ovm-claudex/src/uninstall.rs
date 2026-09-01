@@ -2,7 +2,8 @@
 //! (only with `--purge`, after confirmation) delete `~/.ovm/claudex/` with
 //! its credentials and isolated history.
 
-use crate::paths::{display, shim_install_dir, ClaudexDirs};
+use crate::output::{ask, say};
+use crate::paths::{display, shim_search_dirs, ClaudexDirs};
 use crate::{proxy, ClaudexError, Result};
 use console::style;
 
@@ -13,25 +14,25 @@ pub fn run(purge: bool) -> Result<()> {
     remove_owned_shims()?;
 
     if !purge {
-        eprintln!(
+        say!(
             "  {} Kept {} (config, OAuth grant, isolated history).",
             style("—").dim(),
             display(&dirs.base)
         );
-        eprintln!("    Remove everything with: ovm claudex uninstall --purge");
+        say!("    Remove everything with: ovm claudex uninstall --purge");
         return Ok(());
     }
 
     if !dirs.base.exists() {
-        eprintln!("  {} Nothing to purge.", style("—").dim());
+        say!("  {} Nothing to purge.", style("—").dim());
         return Ok(());
     }
     if !confirm_purge(&display(&dirs.base), interactive_shell())? {
-        eprintln!("  {} Purge cancelled — data kept.", style("✗").dim());
+        say!("  {} Purge cancelled — data kept.", style("✗").dim());
         return Ok(());
     }
     std::fs::remove_dir_all(&dirs.base)?;
-    eprintln!(
+    say!(
         "  {} Removed {} — claudex is fully uninstalled.",
         style("✓").green(),
         display(&dirs.base)
@@ -41,24 +42,27 @@ pub fn run(purge: bool) -> Result<()> {
 
 /// Delete the claudex shims, but only files that are actually ovm's.
 fn remove_owned_shims() -> Result<()> {
-    let Some(bin_dir) = shim_install_dir() else {
-        return Ok(());
-    };
-    for name in crate::setup::CLAUDEX_SHIMS {
-        let shim = bin_dir.join(name);
-        match std::fs::read_to_string(&shim) {
-            Ok(contents) if contents.starts_with("#!/bin/sh\nexec ovm ") => {
-                std::fs::remove_file(&shim)?;
-                eprintln!("  {} Removed shim {}", style("✓").green(), display(&shim));
+    // Every directory that has ever hosted them, not just the one a fresh
+    // install would pick: the location moved to ~/.ovm/bin, and an uninstall
+    // that swept only there would leave a machine's older ~/.local/bin shims
+    // behind, still execing an `ovm` that is on its way out.
+    for bin_dir in shim_search_dirs() {
+        for name in crate::setup::CLAUDEX_SHIMS {
+            let shim = bin_dir.join(name);
+            match std::fs::read_to_string(&shim) {
+                Ok(contents) if contents.starts_with("#!/bin/sh\nexec ovm ") => {
+                    std::fs::remove_file(&shim)?;
+                    say!("  {} Removed shim {}", style("✓").green(), display(&shim));
+                }
+                Ok(_) => {
+                    say!(
+                        "  {} Left {} alone — it isn't ovm's shim.",
+                        style("!").yellow(),
+                        display(&shim)
+                    );
+                }
+                Err(_) => {}
             }
-            Ok(_) => {
-                eprintln!(
-                    "  {} Left {} alone — it isn't ovm's shim.",
-                    style("!").yellow(),
-                    display(&shim)
-                );
-            }
-            Err(_) => {}
         }
     }
     Ok(())
@@ -86,7 +90,7 @@ fn confirm_purge(target: &str, interactive: bool) -> Result<bool> {
                 .into(),
         ));
     }
-    eprint!(
+    ask!(
         "  {} Delete {target} including the Codex OAuth grant and all claudex history? [y/N] ",
         style("?").red().bold()
     );

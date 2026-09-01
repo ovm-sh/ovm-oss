@@ -3,6 +3,7 @@
 //! registry, generated CLAUDE.md), and the `claudex` shim.
 
 use crate::config::{generate_api_key, ClaudexConfig};
+use crate::output::{ask, say};
 use crate::paths::{display, real_claude_config, real_claude_home, shim_install_dir, ClaudexDirs};
 use crate::{proxy, ClaudexError, Result};
 use console::style;
@@ -24,7 +25,7 @@ pub fn run() -> Result<()> {
 pub fn run_guided(offer_launch: bool) -> Result<()> {
     print_intro();
     if !confirm("Proceed?")? {
-        eprintln!("  {} Cancelled — nothing was changed.", style("✗").dim());
+        say!("  {} Cancelled — nothing was changed.", style("✗").dim());
         return Ok(());
     }
 
@@ -38,7 +39,7 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
     }
     config.save(&dirs.config_file())?;
     write_proxy_config(&dirs, &config)?;
-    eprintln!(
+    say!(
         "  {} Config written → {}",
         style("✓").green(),
         display(&dirs.config_file())
@@ -48,8 +49,8 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
 
     seed_claude_home(&dirs, &config)?;
     crate::feedback::install_session_hooks(&dirs)?;
-    eprintln!(
-        "  {} Isolated Claude home seeded → {} (your ~/.claude is untouched)",
+    say!(
+        "  {} Isolated Claude home → {} (your ~/.claude is untouched)",
         style("✓").green(),
         display(&dirs.claude_home())
     );
@@ -61,7 +62,7 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
     // upstream's GitHub releases — so setup has no brew prerequisite.
     let proxy_binary = match proxy::resolve_binary(&dirs, &config) {
         Some(binary) => {
-            eprintln!(
+            say!(
                 "  {} cliproxyapi found ({})",
                 style("✓").green(),
                 binary.version_label()
@@ -71,13 +72,11 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
         None => match crate::install::install_latest(&dirs) {
             Ok(path) => path,
             Err(error) => {
-                eprintln!(
+                say!(
                     "  {} Managed proxy install failed ({error}).",
                     style("!").yellow()
                 );
-                eprintln!(
-                    "    Retry later with `ovm claudex update`, or `brew install cliproxyapi`."
-                );
+                say!("    Retry later with `ovm claudex update`, or `brew install cliproxyapi`.");
                 return Ok(());
             }
         },
@@ -85,15 +84,15 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
     offer_codex_login(&dirs, &proxy_binary, &config)?;
     offer_codex_cli()?;
 
-    eprintln!();
-    eprintln!(
+    say!();
+    say!(
         "  {} Done. Launch commands: {} · {} (yolo) · {} (fast).",
         style("(≈^.^≈)").green(),
         style("claudex").cyan().bold(),
         style("ccxy").cyan(),
         style("ccxf").cyan()
     );
-    eprintln!(
+    say!(
         "  {} there's a story behind the cats — {}",
         style("◇").magenta(),
         style("ovm story").magenta().bold()
@@ -111,7 +110,7 @@ pub fn run_guided(offer_launch: bool) -> Result<()> {
 /// offer `ovm install claude` (the verified-registry path) right here.
 fn ensure_claude_installed() -> Result<()> {
     if let Some(version) = crate::launch::active_claude_version() {
-        eprintln!(
+        say!(
             "  {} Claude Code {} installed",
             style("✓").green(),
             style(&version).green()
@@ -119,7 +118,7 @@ fn ensure_claude_installed() -> Result<()> {
         return Ok(());
     }
     if !confirm("Claude Code isn't installed — install the latest verified release now?")? {
-        eprintln!(
+        say!(
             "    Skipped — claudex needs it. Run `ovm install claude latest && ovm use claude latest`, then re-run setup."
         );
         return Ok(());
@@ -158,7 +157,7 @@ fn offer_codex_cli() -> Result<()> {
         .map(|out| out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty())
         .unwrap_or(false);
     if installed {
-        eprintln!(
+        say!(
             "  {} Codex CLI already installed (not required for claudex)",
             style("✓").green()
         );
@@ -177,7 +176,7 @@ fn offer_codex_cli() -> Result<()> {
             .args(["use", "codex", "latest"])
             .status();
     } else {
-        eprintln!(
+        say!(
             "  {} Codex CLI install did not complete — claudex is unaffected. Retry: ovm install codex latest",
             style("!").yellow()
         );
@@ -186,47 +185,61 @@ fn offer_codex_cli() -> Result<()> {
 }
 
 fn print_intro() {
-    eprintln!();
-    eprintln!(
+    say!();
+    say!(
         "  {}  {}",
         style("(≈^.^≈)").magenta(),
         style("claudex — Claude Code on GPT-5.6").magenta().bold()
     );
-    eprintln!();
-    eprintln!("  Claude Code stays your harness; GPT-5.6 Sol (via your ChatGPT/Codex");
-    eprintln!("  subscription) becomes the model, through a local CLIProxyAPI sidecar.");
-    eprintln!();
-    eprintln!("  This recipe was shared publicly by OpenAI's Codex lead:");
-    eprintln!("  {}", style(ORIGIN_TWEET).cyan().underlined());
-    eprintln!(
+    say!();
+    // The pitch and its provenance — skipped when the caller has already made
+    // them. `ovm hatch` spends chapter iii on exactly this ("one more thing —
+    // have you heard of claudex?"), with the same framing and the same link,
+    // twenty lines before it hands over. Saying it again in a second voice was
+    // the loudest part of the seam between the two.
+    if !crate::output::brief() {
+        say!("  Claude Code stays your harness; GPT-5.6 Sol (via your ChatGPT/Codex");
+        say!("  subscription) becomes the model, through a local CLIProxyAPI sidecar.");
+        say!();
+        say!("  This recipe was shared publicly by OpenAI's Codex lead:");
+        say!("  {}", style(ORIGIN_TWEET).cyan().underlined());
+    }
+    // The risk line is never skipped: it is consent, not marketing.
+    say!(
         "  {}",
-        style("Unofficial integration — use at your own risk. (\"If this gets blocked, I owe you a reset.\")")
-            .yellow()
+        style("Unofficial integration — use at your own risk.").yellow()
     );
-    eprintln!();
-    eprintln!("  Setup will (each step checks before it does anything):");
-    eprintln!("    1. Install Claude Code if it isn't already (verified registry)");
-    eprintln!("    2. Configure the CLIProxyAPI sidecar (localhost-only, random local key)");
-    eprintln!("    3. Connect your Codex account via browser OAuth");
-    eprintln!("    4. Create an ISOLATED Claude home under ~/.ovm/claudex/claude —");
-    eprintln!("       your existing claude history, settings, and login stay untouched,");
-    eprintln!("       and /resume never mixes Anthropic and GPT sessions");
-    eprintln!("    5. Seed infinite history retention and the GPT-5.6 model registry");
-    eprintln!("       (/model switches between Sol, Terra, and Luna)");
-    eprintln!();
-    eprintln!("  Launch commands (y = yolo, f = fast/priority tier — stackable):");
-    eprintln!("    claudex / ccx        Sol");
-    eprintln!("    ccxy                 Sol, yolo");
-    eprintln!("    ccxf                 Sol on priority tier (main + subagents)");
-    eprintln!("    ccxyf                Sol, yolo, priority tier");
-    eprintln!();
+    say!(
+        "  {}",
+        style("(\"If this gets blocked, I owe you a reset.\")").yellow()
+    );
+    say!();
+    say!("  Setup will (each step checks before it does anything):");
+    say!("    1. Install Claude Code if it isn't already (verified registry)");
+    // 72 columns is the budget: this line was 75 and wrapped to column 0 on a
+    // narrow terminal, breaking the block. "local" was redundant beside
+    // "localhost-only" anyway.
+    say!("    2. Configure the CLIProxyAPI sidecar (localhost-only, random key)");
+    say!("    3. Connect your Codex account via browser OAuth");
+    say!("    4. Create an ISOLATED Claude home under ~/.ovm/claudex/claude —");
+    say!("       your existing claude history, settings, and login stay untouched,");
+    say!("       and /resume never mixes Anthropic and GPT sessions");
+    say!("    5. Seed infinite history retention and the GPT-5.6 model registry");
+    say!("       (/model switches between Sol, Terra, and Luna)");
+    say!();
+    say!("  Launch commands (y = yolo, f = fast/priority tier — stackable):");
+    say!("    claudex / ccx        Sol");
+    say!("    ccxy                 Sol, yolo");
+    say!("    ccxf                 Sol on priority tier (main + subagents)");
+    say!("    ccxyf                Sol, yolo, priority tier");
+    say!();
 }
 
 fn confirm(question: &str) -> Result<bool> {
     if !console::Term::stderr().is_term() {
         return Ok(true);
     }
-    eprint!("  {} {} [Y/n] ", style("?").yellow().bold(), question);
+    ask!("  {} {} [Y/n] ", style("?").yellow().bold(), question);
     std::io::stderr().flush()?;
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
@@ -241,7 +254,7 @@ fn confirm_default_no(question: &str) -> Result<bool> {
     if !console::Term::stderr().is_term() {
         return Ok(false);
     }
-    eprint!("  {} {} [y/N] ", style("?").yellow().bold(), question);
+    ask!("  {} {} [y/N] ", style("?").yellow().bold(), question);
     std::io::stderr().flush()?;
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
@@ -495,7 +508,7 @@ fn claude_md_contents(config: &ClaudexConfig, import_user_global: bool) -> Strin
 /// so the two can never drift and leave orphans.
 pub(crate) const CLAUDEX_SHIMS: [&str; 5] = ["claudex", "ccx", "ccxy", "ccxf", "ccxyf"];
 
-/// Ownership of an existing `~/.local/bin` entry that would host a shim.
+/// Ownership of an existing entry that would host a shim.
 #[derive(Debug, PartialEq, Eq)]
 enum ShimSlot {
     /// Nothing there — safe to write.
@@ -526,8 +539,8 @@ fn classify_shim(path: &std::path::Path) -> ShimSlot {
 
 fn install_shims() -> Result<()> {
     let Some(bin_dir) = shim_install_dir() else {
-        eprintln!(
-            "  {} ~/.local/bin not found — launch with `ovm claudex` instead of a `claudex` shim.",
+        say!(
+            "  {} No ~/.ovm/bin or ~/.local/bin — launch with `ovm claudex` instead of a shim.",
             style("!").yellow()
         );
         return Ok(());
@@ -539,7 +552,7 @@ fn install_shims() -> Result<()> {
         match classify_shim(&shim) {
             ShimSlot::Absent | ShimSlot::Ours => {}
             ShimSlot::Foreign => {
-                eprintln!(
+                say!(
                     "  {} Skipped {name} shim: {} isn't ovm's — leaving it untouched.",
                     style("!").yellow(),
                     display(&shim)
@@ -554,25 +567,40 @@ fn install_shims() -> Result<()> {
         )?;
         installed.push(name);
     }
-    eprintln!(
+    say!(
         "  {} Shims installed → {} ({})",
         style("✓").green(),
         display(&bin_dir),
         installed.join(", ")
     );
 
-    // OVM never edits shell rc files, so if nothing else put ~/.local/bin on
-    // PATH (Claude Code's installer usually has), the shims are unreachable —
-    // say so instead of leaving a silent dud.
+    // Unreachable shims are a silent dud, so say so. Rare now that ~/.ovm/bin
+    // is preferred — the OVM installer writes that one into the shell rc — but
+    // the ~/.local/bin fallback has no such guarantee, and either can be taken
+    // back off PATH by hand.
     if !dir_on_path(&bin_dir) {
-        eprintln!(
+        say!(
             "  {} {} is not on your PATH — add this to your shell rc:",
             style("!").yellow(),
             display(&bin_dir)
         );
-        eprintln!("      export PATH=\"$HOME/.local/bin:$PATH\"");
+        say!("      export PATH=\"{}:$PATH\"", rc_path_form(&bin_dir));
     }
     Ok(())
+}
+
+/// The rc-file spelling of a path: `$HOME`-relative, so the exported line
+/// survives a moved home directory. The same form the OVM installer writes.
+fn rc_path_form(path: &std::path::Path) -> String {
+    let relative = dirs::home_dir().and_then(|home| {
+        path.strip_prefix(home)
+            .ok()
+            .map(std::path::Path::to_path_buf)
+    });
+    match relative {
+        Some(rest) => format!("$HOME/{}", rest.display()),
+        None => path.display().to_string(),
+    }
 }
 
 /// Whether `dir` is one of the entries in the current `PATH`.
@@ -609,21 +637,21 @@ fn offer_codex_login(
     if has_codex_auth(dirs) {
         match verify_existing_grant(dirs, config) {
             GrantHealth::Working => {
-                eprintln!(
+                say!(
                     "  {} Codex account connected (verified with a live completion).",
                     style("✓").green()
                 );
                 return Ok(());
             }
             GrantHealth::Unverifiable => {
-                eprintln!(
+                say!(
                     "  {} Codex OAuth grant present (proxy not running — verified on launch).",
                     style("✓").green()
                 );
                 return Ok(());
             }
             GrantHealth::Dead(why) => {
-                eprintln!(
+                say!(
                     "  {} Stored Codex grant is rejected upstream ({why}) — a fresh login is needed.",
                     style("!").yellow()
                 );
@@ -636,8 +664,18 @@ fn offer_codex_login(
     } else {
         "Connect your Codex account now (opens browser)?"
     };
+    // The only step that leaves the terminal, and the most consequential thing
+    // this wizard does. Say what is about to happen before asking — a browser
+    // opening unannounced is the moment people reach for ctrl-C.
+    say!();
+    say!(
+        "  {} This opens OpenAI's sign-in page in your browser.",
+        style("→").dim()
+    );
+    say!("    The grant is stored under ~/.ovm/claudex and used only by the");
+    say!("    local sidecar. Nothing is sent anywhere else.");
     if !confirm(question)? {
-        eprintln!("    Skipped — run `ovm claudex setup` again when ready.");
+        say!("    Skipped — run `ovm claudex setup` again when ready.");
         return Ok(());
     }
     let login_started = std::time::SystemTime::now();
@@ -683,7 +721,7 @@ fn run_codex_login(dirs: &ClaudexDirs, binary: &std::path::Path) -> Result<()> {
         .arg(dirs.proxy_config_file())
         .status()?;
     if status.code() == Some(OAUTH_CALLBACK_PORT_IN_USE) {
-        eprintln!(
+        say!(
             "  {} The browser flow's local callback port is taken by another app — switching to the device-code flow.",
             style("!").yellow()
         );
@@ -737,7 +775,7 @@ fn retire_stale_grants(auth_dir: &std::path::Path, login_started: std::time::Sys
         if std::fs::create_dir_all(&retired_dir).is_ok()
             && std::fs::rename(&path, retired_dir.join(name)).is_ok()
         {
-            eprintln!(
+            say!(
                 "    retired dead grant: {} → auth-retired/",
                 name.to_string_lossy()
             );

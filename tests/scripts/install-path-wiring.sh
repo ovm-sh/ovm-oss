@@ -31,9 +31,15 @@ run_case() {
   shift 2
   local home="$TMP_DIR/$name"
   mkdir -p "$home/.ovm/bin"
+  # configure_path WRITES, print_path_outro SPEAKS. They were one function
+  # until the outro had to move to the end of the install: the hatch runs in
+  # between, and its first screen clears the terminal, so anything said here
+  # was wiped before the reader could act on it. The pair is the unit — what
+  # the user ends up seeing is unchanged, and that is what these cases assert.
   # shellcheck disable=SC2016  # deliberately unexpanded in the child shell
   HOME="$home" SHELL="/bin/$shell_name" PATH="/usr/bin:/bin" \
-    sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"" > "$home/out.txt" 2>&1
+    sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"; print_path_outro" \
+    > "$home/out.txt" 2>&1
   echo "$home"
 }
 
@@ -91,7 +97,7 @@ home=$(run_case unknown ksh93)
 home="$TMP_DIR/optout"
 mkdir -p "$home/.ovm/bin"
 HOME="$home" SHELL=/bin/zsh OVM_NO_MODIFY_PATH=1 PATH="/usr/bin:/bin" \
-  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"" > "$home/out.txt" 2>&1
+  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"; print_path_outro" > "$home/out.txt" 2>&1
 [ -f "$home/.zshrc" ] && { echo "OVM_NO_MODIFY_PATH was ignored" >&2; exit 1; }
 grep -Fq 'OVM_NO_MODIFY_PATH' "$home/out.txt" || {
   echo "opt-out was not explained to the user" >&2; exit 1;
@@ -101,7 +107,7 @@ grep -Fq 'OVM_NO_MODIFY_PATH' "$home/out.txt" || {
 home="$TMP_DIR/already"
 mkdir -p "$home/.ovm/bin"
 HOME="$home" SHELL=/bin/zsh PATH="$home/.ovm/bin:/usr/bin:/bin" \
-  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"" > "$home/out.txt" 2>&1
+  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"; print_path_outro" > "$home/out.txt" 2>&1
 [ -f "$home/.zshrc" ] && { echo "rc file written when PATH was already set" >&2; exit 1; }
 grep -Fq 'already' "$home/out.txt" || {
   echo "did not report that PATH was already set" >&2; exit 1;
@@ -117,11 +123,62 @@ mkdir -p "$home/.ovm/bin"
 chmod 0444 "$home/.zshrc"
 chmod 0555 "$home"
 HOME="$home" SHELL=/bin/zsh PATH="/usr/bin:/bin" \
-  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"" > "$TMP_DIR/readonly-out.txt" 2>&1 || true
+  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"; print_path_outro" > "$TMP_DIR/readonly-out.txt" 2>&1 || true
 chmod 0755 "$home"
 grep -Fq 'NOT on your PATH' "$TMP_DIR/readonly-out.txt" || {
   echo "an unwritable shell config was reported as a clean install:" >&2
   cat "$TMP_DIR/readonly-out.txt" >&2
+  exit 1
+}
+
+# --- the outro speaks; configure_path stays silent --------------------------
+# This is the whole point of the split. 0.1.7 printed the PATH advice BEFORE
+# offering the hatch, and the tour's opening screen-clear wiped it — on the
+# default answer, every time — leaving the reader in a shell that could not
+# find ovm with the explanation four screens behind them. Assert the property,
+# not just the text: nothing may be said until the install is over.
+home="$TMP_DIR/silent"
+mkdir -p "$home/.ovm/bin"
+HOME="$home" SHELL=/bin/zsh PATH="/usr/bin:/bin" \
+  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"" > "$home/out.txt" 2>&1
+if [ -s "$home/out.txt" ]; then
+  echo "configure_path spoke before the install finished:" >&2
+  cat "$home/out.txt" >&2
+  exit 1
+fi
+[ -f "$home/.zshrc" ] || { echo "configure_path did not write the rc file" >&2; exit 1; }
+
+# --- after the tour, the installer does not repeat it -----------------------
+# The tour closes with its own version of this, naming the shortcuts it just
+# installed. Two closing screens disagreeing about what to type next is worse
+# than either alone.
+home="$TMP_DIR/hatched"
+mkdir -p "$home/.ovm/bin"
+HOME="$home" SHELL=/bin/zsh PATH="/usr/bin:/bin" \
+  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"; HATCH_RAN=1; print_path_outro" \
+  > "$home/out.txt" 2>&1
+if [ -s "$home/out.txt" ]; then
+  echo "the installer repeated the tour's closing advice:" >&2
+  cat "$home/out.txt" >&2
+  exit 1
+fi
+
+# --- ...unless the rc write failed, where the tour's advice is untrue -------
+# The tour says "open a new terminal session". With no rc line written, a new
+# terminal will not have it either, so the accurate warning must get the last
+# word even though the tour already spoke.
+home="$TMP_DIR/hatched-readonly"
+mkdir -p "$home/.ovm/bin"
+: > "$home/.zshrc"
+chmod 0444 "$home/.zshrc"
+chmod 0555 "$home"
+HOME="$home" SHELL=/bin/zsh PATH="/usr/bin:/bin" \
+  sh -c ". '$helpers'; configure_path \"\$HOME/.ovm/bin\"; HATCH_RAN=1; print_path_outro" \
+  > "$TMP_DIR/hatched-readonly-out.txt" 2>&1 || true
+chmod 0755 "$home"
+grep -Fq 'NOT on your PATH' "$TMP_DIR/hatched-readonly-out.txt" || {
+  echo "a failed rc write went unmentioned because the tour had run:" >&2
+  cat "$TMP_DIR/hatched-readonly-out.txt" >&2
   exit 1
 }
 

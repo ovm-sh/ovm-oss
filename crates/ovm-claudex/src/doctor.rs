@@ -1,6 +1,7 @@
 //! `ovm claudex doctor` — one screen answering "why doesn't claudex work?".
 
 use crate::config::ClaudexConfig;
+use crate::output::say;
 use crate::paths::{display, ClaudexDirs};
 use crate::{proxy, Result};
 use console::style;
@@ -9,9 +10,9 @@ pub fn run() -> Result<()> {
     let dirs = ClaudexDirs::new()?;
     let mut healthy = true;
 
-    eprintln!();
-    eprintln!("  {}  claudex doctor", style("(≈^.^≈)").magenta());
-    eprintln!();
+    say!();
+    say!("  {}  claudex doctor", style("(≈^.^≈)").magenta());
+    say!();
 
     let config = match ClaudexConfig::load(&dirs.config_file())? {
         Some(config) => {
@@ -80,7 +81,7 @@ pub fn run() -> Result<()> {
                 &mut healthy,
             ),
             proxy::ProxyProbe::Down => {
-                eprintln!(
+                say!(
                     "  {} proxy not running (will start on next launch)",
                     style("—").dim()
                 );
@@ -93,7 +94,7 @@ pub fn run() -> Result<()> {
         }
 
         if let Some(pin) = &config.pin {
-            eprintln!(
+            say!(
                 "  {} pinned pair: claude {} + proxy {}",
                 style("⚲").yellow(),
                 pin.claude,
@@ -110,11 +111,11 @@ pub fn run() -> Result<()> {
         ),
     }
 
-    eprintln!();
+    say!();
     if healthy {
-        eprintln!("  {} All good.", style("✓").green().bold());
+        say!("  {} All good.", style("✓").green().bold());
     } else {
-        eprintln!("  {} Problems found — see above.", style("✗").red().bold());
+        say!("  {} Problems found — see above.", style("✗").red().bold());
         std::process::exit(1);
     }
     Ok(())
@@ -191,7 +192,7 @@ fn check_model_registry(config: &ClaudexConfig, healthy: &mut bool) {
         RegistryStatus::Ready => {
             ok("model registry live: all tier models + fast aliases selectable")
         }
-        RegistryStatus::FastAliasesMissing => eprintln!(
+        RegistryStatus::FastAliasesMissing => say!(
             "  {} fast aliases not exposed yet — re-run `ovm claudex setup` to regenerate the proxy config",
             style("!").yellow()
         ),
@@ -227,7 +228,7 @@ fn check_live_credential(config: &ClaudexConfig, healthy: &mut bool) {
             &format!("Codex credential rejected upstream ({why}) — reconnect: ovm claudex setup"),
             healthy,
         ),
-        proxy::CredentialProbe::Inconclusive(why) => eprintln!(
+        proxy::CredentialProbe::Inconclusive(why) => say!(
             "  {} could not verify the Codex credential upstream ({why})",
             style("!").yellow()
         ),
@@ -280,12 +281,12 @@ fn check_credentials(dirs: &ClaudexDirs, healthy: &mut bool) {
 }
 
 fn ok(message: &str) {
-    eprintln!("  {} {message}", style("✓").green());
+    say!("  {} {message}", style("✓").green());
 }
 
 fn bad(message: &str, healthy: &mut bool) {
     *healthy = false;
-    eprintln!("  {} {message}", style("✗").red());
+    say!("  {} {message}", style("✗").red());
 }
 
 fn claude_version() -> Option<String> {

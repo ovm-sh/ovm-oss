@@ -15,6 +15,7 @@
 //! forward. Acts auto-skip when the product is already managed, so on a
 //! machine that has everything the story path degrades to exactly `ovm story`.
 
+use super::shortcuts;
 use super::story::Story;
 use crate::buddy::Buddy;
 use crate::error::{OvmError, Result};
@@ -37,19 +38,192 @@ const HATCH_VERSION: &str = "2.1.96";
 /// beside it reads as a different program (and on the recording the content
 /// block visibly jumps between centred and left-anchored pages). Every line
 /// the tour prints shares this margin so the whole run keeps one left edge.
-fn margin() -> &'static str {
-    static MARGIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    MARGIN.get_or_init(|| {
+///
+/// `usable` is the other half of that arrangement, and the half that used to
+/// live nowhere: a centred block leaves `width - margin` columns, and the
+/// terminal does not wrap what overruns them politely — the remainder starts
+/// at column 0, outside the margin, and the centred block comes apart. That
+/// shipped in 0.1.7 (a 91-character line on an 84-column budget) and was
+/// caught only when the release was filmed. [`say_line`] folds to `usable` so the
+/// arithmetic is done once, here, rather than in the head of whoever writes
+/// the next line.
+struct Layout {
+    margin: String,
+    usable: usize,
+}
+
+/// The margin a terminal of `width` columns gets, and the room left inside it.
+///
+/// One copy of the arithmetic, so the tests measure the budget the tour
+/// actually prints against rather than a second-hand restatement of it.
+fn budget(width: usize) -> (String, usize) {
+    let margin = " ".repeat(2.max(width.saturating_sub(62) / 2));
+    // A terminal narrower than the margin is not worth laying out for, but it
+    // must not produce a zero-width budget that puts every word on its own
+    // line.
+    let usable = width.saturating_sub(margin.len()).max(20);
+    (margin, usable)
+}
+
+fn layout() -> &'static Layout {
+    static LAYOUT: std::sync::OnceLock<Layout> = std::sync::OnceLock::new();
+    LAYOUT.get_or_init(|| {
         let width = console::Term::stderr()
             .size_checked()
             .map_or(80, |(_, cols)| cols as usize);
-        let margin = " ".repeat(2.max(width.saturating_sub(62) / 2));
+        let (margin, usable) = budget(width);
         // The installs the tour runs print from the shared install path,
         // which knows nothing about the tour and would otherwise hug the
         // terminal edge while the prose above it sat centred.
         crate::mochi::set_indent(margin.clone());
-        margin
+        Layout { margin, usable }
     })
+}
+
+fn margin() -> &'static str {
+    &layout().margin
+}
+
+/// Fold `text` to `width` display columns, hanging the continuation under the
+/// line's own leading indent.
+///
+/// Width is measured with [`console::measure_text_width`], not `len`, so the
+/// `style(…)` escapes the tour prints everywhere are not counted as columns.
+/// A line that already fits is returned untouched — folding is invisible to
+/// every line that was never in trouble.
+///
+/// A style that spans a fold point survives it — the escape stays attached to
+/// its word and the terminal carries the attribute across the newline to the
+/// reset.
+fn fold(text: &str, width: usize) -> Vec<String> {
+    if console::measure_text_width(text) <= width {
+        return vec![text.to_owned()];
+    }
+    // Bullets and continuation lines carry their own leading spaces; the
+    // fold keeps them so a wrapped bullet hangs under itself rather than
+    // sliding back to the margin.
+    let body = text.trim_start_matches(' ');
+    let indent = &text[..text.len() - body.len()];
+    let inner = width.saturating_sub(console::measure_text_width(indent));
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in body.split(' ').filter(|word| !word.is_empty()) {
+        for piece in split_word(word, inner) {
+            if current.is_empty() {
+                current = format!("{indent}{piece}");
+            } else if console::measure_text_width(&current)
+                + 1
+                + console::measure_text_width(&piece)
+                > width
+            {
+                lines.push(std::mem::take(&mut current));
+                current = format!("{indent}{piece}");
+            } else {
+                current.push(' ');
+                current.push_str(&piece);
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    // A line of nothing but spaces, longer than the budget, trims to no words
+    // at all. Returning nothing would swallow the line and leave [`ask_prompt`]
+    // with no last line to put the cursor after.
+    if lines.is_empty() {
+        lines.push(text.to_owned());
+    }
+    lines
+}
+
+/// Break a word that cannot fit the budget even on a line of its own.
+///
+/// Leaving such a word whole was the first design, and it left the promise
+/// half-kept. The adopt act prints the install it found, and the statusline act
+/// prints the command the reader already had — a real one is
+/// `/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js`, 63
+/// columns of unbreakable word — so on a narrow terminal the fragment still
+/// landed at column 0: the exact failure all of this exists to prevent, just at
+/// a width nobody had looked at. Splitting is the uglier of two ugly options
+/// and the only one that keeps the block whole.
+///
+/// Escape sequences are stepped over whole rather than exempted. Exempting any
+/// word carrying one left the guarantee broken exactly where it was most likely
+/// to break: the statusline the reader already has is a long path AND it is
+/// styled. Stepping over them means a break can never land inside a sequence,
+/// while a style that spans one survives it the same way it does across a fold.
+fn split_word(word: &str, width: usize) -> Vec<String> {
+    if width == 0 || console::measure_text_width(word) <= width {
+        return vec![word.to_owned()];
+    }
+    let mut pieces: Vec<String> = Vec::new();
+    let mut piece = String::new();
+    let mut painted = 0usize;
+    let mut characters = word.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' {
+            piece.push(character);
+            match characters.peek() {
+                // CSI — parameters, then a letter. This is what `style(…)`
+                // emits.
+                Some('[') => {
+                    for escape in characters.by_ref() {
+                        piece.push(escape);
+                        if escape.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                // OSC — a hyperlink, which runs to BEL or to ESC \. Its URL is
+                // full of letters, so the CSI rule would stop inside it.
+                Some(']') => {
+                    let mut after_escape = false;
+                    for escape in characters.by_ref() {
+                        piece.push(escape);
+                        if escape == '\u{7}' || (after_escape && escape == '\\') {
+                            break;
+                        }
+                        after_escape = escape == '\u{1b}';
+                    }
+                }
+                _ => {
+                    if let Some(escape) = characters.next() {
+                        piece.push(escape);
+                    }
+                }
+            }
+            continue;
+        }
+        let character_width = console::measure_text_width(character.encode_utf8(&mut [0; 4]));
+        if painted > 0 && painted + character_width > width {
+            pieces.push(std::mem::take(&mut piece));
+            painted = 0;
+        }
+        piece.push(character);
+        painted += character_width;
+    }
+    if !piece.is_empty() {
+        pieces.push(piece);
+    }
+    pieces
+}
+
+/// Print one line of tour copy on the margin, folded to what is left.
+fn say_line(text: &str) {
+    for line in fold(text, layout().usable) {
+        eprintln!("{}{line}", margin());
+    }
+}
+
+/// Print a prompt on the margin, folded, leaving the cursor after the last
+/// line so the answer is typed where the reader is looking.
+fn ask_prompt(text: &str) {
+    let lines = fold(text, layout().usable);
+    let (last, rest) = lines.split_last().expect("fold always yields a line");
+    for line in rest {
+        eprintln!("{}{line}", margin());
+    }
+    eprint!("{}{last}", margin());
 }
 
 /// Machine-readable act outcomes, for tests and for the recording harness.
@@ -94,15 +268,15 @@ pub(crate) fn event(act: &str, outcome: &str, detail: &[(&str, &str)]) {
     }
 }
 
-/// `eprintln!` with the tour margin.
+/// `eprintln!` on the tour margin, folded to the width inside it.
 macro_rules! say {
     () => { eprintln!() };
-    ($($arg:tt)*) => { eprintln!("{}{}", margin(), format_args!($($arg)*)) };
+    ($($arg:tt)*) => { say_line(&format!($($arg)*)) };
 }
 
-/// `eprint!` with the tour margin — for prompts that read on the same line.
+/// `eprint!` on the tour margin — for prompts that read on the same line.
 macro_rules! ask {
-    ($($arg:tt)*) => { eprint!("{}{}", margin(), format_args!($($arg)*)) };
+    ($($arg:tt)*) => { ask_prompt(&format!($($arg)*)) };
 }
 
 pub fn run() -> Result<()> {
@@ -126,6 +300,19 @@ enum Path {
     Tldr,
 }
 
+/// The opening line, and the width it has to live inside.
+///
+/// The story block is centred on 62 columns and every act shares that margin,
+/// so a line has `width - margin` columns before the terminal wraps it — and a
+/// wrapped line does not wrap politely: the remainder lands at column 0,
+/// outside the margin, breaking the centred block. On an 80-column terminal
+/// that budget is 71 characters, which is the narrowest case worth holding to.
+///
+/// The line this replaced was 91 characters and wrapped on every terminal
+/// width, including the 106-column grid the hero video records at — caught
+/// only when it was filmed. Hence [`opening_summary_fits_a_narrow_terminal`].
+const OPENING_SUMMARY: &str = "Hatching sets up Claude Code, Codex, and claudex (Pi optional).";
+
 fn choose_path() -> Result<Path> {
     // The brand cat, on the tour's margin rather than mochi::say's flush-left
     // layout — one left edge for the whole run.
@@ -142,9 +329,9 @@ fn choose_path() -> Result<Path> {
         }
     }
     eprintln!();
-    say!("Hatching sets up Claude Code, Codex, and claudex (Pi optional) — with or without the story.");
+    say!("{OPENING_SUMMARY}");
     say!(
-        "The story is why this exists — two cats and an echo. {} skips straight to setup.",
+        "The story is why this exists — two cats and an echo. {} skips to setup.",
         style("n").bold()
     );
     eprintln!();
@@ -199,11 +386,15 @@ fn story_path() -> Result<()> {
     story.one_more_thing();
     let claudex = act_claudex();
     let pi = act_pi()?;
+    // The summary is about to name `ccy` and its siblings, so put them on
+    // disk first — see `shortcuts::install_for_tour`.
+    shortcuts::install_for_tour();
     // Commands first, then the globe closes the show — the summary must not
     // be the thing on screen after "fin."
     print_summary(claude, codex, claudex, pi, false);
     story.wait_for_fin();
     story.fin();
+    print_outro(claude, codex, claudex);
     Ok(())
 }
 
@@ -219,7 +410,9 @@ fn tldr_path() -> Result<()> {
     act_keep_history();
     let claudex = act_claudex();
     let pi = act_pi()?;
+    shortcuts::install_for_tour();
     print_summary(claude, codex, claudex, pi, true);
+    print_outro(claude, codex, claudex);
     Ok(())
 }
 
@@ -235,24 +428,21 @@ fn print_summary(claude: bool, codex: bool, claudex: bool, pi: bool, mention_sto
     eprintln!();
     say!("{} Done. Your commands:", style("✓").green());
     if claude {
-        say!("  {}   Claude Code (yolo)", style("ovm ccy ").bold());
+        command_row(&launch_command("ccy"), "Claude Code (yolo)");
     }
     if codex {
-        say!("  {}   Codex (yolo)", style("ovm cxy ").bold());
+        command_row(&launch_command("cxy"), "Codex (yolo)");
     }
     if claudex {
-        say!(
-            "  {}   claudex — Claude Code on GPT-5.6 (yolo)",
-            style("ovm ccxy").bold()
+        command_row(
+            &launch_command("ccxy"),
+            "claudex — Claude Code on GPT-5.6 (yolo)",
         );
     }
     if pi {
-        say!("  {}   Pi", style("ovm pi  ").bold());
+        command_row("ovm pi", "Pi");
     }
-    say!(
-        "  {}   browse, install, switch versions",
-        style("ovm select").bold()
-    );
+    command_row("ovm select", "browse, install, switch versions");
     // The aliases are explained where they are listed, rather than three
     // chapters earlier where there was nothing yet to try them on.
     if claude || codex {
@@ -270,6 +460,126 @@ fn print_summary(claude: bool, codex: bool, claudex: bool, pi: bool, mention_sto
             style("◇").dim(),
             style("ovm hatch").bold()
         );
+    }
+}
+
+/// One command and what it does, with the descriptions aligned on a column
+/// wide enough for the longest name the summary can print.
+fn command_row(name: &str, description: &str) {
+    let pad = " ".repeat(10usize.saturating_sub(name.len()));
+    say_line(&format!("  {}{pad}  {description}", style(name).bold()));
+}
+
+/// What to tell the reader to type for a shortcut.
+///
+/// The bare shim when it is really there and really ours, the `ovm` subcommand
+/// it wraps otherwise. The tour must never close by naming a command that does
+/// not exist — which is exactly what it did while the shims lived in
+/// `~/.local/bin` and nothing in the tour installed them.
+fn launch_command(shim: &str) -> String {
+    if shortcuts::shim_is_ready(shim) {
+        shim.to_owned()
+    } else {
+        format!("ovm {shim}")
+    }
+}
+
+/// Set by the installer when the shell it was launched from will not find
+/// `ovm` after it exits.
+///
+/// The installer writes the PATH line into the shell rc, which reaches new
+/// shells only: a child process cannot alter its parent's environment, because
+/// `execve` hands the child a copy. It then injects `~/.ovm/bin` into the PATH
+/// of the tour it launches — which is why the tour cannot answer this question
+/// by looking at its own PATH, and has to be told.
+const PATH_PENDING_ENV: &str = "OVM_PATH_PENDING";
+
+/// Whether the shell waiting behind this tour will find these commands.
+fn path_pending() -> bool {
+    if std::env::var_os(PATH_PENDING_ENV).is_some_and(|value| !value.is_empty()) {
+        return true;
+    }
+    // Run by hand rather than from the installer: this process resolved `ovm`
+    // through the user's own PATH, so its own PATH is the honest answer.
+    crate::config::OvmDirs::new().is_ok_and(|dirs| !shortcuts::dir_on_path(&dirs.bin))
+}
+
+/// The last word: what to type, and where it will work.
+///
+/// This is the one line the tour cannot afford to lose, and every other screen
+/// is a poor place to put it — each scene clears the one before it, and on the
+/// story path `fin.` is deliberately the final picture. So it prints beneath
+/// whatever closed the show, where it is still on screen when the reader gets
+/// their prompt back.
+///
+/// It went missing entirely in 0.1.7: the installer printed the PATH advice
+/// before offering the tour, and the tour's opening screen-clear wiped it — on
+/// the default answer, every time. The reader then landed back in a shell where
+/// none of the commands the summary had just listed could be found.
+fn print_outro(claude: bool, codex: bool, claudex: bool) {
+    let ready: Vec<&str> = [("ccy", claude), ("cxy", codex), ("ccxy", claudex)]
+        .into_iter()
+        .filter(|(shim, set_up)| *set_up && shortcuts::shim_is_ready(shim))
+        .map(|(shim, _)| shim)
+        .collect();
+    // Nothing to name — but the PATH problem is the reader's either way, and
+    // this is still the last place to say so.
+    if ready.is_empty() {
+        if path_pending() {
+            eprintln!();
+            say!(
+                "{} This shell started before the install, so it cannot see ovm yet.",
+                style("◇").dim()
+            );
+            say!("  Open a new terminal session, or run here:");
+            say!("  {}", style("export PATH=\"$HOME/.ovm/bin:$PATH\"").bold());
+            eprintln!();
+        }
+        return;
+    }
+    eprintln!();
+    say!(
+        "{} Open a new terminal session, then try {}.",
+        style("◇").dim(),
+        style(and_list(&ready)).bold()
+    );
+    if path_pending() {
+        say!("  This shell started before the install — to use them here:");
+        say!("  {}", style("export PATH=\"$HOME/.ovm/bin:$PATH\"").bold());
+    }
+    // The tour installs Claude Code and never signs anyone in. That is
+    // deliberate — first-run auth is Claude's own business, and staying
+    // credential-free is what makes this whole flow testable — but the summary
+    // above promises `ccy` works, and meeting that promise with an unannounced
+    // login screen is a poor handoff. One line closes it, and names the
+    // asymmetry a reader would otherwise trip over: claudex opened a browser
+    // during setup, Claude never did.
+    if ready.contains(&"ccy") {
+        eprintln!();
+        say!(
+            "  First run of {} signs you in to Claude.",
+            style("ccy").bold()
+        );
+        // Which ACCOUNT it runs on, not that a grant exists. The claudex act
+        // can finish having declined the browser step, and the first version of
+        // this line said "ccxy already has the ChatGPT account you connected"
+        // on exactly that take — a promise the run had not kept.
+        if ready.contains(&"ccxy") {
+            say!(
+                "  {} runs on your ChatGPT account instead.",
+                style("ccxy").bold()
+            );
+        }
+    }
+    eprintln!();
+}
+
+/// `["ccy", "cxy", "ccxy"]` → `"ccy, cxy and ccxy"`.
+fn and_list(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => (*only).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -530,6 +840,11 @@ fn act_hatch() -> Result<bool> {
 /// `--no-launch` suppresses setup's final "Launch claudex now?" — mid-tour,
 /// the Pi question and the summary still follow, and an accepted launch
 /// would hand the user a session with the tour's tail queued behind it.
+/// The tour's margin, and the fact that it has already introduced claudex.
+/// Read by `ovm-claudex`'s own output layer — see its `output` module.
+const CLAUDEX_INDENT_ENV: &str = "OVM_OUTPUT_INDENT";
+const CLAUDEX_BRIEF_ENV: &str = "OVM_CLAUDEX_BRIEF";
+
 fn act_claudex() -> bool {
     if claudex_already_set_up() {
         say!(
@@ -557,6 +872,13 @@ fn act_claudex() -> bool {
     eprintln!();
     let mut cmd = Command::new(plugin);
     cmd.args(["setup", "--no-launch"]);
+    // Hand down the tour's left edge, and say that the introduction is already
+    // made. The wizard is a separate process, so neither could reach it before:
+    // it printed flush-left inside a centred tour and re-delivered the pitch
+    // chapter iii had just given, which is most of what made the handoff feel
+    // like leaving one program for another.
+    cmd.env(CLAUDEX_INDENT_ENV, margin());
+    cmd.env(CLAUDEX_BRIEF_ENV, "1");
     let outcome = run_shielded(&mut cmd);
     match outcome {
         Ok(status) if status.success() => {
@@ -609,7 +931,7 @@ fn act_statusline() -> bool {
             style("!").yellow(),
             style(existing).dim(),
         );
-        say!("  Kept as is unless you want Echo instead — it is backed up first either way.");
+        say!("  Kept as is unless you want Echo instead — backed up either way.");
     });
     let choice = if has_own.is_some() {
         confirm_default_no("Replace it with Echo?")
@@ -956,6 +1278,137 @@ fn read_confirm_line(default_yes: bool) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The opening line must survive an 80-column terminal on one line.
+    ///
+    /// [`fold`] means an over-long line no longer breaks the layout, so this
+    /// is no longer the thing standing between the tour and a broken screen —
+    /// it is a copy budget. The first screen reads better as two whole lines
+    /// than as two-and-a-fragment, and 71 columns is what an 80-column
+    /// terminal leaves inside the margin. Measured as display width, so the
+    /// day someone wraps this line in `style(…)` the escapes are not counted
+    /// as columns.
+    #[test]
+    fn opening_summary_fits_a_narrow_terminal() {
+        let (_, usable) = super::budget(80);
+        let width = console::measure_text_width(super::OPENING_SUMMARY);
+        assert!(
+            width <= usable,
+            "the opening line is {width} columns; an 80-column terminal \
+             fits {usable} inside the margin",
+        );
+    }
+
+    #[test]
+    fn and_list_reads_as_a_sentence() {
+        assert_eq!(and_list(&[]), "");
+        assert_eq!(and_list(&["ccy"]), "ccy");
+        assert_eq!(and_list(&["ccy", "cxy"]), "ccy and cxy");
+        assert_eq!(and_list(&["ccy", "cxy", "ccxy"]), "ccy, cxy and ccxy");
+    }
+
+    /// The summary's descriptions line up whatever mix of bare shims and
+    /// `ovm …` fallbacks it ends up printing.
+    #[test]
+    fn command_rows_align_on_one_column() {
+        for name in ["ccy", "ccxy", "ovm pi", "ovm select"] {
+            let pad = " ".repeat(10usize.saturating_sub(name.len()));
+            assert_eq!(name.len() + pad.len(), 10, "{name} breaks the column");
+        }
+    }
+
+    /// The whole point of folding: a line that fits is printed as it was.
+    ///
+    /// Every line of the tour goes through [`fold`], and the recording is cut
+    /// at 106 columns where all of the copy fits. If folding perturbed a line
+    /// that was never in trouble, it would rewrite the screen the hero video
+    /// is filmed against.
+    #[test]
+    fn fold_leaves_a_line_that_fits_untouched() {
+        let line = "  Kept as is unless you want Echo instead — backed up either way.";
+        assert_eq!(super::fold(line, 71), vec![line.to_string()]);
+    }
+
+    /// A folded line hangs under its own indent, not back at the margin.
+    ///
+    /// This is the failure that shipped in 0.1.7, in miniature: the remainder
+    /// of a wrapped line landing to the LEFT of the block it belongs to is
+    /// what made the first screen look broken.
+    #[test]
+    fn fold_hangs_the_continuation_under_the_indent() {
+        let folded = super::fold("  one two three four five", 12);
+        assert_eq!(folded, vec!["  one two", "  three four", "  five"]);
+    }
+
+    /// Width is columns, not bytes: styling must not spend the budget.
+    ///
+    /// `style(…)` wraps most of the tour's emphasis, and an escape sequence is
+    /// several bytes wide and zero columns wide. Measuring bytes would fold
+    /// lines that fit perfectly well.
+    #[test]
+    fn fold_measures_display_width_not_bytes() {
+        let styled = "\u{1b}[1mbold\u{1b}[0m words here";
+        assert!(styled.len() > 20, "the escapes make this long in bytes");
+        assert_eq!(super::fold(styled, 20), vec![styled.to_string()]);
+    }
+
+    /// A word too long for any line is split rather than left to overhang.
+    ///
+    /// The adopt act prints the install it found, and a real Homebrew path is
+    /// 63 columns of unbreakable word — wider than the budget on a narrow
+    /// terminal. Left whole it hangs past the edge and the remainder lands at
+    /// column 0, which is the failure this whole arrangement exists to stop.
+    #[test]
+    fn fold_splits_a_word_that_cannot_fit_a_line() {
+        let path = "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js";
+        let folded = super::fold(&format!("  Found it at {path}"), 30);
+        for line in &folded {
+            assert!(
+                console::measure_text_width(line) <= 30,
+                "{line:?} is wider than the budget it was folded to",
+            );
+        }
+        let rejoined: String = folded.iter().map(|line| line.trim_start()).collect();
+        assert!(
+            rejoined.contains("claude-code/cli.js"),
+            "the path survived: {rejoined}"
+        );
+    }
+
+    /// A styled word is split without ever cutting an escape sequence.
+    ///
+    /// The statusline act prints the command the reader already had, styled
+    /// dim — commonly a long path. Exempting styled words from the split left
+    /// the width guarantee broken in the one place most likely to break it.
+    #[test]
+    fn fold_splits_a_styled_word_without_cutting_the_escape() {
+        let styled = format!("\u{1b}[2m{}\u{1b}[0m", "x".repeat(40));
+        let pieces = super::split_word(&styled, 10);
+        assert!(pieces.len() > 1, "a 40-column word does not fit 10 columns");
+        for piece in &pieces {
+            assert!(
+                console::measure_text_width(piece) <= 10,
+                "{piece:?} is wider than the width it was split to",
+            );
+        }
+        assert_eq!(
+            pieces.concat(),
+            styled,
+            "splitting must not lose or duplicate a single byte",
+        );
+    }
+
+    /// Folding never returns nothing, so no line is silently swallowed.
+    ///
+    /// A line of nothing but spaces, longer than the budget, has no words to
+    /// fold. Returning an empty list would drop it, and would leave
+    /// `ask_prompt` with no last line to put the cursor after — a panic in the
+    /// middle of onboarding.
+    #[test]
+    fn fold_keeps_a_line_that_has_no_words_to_fold() {
+        let spaces = " ".repeat(40);
+        assert_eq!(super::fold(&spaces, 10), vec![spaces]);
+    }
 
     use super::*;
     use crate::config::{OvmConfig, OvmDirs};

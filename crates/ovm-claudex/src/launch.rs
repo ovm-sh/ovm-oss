@@ -4,6 +4,7 @@
 //! shared proxy-session lock descriptor is handed to OVM across that exec.
 
 use crate::config::ClaudexConfig;
+use crate::output::say;
 use crate::paths::{display, ClaudexDirs};
 use crate::{proxy, ClaudexError, Result};
 use console::style;
@@ -64,7 +65,7 @@ pub fn run(args: &[String]) -> Result<()> {
     crate::feedback::install_session_hooks(&dirs)?;
 
     if let Err(error) = crate::install::maybe_prepare_auto_update(&dirs, &config) {
-        eprintln!(
+        say!(
             "  {} Could not check/update cliproxyapi; continuing with the installed proxy ({error}).",
             style("!").yellow()
         );
@@ -79,7 +80,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let session_guard = proxy::SessionGuard::acquire(&dirs)?;
     if session_guard.is_exclusive() {
         if let Err(error) = proxy::activate_pending_update(&dirs, &config, false) {
-            eprintln!(
+            say!(
                 "  {} Prepared proxy update could not be activated; continuing with the previous version ({error}).",
                 style("!").yellow()
             );
@@ -166,18 +167,18 @@ fn sign_off(dirs: &ClaudexDirs, launcher: &str) {
     let magenta = console::Style::new().magenta();
     let dim = console::Style::new().dim();
     let cyan = console::Style::new().cyan();
-    eprintln!();
-    eprintln!(
+    say!();
+    say!(
         "{}  {}",
         magenta.apply_to(r"  /\_/\ "),
         dim.apply_to("thanks for using claudex via OVM")
     );
-    eprintln!(
+    say!(
         "{}  {}",
         magenta.apply_to(" ( -.- )"),
         cyan.apply_to(format!("{launcher} --resume {session_id}"))
     );
-    eprintln!();
+    say!();
 }
 
 /// Active Claude Code version via OVM's script-friendly interface.
@@ -266,7 +267,7 @@ fn print_banner(
         ));
     }
 
-    eprintln!();
+    say!();
     for (index, line) in info.iter().enumerate() {
         // The title line stands alone; the cat sits beside the detail lines
         // below it, ending level with "history isolated".
@@ -274,9 +275,9 @@ fn print_banner(
             0 => CAT_BLANK,
             _ => CAT.get(index - 1).copied().unwrap_or(CAT_BLANK),
         };
-        eprintln!("{}  {}", style(face).magenta(), line);
+        say!("{}  {}", style(face).magenta(), line);
     }
-    eprintln!();
+    say!();
 }
 
 /// How long the banner stays readable before Claude Code's TUI paints over it.
@@ -366,7 +367,7 @@ fn build_claude_args(
         }
         user_args = cleaned;
         if stripped {
-            eprintln!(
+            say!(
                 "  {} --ovm-version is ignored while the pair is pinned (claude {}). \
                  Clear the pin in ~/.ovm/claudex/config.json to choose versions manually.",
                 console::style("!").yellow(),

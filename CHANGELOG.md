@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-28
+
+### Added
+
+- **`--version` installs an exact release, prereleases included.** GitHub's
+  `releases/latest` excludes prereleases by definition, so the public one-liner
+  could not install an alpha at all — and a clean-machine rehearsal of a release
+  candidate had nothing to run:
+
+  ```
+  curl -fsSL https://ovm.sh/install | sh -s -- --version v0.1.8-alpha.1
+  ```
+
+  `OVM_INSTALL_VERSION` is the same door for callers that cannot get arguments
+  past a pipe.
+
+### Changed
+
+- **The claudex setup no longer reads as a different program.** The tour centres
+  its prose on a shared margin and runs the wizard as a child process, so the
+  margin could not reach it: every line printed flush-left inside a centred
+  tour. The margin is handed down now, and the wizard folds to it. It also stops
+  re-introducing itself — chapter iii delivers the pitch and the link twenty
+  lines before the handoff, and the wizard repeated both in a second voice. The
+  risk line and the numbered plan are never skipped; running `ovm claudex setup`
+  directly still gets the full introduction.
+
+- **The browser gets a warning before it opens.** Connecting a Codex account
+  went from a plan item straight to a browser window. Setup now says what is
+  about to happen and where the grant is stored, before asking.
+
+- **The tour says that `ccy` will ask you to sign in.** It installs Claude Code
+  and never signs anyone in — first-run auth is Claude's own business — but the
+  closing screen promises `ccy` works, and an unannounced login screen is a poor
+  way to keep that promise.
+
+### Fixed
+
+- **Re-running the installer no longer claims your install is broken.** The
+  PATH block is written once and skipped on every later run, and the installer
+  read that skip as "the shell config could not be written" — printing
+  `WARNING: OVM is installed but NOT on your PATH` at someone whose PATH was
+  configured correctly all along. It needed only the ordinary upgrade shape to
+  trigger: run the one-liner again from the same terminal you first installed
+  in, where the rc carries the line but the running shell predates it. Already
+  wired and could-not-write are now told apart, and the first says so and moves
+  on.
+
+- **The claudex setup plan fits a narrow terminal.** One line of the "setup
+  will" list was 75 columns and came apart below 76, wrapping to column 0
+  outside the block — the same failure the tour's opening line had in 0.1.7,
+  in the one screen no gate was measuring.
+
+- **The install's last word is now the last thing on screen.** The PATH advice
+  printed before the hatch was offered, and the tour's opening screen-clear
+  wiped it — on the default answer, every time. The reader then landed back in
+  a shell where none of the commands the summary had just listed could be
+  found, with the one line explaining why four screens behind them. The
+  installer now says nothing about PATH until everything else is done, and the
+  tour closes with its own version, naming the shortcuts it just installed. A
+  child process cannot put a directory on its parent's PATH — `execve` hands it
+  a copy — so the advice is all there ever was to give; it only had to be
+  somewhere the reader would still see it.
+
+- **`ccy`, `cxy` and `ccxy` exist by the time the tour names them.** The shims
+  lived in `~/.local/bin`, which needs a PATH entry of its own and gets one
+  only if something unrelated arranged it, and nothing in the tour installed
+  them — `ovm shortcuts` was reachable only from `ovm --help`. So the closing
+  screen listed commands that a new machine did not have. They are written to
+  `~/.ovm/bin` now, beside `ovm` itself in the directory the installer already
+  puts on PATH, and the tour writes them before it lists them. A file that is
+  not ours is still never overwritten, and the summary falls back to `ovm ccy`
+  for any shim it had to skip. `ovm claudex setup` installs to the same place,
+  and uninstall sweeps both so an older machine's shims are not stranded at the
+  old location.
+
+- **The first screen no longer comes apart on a narrow terminal.** The tour
+  centres its prose on a 62-column block, so a line has `width - margin`
+  columns before the terminal wraps it — and the wrap is not polite: the
+  remainder starts at column 0, outside the margin. The line 0.1.7 shipped was
+  91 columns and wrapped at every terminal width, splitting a word across the
+  break and stranding the fragment at the far left of the first screen a new
+  user sees. The opening line is now 63 columns and fits an 80-column terminal,
+  which neither it nor the line it replaced ever did.
+
+- **Every line the tour prints is now folded to the width it has.** The budget
+  used to live nowhere, so each of the tour's 57 print sites was individually
+  responsible for arithmetic no one had written down. It is computed once now,
+  and lines fold onto the margin instead of escaping it — including runtime
+  text no fixed copy review could have bounded, such as the install path the
+  adopt act discovers or the statusline command you already had. A line that
+  already fits is printed exactly as before.
+
+- **claudex's setup banner fits an 80-column terminal.** Its risk notice was 91
+  columns on one line and wrapped on any terminal narrower than 93. Pre-existing,
+  and invisible until the tour's end-to-end gate started driving a narrow
+  terminal.
+
+- **The skew ladder can see a table that moved rather than vanished.** A
+  breaking migration that relocates a table into a sibling database is
+  invisible to every signal the ladder compared: no rows are lost,
+  `quick_check` passes, and the session still starts. Migration 34 moved
+  `thread_goals` out of the state DB and was recorded compatible on every rung
+  while silently disabling the goal subsystem on any build predating the split
+  — for three months, on a real pinned install. The ladder now counts the
+  missing-schema errors a degraded binary logs about itself and treats a rise
+  across a run as degradation, which needs no table list to maintain: the build
+  that cannot find a relocated table is the one that says so. It also observes
+  every SQLite store in `CODEX_HOME` rather than `state_*` alone, so a
+  subsystem stays visible after it is split out.
+
+- **A common English word can no longer inflate a build's migration ceiling.**
+  The guard matches each migration's description as a raw byte substring, and
+  several descriptions are ordinary words — `threads`, `logs`, `memories`,
+  `projects`. A dev fork whose history genuinely ends at migration 32 reported
+  knowing 49, because the word "projects" appears somewhere in its text. Only
+  the unbroken run from the start of history counts now, since `sqlx` compiles
+  in a contiguous prefix and a match past a gap is noise by construction. The
+  inflated ceiling mattered in one direction especially: it makes migrations
+  look understood, so a breaking migration described in one common word would
+  have counted as known and silenced the guard on the case it exists to catch.
+
+### Added
+
+- **`ovm doctor` names installs that write the shared state but never appear on
+  `PATH`.** `ovm adopt` already reports an unmanaged binary found on `PATH`,
+  which covers Homebrew and npm; nothing could see a GUI app bundle, because
+  nothing puts one on `PATH`. That is the install worth naming — a desktop app
+  updates itself on its own schedule, so it can apply a breaking migration to
+  the shared state DB with no action from you, which is how a pinned build
+  rots without anyone touching it.
+
 ## [0.1.7] - 2026-08-27
 
 ### Security

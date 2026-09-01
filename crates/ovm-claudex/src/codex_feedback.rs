@@ -5,6 +5,7 @@
 //! `--include-logs` choice and are listed before upload.
 
 use crate::feedback::{self, FeedbackSession};
+use crate::output::say;
 use crate::paths::ClaudexDirs;
 use crate::{ClaudexError, Result};
 use serde::Serialize;
@@ -49,8 +50,8 @@ pub fn run(args: &[String]) -> Result<()> {
     print_preview(&session, &command, &attachments);
 
     if !command.send {
-        eprintln!();
-        eprintln!("  Not sent. Add --send to this command to submit it to Codex.");
+        say!();
+        say!("  Not sent. Add --send to this command to submit it to Codex.");
         return Ok(());
     }
 
@@ -169,28 +170,28 @@ fn feedback_attachments(
 }
 
 fn print_preview(session: &FeedbackSession, command: &FeedbackCommand, attachments: &[PathBuf]) {
-    eprintln!();
-    eprintln!("Codex feedback preview");
-    eprintln!("  Relationship: {}", session.feedback_id);
-    eprintln!("  Category: {}", command.classification);
-    eprintln!("  Claude session: {}", session.claude_session_id);
+    say!();
+    say!("Codex feedback preview");
+    say!("  Relationship: {}", session.feedback_id);
+    say!("  Category: {}", command.classification);
+    say!("  Claude session: {}", session.claude_session_id);
     if let Some(note) = command.note.as_deref() {
-        eprintln!("  Note: {note}");
+        say!("  Note: {note}");
     }
     if command.include_logs {
-        eprintln!("  Files and diagnostics sent:");
-        eprintln!("    • codex-logs.log");
-        eprintln!("    • codex-doctor-report.json (when available)");
-        eprintln!("    • codex-connectivity-diagnostics.txt (when available)");
+        say!("  Files and diagnostics sent:");
+        say!("    • codex-logs.log");
+        say!("    • codex-doctor-report.json (when available)");
+        say!("    • codex-connectivity-diagnostics.txt (when available)");
         for path in attachments {
             let name = path
                 .file_name()
                 .map(|name| name.to_string_lossy())
                 .unwrap_or_else(|| path.as_os_str().to_string_lossy());
-            eprintln!("    • {name}");
+            say!("    • {name}");
         }
     } else {
-        eprintln!("  Logs: not included");
+        say!("  Logs: not included");
     }
 }
 

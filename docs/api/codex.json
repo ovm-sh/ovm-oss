@@ -2,10 +2,9 @@
   "product": "codex",
   "display_name": "Codex",
   "source": "github:openai/codex",
-  "updated_at": "2026-08-27T12:45:32Z",
+  "updated_at": "2026-09-01T02:08:25Z",
   "dist_tags": {
-    "latest": "rust-v0.150.1",
-    "latest_prerelease": "rust-v0.151.0-alpha.6"
+    "latest": "rust-v0.152.0"
   },
   "versions": [
     {
@@ -4127,6 +4126,92 @@
       "version": "rust-v0.151.0-alpha.6",
       "date": "2026-08-27",
       "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0-alpha.7",
+      "date": "2026-08-27",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0-alpha.7.1",
+      "date": "2026-08-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0-alpha.8",
+      "date": "2026-08-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0-alpha.9",
+      "date": "2026-08-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0-alpha.10",
+      "date": "2026-08-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0-alpha.11",
+      "date": "2026-08-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0-alpha.12",
+      "date": "2026-08-29",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.151.0",
+      "date": "2026-08-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.152.0-alpha.1",
+      "date": "2026-08-29",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.152.0-alpha.7",
+      "date": "2026-08-31",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.152.0-alpha.7.2",
+      "date": "2026-09-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.152.0",
+      "date": "2026-09-01",
+      "verified": {
+        "linux-auth": true,
         "macos-auth": true
       }
     }

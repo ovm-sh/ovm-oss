@@ -1,15 +1,26 @@
 //! `ovm shortcuts` — bare launch commands without shell rc edits.
 //!
-//! Writes one-line shims into `~/.local/bin` so `ccy`, `cxy`, `ccx`, `ccxy`,
+//! Writes one-line shims into `~/.ovm/bin` so `ccy`, `cxy`, `ccx`, `ccxy`,
 //! and `claudex` work as commands in any shell. Each shim just execs the
 //! matching `ovm` subcommand, so version resolution, auto-update, and yolo
 //! flag handling all stay inside OVM and the shims can never go stale.
+//!
+//! They share the directory the installer already put on PATH, rather than
+//! `~/.local/bin` where they used to live. That directory needed a PATH entry
+//! of its own, and a warning of its own when it was missing, so a fresh
+//! machine had two independent ways to reach `ccy: command not found` after a
+//! successful install. `~/.ovm/bin` has neither: `ovm` resolves from there, so
+//! the shims beside it resolve too, and the tour can end by telling a reader
+//! to type `ccy` without that being a guess. Shims already written to
+//! `~/.local/bin` keep working — they exec `ovm` by name — so [`run`] points
+//! them out instead of deleting anything someone may rely on.
 //!
 //! Coexists with the claude-yolo rc block from mochiexists.com/yolo: shell
 //! aliases take precedence over PATH files and expand to the same
 //! OVM-managed binaries, so nothing needs migrating — we detect the block
 //! and say so instead of touching anyone's shell config.
 
+use crate::config::OvmDirs;
 use crate::error::{OvmError, Result};
 use console::style;
 use std::path::{Path, PathBuf};
@@ -43,13 +54,13 @@ enum ExistingFile {
 pub fn run(assume_yes: bool) -> Result<()> {
     let home = dirs::home_dir()
         .ok_or_else(|| OvmError::Message("Could not determine home directory.".into()))?;
-    let bin_dir = home.join(".local").join("bin");
+    let bin_dir = OvmDirs::new()?.bin;
 
     eprintln!();
     eprintln!(
         "  {} Bare shortcuts — no shell config edits, just files in {}:",
         style("→").cyan(),
-        style("~/.local/bin").bold()
+        style(tilde(&bin_dir, &home)).bold()
     );
     for (name, description) in SHORTCUTS {
         let state = match classify(&bin_dir.join(name), name) {
@@ -66,36 +77,42 @@ pub fn run(assume_yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    std::fs::create_dir_all(&bin_dir)?;
-    let mut installed = 0;
-    for (name, _) in SHORTCUTS {
-        let path = bin_dir.join(name);
-        match classify(&path, name) {
-            ExistingFile::Foreign => {
-                eprintln!(
-                    "  {} Skipped {name}: {} isn't an ovm shim.",
-                    style("!").yellow(),
-                    path.display()
-                );
-            }
-            _ => {
-                write_shim(&path, name)?;
-                installed += 1;
-            }
-        }
-    }
+    let installed = install_all(&bin_dir, |name, path| {
+        eprintln!(
+            "  {} Skipped {name}: {} isn't an ovm shim.",
+            style("!").yellow(),
+            path.display()
+        );
+    })?;
     eprintln!(
-        "  {} {installed} shortcut{} ready in ~/.local/bin",
+        "  {} {installed} shortcut{} ready in {}",
         style("✓").green(),
-        if installed == 1 { "" } else { "s" }
+        if installed == 1 { "" } else { "s" },
+        tilde(&bin_dir, &home)
     );
 
+    // Only reachable when someone has taken ~/.ovm/bin back off their PATH:
+    // the installer put it there, and `ovm` itself resolved through it to get
+    // here. Still worth saying — the shims are inert without it — and it is
+    // the same line the installer writes into the shell rc.
     if !dir_on_path(&bin_dir) {
         eprintln!(
-            "  {} ~/.local/bin is not on your PATH — add this to your shell rc:",
-            style("!").yellow()
+            "  {} {} is not on your PATH — add this to your shell rc:",
+            style("!").yellow(),
+            tilde(&bin_dir, &home)
         );
-        eprintln!("      export PATH=\"$HOME/.local/bin:$PATH\"");
+        eprintln!("      export PATH=\"$HOME/.ovm/bin:$PATH\"");
+    }
+
+    let stale = legacy_shims(&home);
+    if !stale.is_empty() {
+        eprintln!(
+            "  {} ~/.local/bin still holds {} older shim{}. Shims there exec `ovm`",
+            style("ℹ").cyan(),
+            stale.len(),
+            if stale.len() == 1 { "" } else { "s" }
+        );
+        eprintln!("    by name, so they keep working — remove them whenever you like.");
     }
 
     let rc_files = [home.join(".zshrc"), home.join(".bashrc")];
@@ -123,6 +140,69 @@ fn confirm(question: &str) -> Result<bool> {
     std::io::stdin().read_line(&mut input)?;
     let answer = input.trim().to_lowercase();
     Ok(answer.is_empty() || answer == "y" || answer == "yes")
+}
+
+/// Write every shim into `bin_dir`, reporting anything it refused to touch
+/// through `on_skip`. Returns how many shims are in place afterwards.
+fn install_all(bin_dir: &Path, mut on_skip: impl FnMut(&str, &Path)) -> Result<usize> {
+    std::fs::create_dir_all(bin_dir)?;
+    let mut installed = 0;
+    for (name, _) in SHORTCUTS {
+        let path = bin_dir.join(name);
+        match classify(&path, name) {
+            ExistingFile::Foreign => on_skip(name, &path),
+            _ => {
+                write_shim(&path, name)?;
+                installed += 1;
+            }
+        }
+    }
+    Ok(installed)
+}
+
+/// Install the shims as part of the tour, silently.
+///
+/// The tour now ends by telling the reader to type `ccy`, which is only true
+/// if the shims exist — so it writes them rather than asking. A smaller step
+/// than it looks: the files land in OVM's own `bin`, the directory the
+/// installer created and put on PATH minutes earlier, and [`classify`] still
+/// refuses to overwrite anything that is not already ours. Best-effort, because
+/// a tour must not fail on its last act.
+pub(crate) fn install_for_tour() {
+    if let Ok(dirs) = OvmDirs::new() {
+        let _ = install_all(&dirs.bin, |_, _| {});
+    }
+}
+
+/// Whether `name` is on PATH as a shim we wrote.
+///
+/// The summary asks before it prints: a reader whose `ccy` is their own script
+/// (so we skipped it) must be shown `ovm ccy`, not a command that runs someone
+/// else's code.
+pub(crate) fn shim_is_ready(name: &str) -> bool {
+    let Ok(dirs) = OvmDirs::new() else {
+        return false;
+    };
+    dir_on_path(&dirs.bin) && classify(&dirs.bin.join(name), name) == ExistingFile::Ours
+}
+
+/// Shims still sitting in the directory the shortcuts used to live in.
+fn legacy_shims(home: &Path) -> Vec<PathBuf> {
+    let old = home.join(".local").join("bin");
+    SHORTCUTS
+        .iter()
+        .map(|(name, _)| (old.join(name), *name))
+        .filter(|(path, name)| classify(path, name) == ExistingFile::Ours)
+        .map(|(path, _)| path)
+        .collect()
+}
+
+/// `~`-relative rendering, so a path on screen matches the one in the docs.
+fn tilde(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 fn shim_contents(name: &str) -> String {
@@ -172,7 +252,7 @@ fn write_shim(path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn dir_on_path(dir: &Path) -> bool {
+pub(crate) fn dir_on_path(dir: &Path) -> bool {
     let Some(path_env) = std::env::var_os("PATH") else {
         return false;
     };
@@ -200,6 +280,57 @@ mod tests {
     fn shims_exec_the_matching_ovm_subcommand() {
         assert_eq!(shim_contents("ccxy"), "#!/bin/sh\nexec ovm ccxy \"$@\"\n");
         assert_eq!(shim_contents("ccy"), "#!/bin/sh\nexec ovm ccy \"$@\"\n");
+    }
+
+    #[test]
+    fn install_all_writes_every_shim_and_never_clobbers_a_foreign_one() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin = temp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let mine = "#!/bin/sh\necho my own ccy\n";
+        std::fs::write(bin.join("ccy"), mine).unwrap();
+
+        let mut skipped = Vec::new();
+        let installed = install_all(&bin, |name, _| skipped.push(name.to_string())).unwrap();
+
+        assert_eq!(skipped, vec!["ccy".to_string()]);
+        assert_eq!(installed, SHORTCUTS.len() - 1);
+        assert_eq!(
+            std::fs::read_to_string(bin.join("ccxy")).unwrap(),
+            shim_contents("ccxy")
+        );
+        assert_eq!(std::fs::read_to_string(bin.join("ccy")).unwrap(), mine);
+    }
+
+    /// The tour's closing line names the bare shims, so the shims have to be
+    /// the ones OVM's own PATH entry already covers.
+    #[test]
+    fn shims_land_beside_ovm_not_in_local_bin() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dirs = OvmDirs::at(temp.path().join(".ovm"));
+        install_all(&dirs.bin, |_, _| {}).unwrap();
+        assert!(dirs.bin.join("ccy").exists());
+        assert!(dirs.bin.join("ccxy").exists());
+        assert!(!temp.path().join(".local").join("bin").exists());
+    }
+
+    #[test]
+    fn legacy_shims_finds_only_our_old_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let old = temp.path().join(".local").join("bin");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("ccy"), shim_contents("ccy")).unwrap();
+        std::fs::write(old.join("cxy"), "#!/bin/sh\nnot ours\n").unwrap();
+
+        let found = legacy_shims(temp.path());
+        assert_eq!(found, vec![old.join("ccy")]);
+    }
+
+    #[test]
+    fn tilde_shortens_only_paths_under_home() {
+        let home = Path::new("/Users/example");
+        assert_eq!(tilde(&home.join(".ovm").join("bin"), home), "~/.ovm/bin");
+        assert_eq!(tilde(Path::new("/opt/ovm/bin"), home), "/opt/ovm/bin");
     }
 
     #[test]
