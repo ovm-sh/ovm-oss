@@ -120,6 +120,8 @@ GitHub permits only a small anonymous API quota per shared IP. If Codex or Pi me
 
 - Nothing installed: says so per product and prints the `ovm install` line, rather than reporting a clean "up to date".
 - Offline: falls back to the newest release already in your store; a product it cannot resolve at all fails the command.
+
+**Launching offline** — a plain `cc` / `cx` / `pi` never waits on the network: the update banner and the auto-update decision read a local cache, and the check that fills it runs in a detached background process. When that background check last failed, the banner says so (`cached; the update service was unreachable`), and Pi is launched with `PI_OFFLINE=1` so it skips its own startup network calls (a model-catalog refresh that otherwise holds its first screen for up to fifteen seconds on a connection that hangs). Under auto-update `on`, a download that fails is not retried on the very next launch; it backs off from five minutes up to your `updateCheckInterval`. Set `PI_OFFLINE` yourself, or pass `--offline`, and OVM leaves it alone.
 - Pinned: a bare `ovm update` reports the pin and leaves it alone; `ovm update <product>` overrides it and resumes latest-tracking.
 - `dev:` builds have no upstream and are always left alone.
 

@@ -1,0 +1,18 @@
+[package]
+name = "ovm-tui"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+description = "The terminal primitives every OVM picker is built from: one screen, one key loop, one footer"
+repository = "https://github.com/ovm-sh/ovm-oss"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+console = "0.16"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"

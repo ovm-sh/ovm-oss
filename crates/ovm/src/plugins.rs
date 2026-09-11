@@ -29,21 +29,40 @@ pub fn find(name: &str) -> Option<PathBuf> {
         .map(|p| p.path)
 }
 
-/// Find a plugin on PATH, falling back to a sibling of the running `ovm`
-/// binary. Distributions bundle plugins (e.g. `ovm-claudex`) next to `ovm`,
-/// and this keeps them resolvable even when the install dir isn't on PATH
-/// yet (fresh install, absolute-path invocation). PATH stays first so a
-/// dev build can shadow the bundled copy.
+/// Resolve a bundled plugin from the same snapshot as the running `ovm`.
+/// A missing side binary is an incomplete bundle, not permission to execute
+/// an unrelated installation. Developers can explicitly opt into PATH-first
+/// resolution with `OVM_ALLOW_PLUGIN_OVERRIDE=1`.
 pub fn find_bundled(name: &str) -> Option<PathBuf> {
-    if let Some(path) = find(name) {
-        return Some(path);
+    let exe = std::env::current_exe().ok();
+    let path = std::env::var("PATH").ok();
+    let allow_override = std::env::var("OVM_ALLOW_PLUGIN_OVERRIDE").as_deref() == Ok("1");
+    find_bundled_in(name, exe.as_deref(), path.as_deref(), allow_override)
+}
+
+fn find_bundled_in(
+    name: &str,
+    exe: Option<&std::path::Path>,
+    path: Option<&str>,
+    allow_override: bool,
+) -> Option<PathBuf> {
+    if allow_override {
+        if let Some(plugin) = path.and_then(|path| {
+            discover_in_path(path)
+                .into_iter()
+                .find(|plugin| plugin.name == name)
+        }) {
+            return Some(plugin.path);
+        }
     }
-    let exe = std::env::current_exe().ok()?;
+    // Some platforms preserve the launcher symlink in current_exe(). Resolve
+    // it before looking for siblings so plugins come from the actual snapshot.
+    let exe = exe?.canonicalize().ok()?;
     sibling_plugin(&exe, name)
 }
 
 /// Resolve a plugin for generic `ovm <name>` dispatch. Manifest-declared
-/// bundled plugins (e.g. `ovm-claudex`) get the sibling fallback, so an
+/// bundled plugins (e.g. `ovm-claudex`) use the selected snapshot, so an
 /// absolute-path `ovm` invocation resolves them even when their directory
 /// isn't on PATH — matching the dedicated `ovm ccx` alias path. Third-party
 /// `ovm-*` plugins stay PATH-only, since only bundled binaries ship beside
@@ -248,6 +267,75 @@ mod tests {
     }
 
     #[test]
+    fn bundled_plugin_ignores_path_shadow_until_explicitly_overridden() {
+        let snapshot = tempdir().expect("snapshot");
+        let foreign = tempdir().expect("foreign plugins");
+        let exe = snapshot.path().join("ovm");
+        touch(&exe, true);
+        let bundled = snapshot.path().join("ovm-claudex");
+        let shadow = foreign.path().join("ovm-claudex");
+        touch(&bundled, true);
+        touch(&shadow, true);
+        let path = foreign.path().to_str();
+
+        assert_eq!(
+            find_bundled_in("claudex", Some(&exe), path, false),
+            Some(bundled.canonicalize().expect("bundled path"))
+        );
+        assert_eq!(
+            find_bundled_in("claudex", Some(&exe), path, true),
+            Some(shadow)
+        );
+    }
+
+    #[test]
+    fn incomplete_bundle_does_not_silently_mix_installed_versions() {
+        let snapshot = tempdir().expect("snapshot");
+        let foreign = tempdir().expect("foreign plugins");
+        let exe = snapshot.path().join("ovm");
+        touch(&exe, true);
+        touch(&foreign.path().join("ovm-claudex"), true);
+
+        assert_eq!(
+            find_bundled_in("claudex", Some(&exe), foreign.path().to_str(), false),
+            None
+        );
+    }
+
+    #[test]
+    fn development_override_with_no_match_still_uses_the_bundle() {
+        let snapshot = tempdir().expect("snapshot");
+        let exe = snapshot.path().join("ovm");
+        touch(&exe, true);
+        let bundled = snapshot.path().join("ovm-claudex");
+        touch(&bundled, true);
+        assert_eq!(
+            find_bundled_in("claudex", Some(&exe), None, true),
+            Some(bundled.canonicalize().expect("bundled path"))
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bundled_plugin_resolves_the_snapshot_behind_a_symlink_launcher() {
+        let root = tempdir().expect("fixture");
+        let snapshot = root.path().join("snapshot");
+        let launchers = root.path().join("launchers");
+        std::fs::create_dir(&snapshot).expect("snapshot directory");
+        std::fs::create_dir(&launchers).expect("launcher directory");
+        touch(&snapshot.join("ovm"), true);
+        let bundled = snapshot.join("ovm-claudex");
+        touch(&bundled, true);
+        let launcher = launchers.join("ovm");
+        std::os::unix::fs::symlink("../snapshot/ovm", &launcher).expect("symlink launcher");
+
+        assert_eq!(
+            find_bundled_in("claudex", Some(&launcher), None, false),
+            Some(bundled.canonicalize().expect("bundled path"))
+        );
+    }
+
+    #[test]
     #[cfg(unix)]
     fn sibling_plugin_ignores_non_executable_files() {
         let dir = tempdir().expect("tempdir");
@@ -301,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn only_manifest_bundled_names_get_the_sibling_fallback() {
+    fn only_manifest_bundled_names_get_snapshot_resolution() {
         // ovm-claudex is a declared side binary → eligible for the sibling
         // fallback; a random third-party plugin name is not.
         assert!(super::is_bundled_plugin("claudex"));

@@ -15,11 +15,18 @@ pub fn note_pin(vm: &VersionManager) {
     let Some(pinned) = vm.read_pin() else {
         return;
     };
+    // Two lines, not one: as one line it ran past 100 columns and hard-wrapped
+    // mid-word at the terminal edge, on camera included.
     eprintln!(
-        "  {} Pinned {} at {} — launches will ask before auto-updating. {} resumes auto-updates.",
+        "{}{} Pinned {} at {} — launches will ask before auto-updating.",
+        mochi::indent(),
         style("→").dim(),
         vm.product().display_name(),
         style(&pinned).bold(),
+    );
+    eprintln!(
+        "{}  {} resumes auto-updates.",
+        mochi::indent(),
         style(format!("ovm use {} latest", vm.product().canonical_name())).cyan()
     );
 }
@@ -30,19 +37,14 @@ pub fn run(vm: &VersionManager, version: &str) -> Result<()> {
     let active_version = vm
         .current_version()?
         .unwrap_or_else(|| vm.product().normalize_version(version));
-    let msg = format!(
-        "Now using {} {}",
-        vm.product().display_name(),
-        style(&active_version).green().bold()
+    mochi::say(
+        mochi::HAPPY,
+        &format!(
+            "Now using {} {}",
+            vm.product().display_name(),
+            style(&active_version).green().bold()
+        ),
     );
-    eprintln!();
-    for (i, line) in mochi::HAPPY.lines().enumerate() {
-        if i == 1 {
-            eprintln!("{}  {}", mochi::face_style(line), msg);
-        } else {
-            eprintln!("{}", mochi::face_style(line));
-        }
-    }
 
     // A newer version may have migrated the shared on-disk state DB in a way this
     // one can't read; run optional product companions when installed so they can

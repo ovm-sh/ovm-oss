@@ -3,6 +3,45 @@ set -e
 
 echo "=== OVM pre-push ==="
 
+# A release tag is only pushed on a commit CI has already proven. The Release
+# workflow refuses an unproven tag anyway, but only after a failed run and an
+# email; refusing here costs nothing. Refs arrive on stdin as
+# "<local ref> <local sha> <remote ref> <remote sha>"; $2 is the remote URL.
+if [ "${OVM_HOOK_ALLOW_UNPROVEN_TAG:-}" != "1" ]; then
+    remote_url="${2:-}"
+    repo=$(printf '%s' "$remote_url" | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')
+    # shellcheck disable=SC2034  # git hands over four fields; two are not needed
+    while read -r local_ref local_sha remote_ref remote_sha; do
+        case "$remote_ref" in
+            refs/tags/v*) ;;
+            *) continue ;;
+        esac
+        case "$local_sha" in
+            0000000000000000000000000000000000000000) continue ;;
+        esac
+        commit=$(git rev-parse "${local_sha}^{commit}" 2>/dev/null) || commit="$local_sha"
+        if ! command -v gh > /dev/null 2>&1; then
+            echo "ERROR: refusing to push $remote_ref: gh is not installed, so CI on $commit cannot be checked."
+            echo "       Install gh, or set OVM_HOOK_ALLOW_UNPROVEN_TAG=1 to push an unproven tag."
+            exit 1
+        fi
+        green=$(gh run list -R "$repo" --workflow CI --commit "$commit" \
+            --json status,conclusion \
+            --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' 2>/dev/null) || green=""
+        case "$green" in
+            ''|*[!0-9]*) green=0 ;;
+        esac
+        if [ "$green" -gt 0 ]; then
+            continue
+        fi
+        echo "ERROR: refusing to push $remote_ref: no successful CI run for $commit on $repo."
+        echo "       Push the branch first, wait for CI to go green, then push the tag."
+        echo "       Set OVM_HOOK_ALLOW_UNPROVEN_TAG=1 to push it anyway."
+        exit 1
+    done
+fi
+
+
 # Run full test suite
 echo "[1/3] Running full test suite..."
 TESTS_STATE="passed"

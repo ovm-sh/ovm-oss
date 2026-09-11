@@ -24,6 +24,13 @@ pub fn indent() -> &'static str {
     INDENT.get().map_or("  ", String::as_str)
 }
 
+/// The margin the cat art takes: the faces below already carry the default
+/// two columns in their own leading spaces, so only what the tour added on
+/// top goes in front of them — nothing, outside the tour.
+pub fn art_margin() -> &'static str {
+    indent().get(2..).unwrap_or("")
+}
+
 /// Default curious expression.
 pub const DEFAULT: &str = "  /\\_/\\ \n ( o.o )\n  > ^ < ";
 
@@ -63,9 +70,9 @@ pub fn say(face: &str, message: &str) {
     eprintln!();
     for (index, line) in face.lines().enumerate() {
         if index == 1 {
-            eprintln!("{}  {message}", face_style(line));
+            eprintln!("{}{}  {message}", art_margin(), face_style(line));
         } else {
-            eprintln!("{}", face_style(line));
+            eprintln!("{}{}", art_margin(), face_style(line));
         }
     }
 }

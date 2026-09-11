@@ -15,6 +15,15 @@
       ],
       "models": [
         {
+          "id": "claude-fable-5-1",
+          "family": "fable",
+          "generation": "5.1",
+          "released": "2026-09-01",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-09-01"
+        },
+        {
           "id": "claude-opus-5",
           "family": "opus",
           "generation": "5",
@@ -212,6 +221,50 @@
       ],
       "models": [
         {
+          "id": "gpt-6-astra",
+          "family": "gpt",
+          "generation": "6",
+          "codename": "astra",
+          "requestable_id": "gpt-6-astra",
+          "released": "2026-09-04",
+          "first_seen": "2026-09-04",
+          "state": "active",
+          "deprecated": null
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "family": "gpt",
+          "generation": "5.6",
+          "codename": "terra",
+          "requestable_id": "gpt-5.6-terra",
+          "released": "2026-07-09",
+          "first_seen": "2026-09-04",
+          "state": "active",
+          "deprecated": null
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "family": "gpt",
+          "generation": "5.6",
+          "codename": "luna",
+          "requestable_id": "gpt-5.6-luna",
+          "released": "2026-07-09",
+          "first_seen": "2026-09-04",
+          "state": "active",
+          "deprecated": null
+        },
+        {
+          "id": "gpt-5.6-cyber",
+          "family": "gpt",
+          "generation": "5.6",
+          "codename": "cyber",
+          "requestable_id": "gpt-5.6-cyber",
+          "released": "2026-08-10",
+          "first_seen": "2026-09-04",
+          "state": "active",
+          "deprecated": null
+        },
+        {
           "id": "gpt-5.6",
           "family": "gpt",
           "generation": "5.6",
@@ -232,5 +285,6 @@
         }
       ]
     }
-  ]
+  ],
+  "snapshot_revision": "sha256:1503d983dd3e81e3a967cd56ef78a245dcfb2fb66065e79fbd033c75835247dd"
 }

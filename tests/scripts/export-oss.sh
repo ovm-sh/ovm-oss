@@ -64,6 +64,9 @@ cmp "$ROOT/scripts/oss-templates/RELEASING.md" "$DEST/RELEASING.md"
 # Exercise the exact schema contract invoked by the exported CI, from inside
 # the exported tree where private workflows and detector automation are absent.
 (cd "$DEST" && bash tests/scripts/codex-schema-workflow.sh)
+# Workspace-inherited versions and the release bump must also work after export.
+(cd "$DEST" && bash tests/scripts/bundle-manifest.sh)
+(cd "$DEST" && python3 -B -m unittest discover -s tests/python -p 'test_*.py')
 
 if grep -R -n 'OSS-OMIT' \
   "$DEST/.gitleaks.toml" "$DEST/scripts/dev-install.sh" "$DEST/scripts/dev-uninstall.sh"

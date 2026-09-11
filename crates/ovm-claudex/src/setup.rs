@@ -674,6 +674,26 @@ fn offer_codex_login(
     );
     say!("    The grant is stored under ~/.ovm/claudex and used only by the");
     say!("    local sidecar. Nothing is sent anywhere else.");
+    // Two sign-ins for one account reads like a bug, so say why it is not —
+    // and say which order is safe. OpenAI retires the whole refresh-token
+    // family per account, so a Codex CLI login AFTER this one kills the grant
+    // this wizard just stored (the failure `verify_existing_grant` exists to
+    // catch: 2026-08-17, "already connected" on a week-dead grant). Sharing
+    // one token between them cannot fix that; it is the same family either
+    // way. Ordering can.
+    say!();
+    say!(
+        "  {} Codex the CLI keeps its own separate sign-in, in {}.",
+        style("→").dim(),
+        style("~/.codex/auth.json").dim()
+    );
+    if codex_cli_signed_in() {
+        say!("    You are already signed in there, so this is the only sign-in left.");
+    } else {
+        say!("    You will be asked once more the first time you run `codex` itself.");
+        say!("    Do that one FIRST if you can: signing into the CLI afterwards");
+        say!("    retires this grant, and `ovm claudex setup` has to be re-run.");
+    }
     if !confirm(question)? {
         say!("    Skipped — run `ovm claudex setup` again when ready.");
         return Ok(());
@@ -781,6 +801,29 @@ fn retire_stale_grants(auth_dir: &std::path::Path, login_started: std::time::Sys
             );
         }
     }
+}
+
+/// Whether the Codex CLI itself already holds a sign-in, so the wizard can say
+/// "this is the only one left" instead of warning about a second trip nobody
+/// has to make.
+///
+/// Existence only — the file is never read. It is somebody's credential, this
+/// wizard has no business in it, and presence is the whole question.
+fn codex_cli_signed_in() -> bool {
+    let home = match std::env::var_os("CODEX_HOME") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => match dirs_next_home() {
+            Some(home) => home.join(".codex"),
+            None => return false,
+        },
+    };
+    home.join("auth.json").is_file()
+}
+
+fn dirs_next_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 /// Whether the proxy's auth dir already holds any credential file.

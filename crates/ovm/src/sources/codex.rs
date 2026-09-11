@@ -16,12 +16,116 @@ const CODEX_RELEASE_DOWNLOAD_BASE: &str = "https://github.com/openai/codex/relea
 /// overrides so neither of those can relocate the bytes on its own.
 const CODEX_DOWNLOAD_URL_ENV: &str = "OVM_CODEX_DOWNLOAD_URL";
 
-/// Helper binaries that newer Codex releases ship alongside `codex` and spawn
-/// at runtime from the same directory (0.144.0 introduced
-/// `codex-code-mode-host`, without which every shell command fails to spawn).
-/// Older releases don't publish them, so a missing asset/entry is skipped
-/// rather than treated as an error.
-const SIDECAR_BINARIES: &[&str] = &["codex-code-mode-host"];
+/// A file Codex spawns or execs from its own install tree at runtime and that
+/// the GitHub release publishes as a separate per-platform asset
+/// (`<asset>-<triple>.tar.gz`, one binary inside). Releases from before a
+/// family existed publish none, and those install without it; a family
+/// published for other platforms but not ours is refused (see
+/// [`refuse_incomplete_sidecar_family`]).
+struct Sidecar {
+    /// Asset family name, and how the file is named to the user.
+    asset: &'static str,
+    /// Where Codex looks for it, relative to the directory holding `codex`.
+    path: &'static str,
+    /// Only Linux builds need it.
+    linux_only: bool,
+}
+
+/// Helper binaries newer Codex releases ship alongside `codex`.
+///
+/// - `codex-code-mode-host` (0.144.0+): spawned from the same directory for
+///   every shell command; without it every command fails to spawn.
+/// - `codex-resources/bwrap` (Linux): Codex's Linux sandbox execs bubblewrap.
+///   With no system `bwrap` on PATH it looks for this bundled copy beside its
+///   executable and panics without one ("bubblewrap is unavailable",
+///   linux-sandbox/src/launcher.rs) — how rust-v0.153.4 failed every tool call
+///   on the Linux verification lane on 2026-09-05 while `--version` and the
+///   response benchmark passed. The official npm package ships it; the release
+///   publishes it as `bwrap-<linux triple>.tar.gz`. Codex checks the file's
+///   SHA-256 against a digest compiled into that build, so it must come from
+///   the same release. macOS sandboxes with seatbelt and needs none.
+const SIDECARS: &[Sidecar] = &[
+    Sidecar {
+        asset: "codex-code-mode-host",
+        path: "codex-code-mode-host",
+        linux_only: false,
+    },
+    Sidecar {
+        asset: "bwrap",
+        path: "codex-resources/bwrap",
+        linux_only: true,
+    },
+];
+
+impl Sidecar {
+    fn applies_to(&self, triple: &str) -> bool {
+        !self.linux_only || triple.contains("-linux-")
+    }
+
+    fn asset_name(&self, triple: &str) -> String {
+        format!("{}-{triple}.tar.gz", self.asset)
+    }
+
+    fn dest(&self, bin_dir: &Path) -> PathBuf {
+        bin_dir.join(self.path)
+    }
+
+    /// The one file inside the release asset (`codex-code-mode-host-<triple>`,
+    /// `bwrap-<triple>`).
+    fn archive_entry_matches(&self, file_name: &str) -> bool {
+        file_name == self.asset || file_name.starts_with(&format!("{}-", self.asset))
+    }
+
+    /// The same file inside the npm platform package
+    /// (`vendor/<triple>/bin/codex-code-mode-host`,
+    /// `vendor/<triple>/codex-resources/bwrap`).
+    fn npm_entry_matches(&self, entry_path: &Path) -> bool {
+        entry_path.ends_with(self.path)
+    }
+}
+
+/// Sidecars this platform needs that are absent beside the installed Codex at
+/// `dest` although `version`'s release publishes them — an install made
+/// before OVM fetched that sidecar (every Linux install before the bundled
+/// bwrap, 2026-09-05). Empty when the tree is complete, or when the release
+/// does not publish what is missing (a version from before the sidecar
+/// existed). The release listing is read only when something is missing, and
+/// a listing that cannot be read is an error for the caller to report, not a
+/// verdict either way.
+pub fn missing_published_sidecars(version: &str, dest: &Path) -> Result<Vec<&'static str>> {
+    missing_published_sidecars_for(version, dest, release_target_triple(), fetch_release)
+}
+
+fn missing_published_sidecars_for(
+    version: &str,
+    dest: &Path,
+    triple: &str,
+    fetch: impl FnOnce(&str) -> Result<Release>,
+) -> Result<Vec<&'static str>> {
+    let Some(bin_dir) = dest.parent() else {
+        return Ok(Vec::new());
+    };
+    let absent: Vec<&Sidecar> = sidecars_for(triple)
+        .filter(|sidecar| !sidecar.dest(bin_dir).exists())
+        .collect();
+    if absent.is_empty() {
+        return Ok(Vec::new());
+    }
+    let release = fetch(version)?;
+    Ok(absent
+        .into_iter()
+        .filter(|sidecar| release_publishes_sidecar_family(&release, sidecar.asset))
+        .map(|sidecar| sidecar.asset)
+        .collect())
+}
+
+/// The sidecars a build for `triple` needs, in [`SIDECARS`] order.
+fn sidecars_for(triple: &str) -> impl Iterator<Item = &'static Sidecar> {
+    let triple = triple.to_owned();
+    SIDECARS
+        .iter()
+        .filter(move |sidecar| sidecar.applies_to(&triple))
+}
 
 /// The oldest Codex release macOS will still execute.
 ///
@@ -61,7 +165,7 @@ fn releases_api_base() -> String {
 /// Where a Codex release asset actually lives.
 ///
 /// Built from the pinned repository, the release tag, and an asset name ovm
-/// chose itself (`expected_asset_names` / [`SIDECAR_BINARIES`]) — never from
+/// chose itself (`expected_asset_names` / [`SIDECARS`]) — never from
 /// `browser_download_url`. Release metadata may say *which* assets a release
 /// publishes; it does not get to say where the bytes come from. Without this,
 /// a metadata response that satisfied the host allowlist could serve the
@@ -613,18 +717,37 @@ fn download_npm_tarball(url: &str, integrity: Option<&str>, dest: &Path) -> Resu
     result
 }
 
-/// Download a single-binary release asset and extract it to `dest`, removing
-/// the downloaded archive whether or not extraction succeeds. Returns the
-/// archive's sha256.
 fn download_and_extract_single_binary(
     url: &str,
     archive_path: &Path,
     dest: &Path,
     metadata_size: Option<u64>,
 ) -> Result<String> {
+    download_and_extract_matching(
+        url,
+        archive_path,
+        dest,
+        metadata_size,
+        "Codex binary",
+        is_codex_binary_name,
+    )
+}
+
+/// Download one release asset and publish the single file inside it that
+/// `accept` names as `dest`; `expected` is what the error calls that file when
+/// the archive holds no such entry.
+fn download_and_extract_matching(
+    url: &str,
+    archive_path: &Path,
+    dest: &Path,
+    metadata_size: Option<u64>,
+    expected: &str,
+    accept: impl Fn(&str) -> bool,
+) -> Result<String> {
     let download_result = download_asset(url, archive_path, metadata_size);
-    let result = download_result
-        .and_then(|sha256| extract_release_archive(archive_path, dest).map(|_| sha256));
+    let result = download_result.and_then(|sha256| {
+        extract_release_archive_matching(archive_path, dest, expected, accept).map(|_| sha256)
+    });
     let _ = std::fs::remove_file(archive_path);
     result
 }
@@ -666,11 +789,14 @@ enum SidecarRequirement {
 
 impl SidecarRequirement {
     fn from_release(release: &Release) -> Self {
+        Self::from_release_for(release, release_target_triple())
+    }
+
+    fn from_release_for(release: &Release, triple: &str) -> Self {
         Self::Published(
-            SIDECAR_BINARIES
-                .iter()
-                .copied()
-                .filter(|sidecar| release_publishes_sidecar_family(release, sidecar))
+            sidecars_for(triple)
+                .filter(|sidecar| release_publishes_sidecar_family(release, sidecar.asset))
+                .map(|sidecar| sidecar.asset)
                 .collect(),
         )
     }
@@ -691,23 +817,40 @@ fn complete_install(
     version: &str,
     dest: &Path,
 ) -> Result<ReleaseInstallMetadata> {
+    complete_install_for(
+        metadata,
+        requirement,
+        version,
+        dest,
+        release_target_triple(),
+    )
+}
+
+fn complete_install_for(
+    metadata: ReleaseInstallMetadata,
+    requirement: &SidecarRequirement,
+    version: &str,
+    dest: &Path,
+    triple: &str,
+) -> Result<ReleaseInstallMetadata> {
     let Some(bin_dir) = dest.parent() else {
         return Ok(metadata);
     };
-    for sidecar in SIDECAR_BINARIES {
-        if bin_dir.join(sidecar).exists() {
+    for sidecar in sidecars_for(triple) {
+        if sidecar.dest(bin_dir).exists() {
             continue;
         }
+        let name = sidecar.asset;
         match requirement {
-            SidecarRequirement::Published(published) if published.contains(sidecar) => {
-                for installed in installed_binary_paths(dest) {
+            SidecarRequirement::Published(published) if published.contains(&name) => {
+                for installed in installed_binary_paths_for(dest, triple) {
                     let _ = std::fs::remove_file(installed);
                 }
                 return Err(OvmError::DownloadFailed {
                     url: format!("{}/tags/{version}", releases_api_base()),
                     message: format!(
-                        "Codex {version} ships the {sidecar} sidecar, but the package installed \
-                         here contains no {sidecar} beside the Codex binary. Installing it would \
+                        "Codex {version} ships the {name} sidecar, but the package installed \
+                         here contains no {name} beside the Codex binary. Installing it would \
                          leave a Codex that cannot run shell commands, so nothing was installed. \
                          Try another version, or report this at \
                          https://github.com/ovm-sh/ovm-oss/issues."
@@ -716,7 +859,7 @@ fn complete_install(
             }
             SidecarRequirement::Published(_) => {}
             SidecarRequirement::Unknown(reason) => eprintln!(
-                "  {} Installed Codex {version} without {sidecar}, and could not read the release \
+                "  {} Installed Codex {version} without {name}, and could not read the release \
                  metadata to tell whether this version needs it ({reason}). If shell commands \
                  fail to spawn, reinstall once the GitHub releases API is reachable.",
                 style("!").yellow()
@@ -776,61 +919,86 @@ fn refuse_macos_revoked(version: &str) -> Result<()> {
 }
 
 fn refuse_incomplete_sidecar_family(release: &Release, version: &str) -> Result<()> {
-    for sidecar in SIDECAR_BINARIES {
-        let asset_name = format!("{sidecar}-{}.tar.gz", release_target_triple());
+    refuse_incomplete_sidecar_family_for(release, version, release_target_triple())
+}
+
+fn refuse_incomplete_sidecar_family_for(
+    release: &Release,
+    version: &str,
+    triple: &str,
+) -> Result<()> {
+    for sidecar in sidecars_for(triple) {
+        let asset_name = sidecar.asset_name(triple);
         if release.assets.iter().any(|asset| asset.name == asset_name) {
             continue;
         }
-        if !release_publishes_sidecar_family(release, sidecar) {
+        if !release_publishes_sidecar_family(release, sidecar.asset) {
             continue;
         }
         return Err(OvmError::DownloadFailed {
             url: format!("{}/tags/{version}", releases_api_base()),
             message: format!(
-                "Codex {} publishes {sidecar} for other platforms but not {asset_name}. \
+                "Codex {} publishes {} for other platforms but not {asset_name}. \
                  Installing it would leave a Codex that cannot run shell commands, so \
                  nothing was installed. Try another version, or report this at \
                  https://github.com/ovm-sh/ovm-oss/issues.",
-                release.tag_name
+                release.tag_name, sidecar.asset
             ),
         });
     }
     Ok(())
 }
 
-/// Install the [`SIDECAR_BINARIES`] that this release publishes as separate
-/// assets (e.g. `codex-code-mode-host-aarch64-apple-darwin.tar.gz`) next to
+/// Install the [`SIDECARS`] that this release publishes as separate assets
+/// (e.g. `codex-code-mode-host-aarch64-apple-darwin.tar.gz`,
+/// `bwrap-x86_64-unknown-linux-musl.tar.gz`) where Codex expects them beside
 /// the main binary at `dest`. A sidecar that exists and fails to install is an
 /// error, for the same reason one that is missing for our platform alone is.
 fn install_github_sidecars(release: &Release, version: &str, dest: &Path) -> Result<()> {
+    install_github_sidecars_for(release, version, dest, release_target_triple())
+}
+
+fn install_github_sidecars_for(
+    release: &Release,
+    version: &str,
+    dest: &Path,
+    triple: &str,
+) -> Result<()> {
     let Some(bin_dir) = dest.parent() else {
         return Ok(());
     };
-    if let Err(error) = refuse_incomplete_sidecar_family(release, version) {
+    if let Err(error) = refuse_incomplete_sidecar_family_for(release, version, triple) {
         let _ = std::fs::remove_file(dest);
         return Err(error);
     }
-    for sidecar in SIDECAR_BINARIES {
-        let asset_name = format!("{sidecar}-{}.tar.gz", release_target_triple());
+    for sidecar in sidecars_for(triple) {
+        let asset_name = sidecar.asset_name(triple);
         let Some(asset) = release.assets.iter().find(|asset| asset.name == asset_name) else {
             continue;
         };
-        let sidecar_dest = bin_dir.join(sidecar);
-        let archive_path = sidecar_dest.with_extension("tar.gz");
+        let sidecar_dest = sidecar.dest(bin_dir);
+        // The archive is staged in the bin dir itself: the sidecar's own
+        // directory (`codex-resources/`) may not exist until extraction
+        // creates it.
+        let archive_path = bin_dir.join(format!("{}.tar.gz", sidecar.asset));
         let asset_url = release_asset_url(&release.tag_name, &asset_name);
         let install_result = declared_asset_size(asset)
             .and_then(|size| {
-                download_and_extract_single_binary(
+                download_and_extract_matching(
                     &asset_url,
                     &archive_path,
                     &sidecar_dest,
                     Some(size),
+                    &format!("{} binary", sidecar.asset),
+                    |file_name| sidecar.archive_entry_matches(file_name),
                 )
             })
             .and_then(|_| super::verify_product_binary(Product::Codex, &sidecar_dest));
         if let Err(error) = install_result {
             let _ = std::fs::remove_file(&sidecar_dest);
-            let _ = std::fs::remove_file(dest);
+            for installed in installed_binary_paths_for(dest, triple) {
+                let _ = std::fs::remove_file(installed);
+            }
             return Err(error);
         }
     }
@@ -858,10 +1026,14 @@ fn release_target_triple() -> &'static str {
 
 /// The main binary plus any sidecars that are present next to it.
 fn installed_binary_paths(dest: &Path) -> Vec<PathBuf> {
+    installed_binary_paths_for(dest, release_target_triple())
+}
+
+fn installed_binary_paths_for(dest: &Path, triple: &str) -> Vec<PathBuf> {
     let mut paths = vec![dest.to_path_buf()];
     if let Some(bin_dir) = dest.parent() {
-        for sidecar in SIDECAR_BINARIES {
-            let path = bin_dir.join(sidecar);
+        for sidecar in sidecars_for(triple) {
+            let path = sidecar.dest(bin_dir);
             if path.exists() {
                 paths.push(path);
             }
@@ -870,11 +1042,16 @@ fn installed_binary_paths(dest: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Extract the Codex binaries from an npm platform tarball: the entry named
-/// exactly `codex` becomes `dest`, and any [`SIDECAR_BINARIES`] entries are
-/// installed next to it. Other vendored files (rg, zsh, …) are skipped — the
-/// CLI treats those as optional and falls back to system tools.
+/// Extract the Codex binary from an npm platform package. The entry named
+/// exactly `codex` becomes `dest`, and any [`SIDECARS`] entries are published
+/// beside it at the path Codex expects (`codex-code-mode-host`,
+/// `codex-resources/bwrap`). Other vendored files (rg, zsh, …) are skipped —
+/// the CLI treats those as optional and falls back to system tools.
 fn extract_npm_archive(archive_path: &Path, dest: &Path) -> Result<()> {
+    extract_npm_archive_for(archive_path, dest, release_target_triple())
+}
+
+fn extract_npm_archive_for(archive_path: &Path, dest: &Path, triple: &str) -> Result<()> {
     let file = std::fs::File::open(archive_path)?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
@@ -885,6 +1062,7 @@ fn extract_npm_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     std::fs::create_dir_all(parent)?;
 
     let temp_dir = tempfile::tempdir_in(parent)?;
+    // (path relative to the bin dir, staged file)
     let mut staged: Vec<(String, PathBuf)> = Vec::new();
 
     for entry in archive.entries()? {
@@ -896,34 +1074,40 @@ fn extract_npm_archive(archive_path: &Path, dest: &Path) -> Result<()> {
 
         let entry_path = entry
             .path()
-            .map_err(|error| archive_read_error(error, "unreadable archive entry path"))?;
-        let Some(file_name) = entry_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned)
-        else {
+            .map_err(|error| archive_read_error(error, "unreadable archive entry path"))?
+            .into_owned();
+        let Some(file_name) = entry_path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
 
-        if file_name != "codex" && !SIDECAR_BINARIES.contains(&file_name.as_str()) {
+        let relative = if file_name == "codex" {
+            "codex".to_owned()
+        } else if let Some(sidecar) =
+            sidecars_for(triple).find(|sidecar| sidecar.npm_entry_matches(&entry_path))
+        {
+            sidecar.path.to_owned()
+        } else {
             continue;
-        }
+        };
 
         // Use the effective (PAX-aware) size, not the raw header size: a PAX
         // `size` extended header overrides the header and drives how many bytes
         // `unpack` streams, so validating the header alone could be bypassed.
         let declared_size = entry.size();
-        crate::sources::validate_tar_entry_size(declared_size, std::path::Path::new(&file_name))?;
+        crate::sources::validate_tar_entry_size(declared_size, std::path::Path::new(&relative))?;
 
-        let staged_path = temp_dir.path().join(&file_name);
+        let staged_path = temp_dir.path().join(&relative);
+        if let Some(staged_parent) = staged_path.parent() {
+            std::fs::create_dir_all(staged_parent)?;
+        }
         entry
             .unpack(&staged_path)
-            .map_err(|error| archive_read_error(error, &format!("failed to unpack {file_name}")))?;
+            .map_err(|error| archive_read_error(error, &format!("failed to unpack {relative}")))?;
         crate::util::make_executable(&staged_path)?;
-        staged.push((file_name, staged_path));
+        staged.push((relative, staged_path));
     }
 
-    if !staged.iter().any(|(file_name, _)| file_name == "codex") {
+    if !staged.iter().any(|(relative, _)| relative == "codex") {
         return Err(OvmError::ExtractionFailed(
             "the npm package unpacked completely but contains no Codex binary".into(),
         ));
@@ -934,13 +1118,18 @@ fn extract_npm_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     // (an existing bin path makes later installs treat the version as
     // already installed). Roll back everything if a rename fails partway.
     let mut installed: Vec<PathBuf> = Vec::new();
-    for (file_name, staged_path) in &staged {
-        let target = if file_name == "codex" {
+    for (relative, staged_path) in &staged {
+        let target = if relative == "codex" {
             dest.to_path_buf()
         } else {
-            parent.join(file_name)
+            parent.join(relative)
         };
-        if let Err(error) = std::fs::rename(staged_path, &target) {
+        let published = match target.parent() {
+            Some(target_parent) => std::fs::create_dir_all(target_parent),
+            None => Ok(()),
+        }
+        .and_then(|_| std::fs::rename(staged_path, &target));
+        if let Err(error) = published {
             for path in &installed {
                 let _ = std::fs::remove_file(path);
             }
@@ -967,7 +1156,17 @@ pub(crate) fn archive_read_error(error: std::io::Error, context: &str) -> OvmErr
     OvmError::ExtractionFailed(format!("{context}: {error}"))
 }
 
+#[cfg(test)]
 fn extract_release_archive(archive_path: &Path, dest: &Path) -> Result<()> {
+    extract_release_archive_matching(archive_path, dest, "Codex binary", is_codex_binary_name)
+}
+
+fn extract_release_archive_matching(
+    archive_path: &Path,
+    dest: &Path,
+    expected: &str,
+    accept: impl Fn(&str) -> bool,
+) -> Result<()> {
     let file = std::fs::File::open(archive_path)?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
@@ -998,7 +1197,7 @@ fn extract_release_archive(archive_path: &Path, dest: &Path) -> Result<()> {
             continue;
         };
 
-        if !is_codex_binary_name(&file_name) {
+        if !accept(&file_name) {
             continue;
         }
 
@@ -1024,9 +1223,9 @@ fn extract_release_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     if !extracted {
         // The archive read to completion (a truncated one fails above with the
         // incomplete-archive error), so this really is a release-shape problem.
-        return Err(OvmError::ExtractionFailed(
-            "the release archive unpacked completely but contains no Codex binary".into(),
-        ));
+        return Err(OvmError::ExtractionFailed(format!(
+            "the release archive unpacked completely but contains no {expected}"
+        )));
     }
 
     Ok(())
@@ -1039,14 +1238,19 @@ fn is_codex_binary_name(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_npm_platform_version, declared_asset_size, download_and_extract_single_binary,
-        download_github_release, download_release, expected_asset_names, extract_npm_archive,
+        codex_npm_platform_version, complete_install_for, declared_asset_size,
+        download_and_extract_single_binary, download_github_release, download_release,
+        expected_asset_names, extract_npm_archive, extract_npm_archive_for,
         extract_release_archive, fetch_release, get_latest_npm_release_version_at,
-        install_github_sidecars, is_macos_revoked, latest_release_version, list_remote_versions_at,
-        refuse_macos_revoked, release_asset_url, release_target_triple, select_release_asset,
-        Release, ReleaseAsset, ALLOW_REVOKED_ENV, CODEX_DOWNLOAD_URL_ENV,
-        CODEX_RELEASE_DOWNLOAD_BASE, MACOS_REVOCATION_FLOOR,
+        install_github_sidecars, install_github_sidecars_for, is_macos_revoked,
+        latest_release_version, list_remote_versions_at, missing_published_sidecars_for,
+        refuse_incomplete_sidecar_family_for, refuse_macos_revoked, release_asset_url,
+        release_target_triple, select_release_asset, sidecars_for, Release, ReleaseAsset,
+        SidecarRequirement, ALLOW_REVOKED_ENV, CODEX_DOWNLOAD_URL_ENV, CODEX_RELEASE_DOWNLOAD_BASE,
+        MACOS_REVOCATION_FLOOR,
     };
+    use crate::error::OvmError;
+    use crate::release_metadata::ReleaseInstallMetadata;
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use mockito::Server;
@@ -2434,5 +2638,329 @@ mod tests {
         std::env::remove_var(ALLOW_REVOKED_ENV);
 
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    const LINUX_X64: &str = "x86_64-unknown-linux-musl";
+    const LINUX_ARM64: &str = "aarch64-unknown-linux-musl";
+    const DARWIN_ARM64: &str = "aarch64-apple-darwin";
+
+    fn sized_asset(name: &str, size: usize) -> ReleaseAsset {
+        ReleaseAsset {
+            name: name.to_string(),
+            browser_download_url: "https://example.invalid/decoy.tar.gz".to_string(),
+            size: Some(size as u64),
+        }
+    }
+
+    fn serve(server: &mut Server, version: &str, name: &str, body: &[u8]) -> mockito::Mock {
+        server
+            .mock("GET", format!("/download/{version}/{name}").as_str())
+            .with_status(200)
+            .with_header("content-type", "application/octet-stream")
+            .with_body(body)
+            .create()
+    }
+
+    #[test]
+    fn linux_builds_need_the_bundled_bwrap_and_darwin_builds_do_not() {
+        let linux: Vec<_> = sidecars_for(LINUX_X64).map(|s| s.asset).collect();
+        assert_eq!(linux, vec!["codex-code-mode-host", "bwrap"]);
+        let darwin: Vec<_> = sidecars_for(DARWIN_ARM64).map(|s| s.asset).collect();
+        assert_eq!(darwin, vec!["codex-code-mode-host"]);
+    }
+
+    /// rust-v0.153.4 on the Linux verification lane, 2026-09-05: the install
+    /// looked whole, and the first sandboxed command panicked in Codex's
+    /// launcher because no `codex-resources/bwrap` sat beside the binary.
+    #[test]
+    fn a_linux_release_installs_the_bundled_bwrap_under_codex_resources() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        std::fs::create_dir_all(dest.parent().expect("bin dir")).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+
+        let version = "rust-v0.153.4";
+        let host_entry = format!("codex-code-mode-host-{LINUX_X64}");
+        let bwrap_entry = format!("bwrap-{LINUX_X64}");
+        let host_body = tarball_bytes(
+            dir.path(),
+            "host.tar.gz",
+            &[(host_entry.as_str(), b"fake-host-binary".as_slice())],
+        );
+        let bwrap_body = tarball_bytes(
+            dir.path(),
+            "bwrap.tar.gz",
+            &[(bwrap_entry.as_str(), b"fake-bwrap-binary".as_slice())],
+        );
+        let host_name = format!("{host_entry}.tar.gz");
+        let bwrap_name = format!("{bwrap_entry}.tar.gz");
+        let mut server = Server::new();
+        let _host = serve(&mut server, version, &host_name, &host_body);
+        let _bwrap = serve(&mut server, version, &bwrap_name, &bwrap_body);
+        let release = Release {
+            tag_name: version.into(),
+            assets: vec![
+                sized_asset(&host_name, host_body.len()),
+                sized_asset(&bwrap_name, bwrap_body.len()),
+            ],
+        };
+
+        with_mock_sources(&server.url(), || {
+            install_github_sidecars_for(&release, version, &dest, LINUX_X64)
+                .expect("both sidecars install")
+        });
+
+        let bin_dir = dest.parent().expect("bin dir");
+        assert_eq!(
+            std::fs::read(bin_dir.join("codex-code-mode-host")).expect("read host"),
+            b"fake-host-binary"
+        );
+        let bwrap = bin_dir.join("codex-resources").join("bwrap");
+        assert_eq!(
+            std::fs::read(&bwrap).expect("read bundled bwrap"),
+            b"fake-bwrap-binary"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&bwrap)
+                .expect("bwrap metadata")
+                .permissions()
+                .mode();
+            assert!(mode & 0o111 != 0, "Codex only execs an executable bwrap");
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(bin_dir)
+            .expect("list bin dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tar.gz"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no archives left behind: {leftovers:?}"
+        );
+    }
+
+    /// The same release on macOS: bwrap is published for Linux only and a
+    /// Darwin build neither needs nor fetches it.
+    #[test]
+    fn a_darwin_build_ignores_the_linux_only_bwrap_family() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        std::fs::create_dir_all(dest.parent().expect("bin dir")).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+
+        let version = "rust-v0.153.4";
+        let host_entry = format!("codex-code-mode-host-{DARWIN_ARM64}");
+        let host_body = tarball_bytes(
+            dir.path(),
+            "host.tar.gz",
+            &[(host_entry.as_str(), b"fake-host-binary".as_slice())],
+        );
+        let host_name = format!("{host_entry}.tar.gz");
+        let mut server = Server::new();
+        let _host = serve(&mut server, version, &host_name, &host_body);
+        let release = Release {
+            tag_name: version.into(),
+            assets: vec![
+                sized_asset(&host_name, host_body.len()),
+                sized_asset(&format!("bwrap-{LINUX_X64}.tar.gz"), 1),
+                sized_asset(&format!("bwrap-{LINUX_ARM64}.tar.gz"), 1),
+            ],
+        };
+
+        with_mock_sources(&server.url(), || {
+            install_github_sidecars_for(&release, version, &dest, DARWIN_ARM64)
+                .expect("the host sidecar installs; bwrap is not our concern")
+        });
+        let bin_dir = dest.parent().expect("bin dir");
+        assert!(bin_dir.join("codex-code-mode-host").exists());
+        assert!(!bin_dir.join("codex-resources").exists());
+    }
+
+    #[test]
+    fn a_linux_release_missing_only_our_bwrap_is_refused() {
+        let ours = format!("bwrap-{LINUX_X64}.tar.gz");
+        let release = Release {
+            tag_name: "rust-v0.153.4".into(),
+            assets: vec![
+                asset(
+                    &format!("codex-code-mode-host-{LINUX_X64}.tar.gz"),
+                    "https://example.com/host",
+                ),
+                asset(
+                    &format!("codex-code-mode-host-{DARWIN_ARM64}.tar.gz"),
+                    "https://example.com/host-darwin",
+                ),
+                asset(
+                    &format!("bwrap-{LINUX_ARM64}.tar.gz"),
+                    "https://example.com/bwrap",
+                ),
+            ],
+        };
+
+        let error = refuse_incomplete_sidecar_family_for(&release, "rust-v0.153.4", LINUX_X64)
+            .expect_err("a bwrap published for the other Linux platform only must refuse");
+        let message = error.to_string();
+        assert!(
+            message.contains(&ours),
+            "the missing asset must be named: {message}"
+        );
+        assert!(
+            message.contains("cannot run shell commands"),
+            "the consequence must be stated: {message}"
+        );
+
+        refuse_incomplete_sidecar_family_for(&release, "rust-v0.153.4", DARWIN_ARM64)
+            .expect("a Darwin build does not need bwrap");
+    }
+
+    #[test]
+    fn a_linux_package_without_the_published_bwrap_is_incomplete() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        let bin_dir = dest.parent().expect("bin dir");
+        std::fs::create_dir_all(bin_dir).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+        std::fs::write(bin_dir.join("codex-code-mode-host"), b"fake-host-binary").expect("host");
+        let requirement = SidecarRequirement::Published(vec!["codex-code-mode-host", "bwrap"]);
+        let metadata = || {
+            ReleaseInstallMetadata::new(
+                "rust-v0.153.4",
+                "rust-v0.153.4",
+                "codex-x86_64-unknown-linux-musl.tar.gz",
+                "https://example.invalid/codex.tar.gz",
+                "0".repeat(64),
+            )
+        };
+
+        let error =
+            complete_install_for(metadata(), &requirement, "rust-v0.153.4", &dest, LINUX_X64)
+                .expect_err("a Linux tree without the published bwrap must not be handed back");
+        let message = error.to_string();
+        assert!(
+            message.contains("bwrap"),
+            "the missing sidecar must be named: {message}"
+        );
+        assert!(!dest.exists(), "no half-installed Codex may be left behind");
+        assert!(!bin_dir.join("codex-code-mode-host").exists());
+
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+        std::fs::write(bin_dir.join("codex-code-mode-host"), b"fake-host-binary").expect("host");
+        complete_install_for(
+            metadata(),
+            &requirement,
+            "rust-v0.153.4",
+            &dest,
+            DARWIN_ARM64,
+        )
+        .expect("the same tree is complete for a Darwin build");
+        assert!(dest.exists());
+    }
+
+    #[test]
+    fn npm_linux_package_extracts_the_bundled_bwrap_and_skips_other_resources() {
+        let dir = tempdir().expect("tempdir");
+        let archive_path = dir.path().join("codex.npm.tgz");
+        let vendor = format!("package/vendor/{LINUX_X64}");
+        create_multi_archive(
+            &archive_path,
+            &[
+                (
+                    &format!("{vendor}/codex-resources/bwrap"),
+                    b"fake-bwrap-binary".as_slice(),
+                ),
+                (
+                    &format!("{vendor}/codex-resources/zsh/bin/zsh"),
+                    b"fake-zsh".as_slice(),
+                ),
+                (&format!("{vendor}/codex-path/rg"), b"fake-rg".as_slice()),
+                (
+                    &format!("{vendor}/bin/codex-code-mode-host"),
+                    b"fake-host-binary".as_slice(),
+                ),
+                (
+                    &format!("{vendor}/bin/codex"),
+                    b"fake-codex-binary".as_slice(),
+                ),
+            ],
+        );
+
+        let dest = dir.path().join("linux").join("bin").join("codex");
+        extract_npm_archive_for(&archive_path, &dest, LINUX_X64).expect("extract archive");
+        let bin_dir = dest.parent().expect("bin dir");
+        assert_eq!(std::fs::read(&dest).expect("main"), b"fake-codex-binary");
+        assert_eq!(
+            std::fs::read(bin_dir.join("codex-code-mode-host")).expect("host"),
+            b"fake-host-binary"
+        );
+        assert_eq!(
+            std::fs::read(bin_dir.join("codex-resources").join("bwrap")).expect("bwrap"),
+            b"fake-bwrap-binary"
+        );
+        assert!(!bin_dir.join("codex-resources").join("zsh").exists());
+        assert!(!bin_dir.join("rg").exists());
+
+        let darwin_dest = dir.path().join("darwin").join("bin").join("codex");
+        extract_npm_archive_for(&archive_path, &darwin_dest, DARWIN_ARM64)
+            .expect("extract archive");
+        assert!(darwin_dest.exists());
+        assert!(!darwin_dest
+            .parent()
+            .expect("bin dir")
+            .join("codex-resources")
+            .exists());
+    }
+
+    /// An install made before OVM fetched a sidecar reports exactly the
+    /// published ones it lacks, and never consults the release when the tree
+    /// is already whole.
+    #[test]
+    fn a_tree_missing_a_published_sidecar_names_it_and_a_whole_tree_asks_nothing() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        let bin_dir = dest.parent().expect("bin dir");
+        std::fs::create_dir_all(bin_dir).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+        std::fs::write(bin_dir.join("codex-code-mode-host"), b"fake-host-binary").expect("host");
+        let publishes_bwrap = |_: &str| {
+            Ok(Release {
+                tag_name: "rust-v0.153.4".into(),
+                assets: vec![asset(
+                    &format!("bwrap-{LINUX_X64}.tar.gz"),
+                    "https://example.com/bwrap",
+                )],
+            })
+        };
+
+        // Linux, pre-fix tree: bwrap absent and published.
+        let missing =
+            missing_published_sidecars_for("rust-v0.153.4", &dest, LINUX_X64, publishes_bwrap)
+                .expect("listing read");
+        assert_eq!(missing, vec!["bwrap"]);
+
+        // Darwin needs no bwrap, so the same tree is whole and the release is
+        // never fetched.
+        let missing = missing_published_sidecars_for("rust-v0.153.4", &dest, DARWIN_ARM64, |_| {
+            panic!("a whole tree must not fetch the release")
+        })
+        .expect("nothing to ask");
+        assert!(missing.is_empty());
+
+        // A version from before bwrap existed: absent but not published.
+        let missing = missing_published_sidecars_for("rust-v0.141.0", &dest, LINUX_X64, |_| {
+            Ok(Release {
+                tag_name: "rust-v0.141.0".into(),
+                assets: Vec::new(),
+            })
+        })
+        .expect("listing read");
+        assert!(missing.is_empty());
+
+        // The listing could not be read: reported, not decided.
+        missing_published_sidecars_for("rust-v0.153.4", &dest, LINUX_X64, |_| {
+            Err(OvmError::Message("rate limited".into()))
+        })
+        .expect_err("an unreadable listing is an error");
     }
 }

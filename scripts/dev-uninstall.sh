@@ -23,6 +23,7 @@ remove_exact_link() {
 
 remove_exact_link "$CARGO_BIN/ovm" "$ARTIFACT_DIR/ovm"
 remove_exact_link "$CARGO_BIN/ovm-claudex" "$ARTIFACT_DIR/ovm-claudex"
+remove_exact_link "$CARGO_BIN/ovm-limits" "$ARTIFACT_DIR/ovm-limits"
 remove_exact_link "$INSTALL_DIR/ovm" "$ARTIFACT_DIR/ovm"
 remove_exact_link "$INSTALL_DIR/ovm-codex-skew" "$ARTIFACT_DIR/ovm-codex-skew"
 

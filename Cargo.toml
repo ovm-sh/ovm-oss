@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/ovm", "crates/ovm-codex-skew", "crates/ovm-claudex"]
+members = ["crates/ovm", "crates/ovm-codex-skew", "crates/ovm-claudex", "crates/ovm-limits", "crates/ovm-tui"]
+
+[workspace.package]
+version = "0.1.8"
 
 [profile.release]
 opt-level = 3

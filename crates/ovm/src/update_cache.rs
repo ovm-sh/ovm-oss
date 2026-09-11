@@ -251,6 +251,37 @@ pub(crate) fn record_latest_probe_failure(base: &Path, now: u64) -> Result<()> {
     save_latest_probe_state(base, &state)
 }
 
+/// How long a failed probe counts as "the network looks down" for the launch
+/// path. Twice the probe's maximum retry interval: while the detached refresh
+/// keeps running, a persistent outage re-stamps the failure at least this often
+/// and the signal holds; if the refresh is not running at all (disabled, or
+/// checks turned off after a failure), the signal decays on its own instead of
+/// pinning every future launch to offline behaviour on the strength of one old
+/// record.
+const LATEST_PROBE_FAILURE_WINDOW_SECS: u64 = 2 * LATEST_PROBE_MAX_BACKOFF_SECS;
+
+fn latest_probe_failing_at(state: Option<&LatestProbeState>, now: u64) -> bool {
+    let Some(state) = state else {
+        return false;
+    };
+    state.consecutive_failures > 0
+        && now >= state.attempted_at
+        && now.saturating_sub(state.attempted_at) <= LATEST_PROBE_FAILURE_WINDOW_SECS
+}
+
+/// Whether the most recent aggregate probe failed — the update service could
+/// not be reached the last time a detached refresh tried, and that was recent.
+///
+/// This is the launch path's only "am I offline?" signal, chosen because it is
+/// free (one file read), is written by the one process that actually goes to
+/// the network, and clears itself on the next successful probe. It is a
+/// heuristic: the registry being down while the rest of the internet is up
+/// reads as offline too, so every consumer must degrade gracefully when it is
+/// wrong in either direction.
+pub(crate) fn latest_probe_failing(base: &Path) -> bool {
+    latest_probe_failing_at(load_latest_probe_state(base).as_ref(), now_secs())
+}
+
 pub(crate) fn record_index_refresh_success(base: &Path, product: Product) -> Result<()> {
     let Some(mut state) = load_latest_probe_state(base) else {
         return Ok(());
@@ -492,6 +523,57 @@ pub fn now_secs() -> u64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn probe_failing_is_a_recent_failure_and_nothing_else() {
+        let now = 1_000_000;
+        // No record at all: never been online, never been offline — not failing.
+        assert!(!latest_probe_failing_at(None, now));
+
+        let failed = LatestProbeState {
+            attempted_at: now - 30,
+            consecutive_failures: 1,
+            ..LatestProbeState::default()
+        };
+        assert!(latest_probe_failing_at(Some(&failed), now));
+
+        // A success resets the counter and the signal with it.
+        let recovered = LatestProbeState {
+            attempted_at: now,
+            consecutive_failures: 0,
+            ..LatestProbeState::default()
+        };
+        assert!(!latest_probe_failing_at(Some(&recovered), now));
+
+        // A failure older than the window has decayed: the refresher that
+        // would have re-stamped it is evidently not running.
+        let stale = LatestProbeState {
+            attempted_at: now - LATEST_PROBE_FAILURE_WINDOW_SECS - 1,
+            consecutive_failures: 4,
+            ..LatestProbeState::default()
+        };
+        assert!(!latest_probe_failing_at(Some(&stale), now));
+
+        // A record stamped in the future (clock skew) is not trusted either.
+        let future = LatestProbeState {
+            attempted_at: now + 600,
+            consecutive_failures: 1,
+            ..LatestProbeState::default()
+        };
+        assert!(!latest_probe_failing_at(Some(&future), now));
+    }
+
+    #[test]
+    fn probe_failure_round_trips_through_the_cache_file() {
+        let dir = tempdir().unwrap();
+        assert!(!latest_probe_failing(dir.path()));
+
+        record_latest_probe_failure(dir.path(), now_secs()).expect("record failure");
+        assert!(latest_probe_failing(dir.path()));
+
+        record_latest_probe_not_modified(dir.path(), now_secs()).expect("record success");
+        assert!(!latest_probe_failing(dir.path()));
+    }
 
     #[test]
     fn version_index_round_trips_and_reports_latest() {

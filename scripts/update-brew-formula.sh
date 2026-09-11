@@ -3,7 +3,7 @@
 # Called by .github/workflows/release.yml in the publish-brew job.
 #
 # Inputs:
-#   - $GITHUB_REF_NAME (e.g. "v0.0.1") OR falls back to crates/ovm/Cargo.toml
+#   - $GITHUB_REF_NAME (e.g. "v0.0.1") OR falls back to the OVM package version from Cargo metadata
 #   - $OVM_BREW_FORMULA_NAME (optional: "ovm" or "ovm-beta"; default "ovm")
 #   - artifacts/ovm-<target>/ovm-<target>.tar.gz for each of the 4 supported targets
 #
@@ -13,7 +13,8 @@ set -e
 
 VERSION="${GITHUB_REF_NAME#v}"
 if [ -z "$VERSION" ] || [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
-    VERSION=$(grep -m1 '^version = ' crates/ovm/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+    metadata=$(cargo metadata --locked --no-deps --format-version 1)
+    VERSION=$(printf '%s\n' "$metadata" | jq -er '.packages[] | select(.name == "ovm") | .version')
 fi
 FORMULA_NAME="${OVM_BREW_FORMULA_NAME:-ovm}"
 BUNDLE_MANIFEST="crates/ovm/ovm-bundle-v1.tsv"

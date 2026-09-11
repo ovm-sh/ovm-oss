@@ -128,7 +128,7 @@ for product in claude codex pi; do
 done
 
 # Remove only the checkout symlinks created by the old developer workflow.
-for name in ovm ovm-claudex; do
+for name in ovm ovm-claudex ovm-limits; do
     link="$CARGO_BIN/$name"
     if legacy_link_to "$link" "$LEGACY_ROOT/target/release/$name"; then
         rm "$link"
@@ -138,7 +138,7 @@ for name in ovm ovm-claudex; do
     fi
 done
 
-for path in "$INSTALL_DIR/ovm" "$INSTALL_DIR/ovm-codex-skew" "$INSTALL_DIR/ovm-claudex"; do
+for path in "$INSTALL_DIR/ovm" "$INSTALL_DIR/ovm-codex-skew" "$INSTALL_DIR/ovm-claudex" "$INSTALL_DIR/ovm-limits"; do
     if [ -L "$path" ]; then
         target=$(readlink "$path")
         case "$target" in

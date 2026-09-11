@@ -257,7 +257,14 @@ pub enum Commands {
     ///
     /// Named for what it does: `/buddy` hatched a creature, this hatches the
     /// toolchain around it.
-    Hatch,
+    Hatch {
+        /// Open on the story without asking (the installer passes your answer)
+        #[arg(long, conflicts_with = "tldr")]
+        story: bool,
+        /// Open on the fast setup without asking
+        #[arg(long)]
+        tldr: bool,
+    },
 
     /// Install bare launch shortcuts (ccy, cxy, ccx, ccxy, claudex) as ~/.local/bin shims — no shell rc edits
     Shortcuts {

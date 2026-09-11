@@ -283,7 +283,7 @@ const CLAUDEX_BLESSING_URL: &str = "https://x.com/bcherny/status/208617381225372
 const BUDDY_ISSUE_URL: &str =
     "https://github.com/anthropics/claude-code/issues/new?title=Bring+back+%2Fbuddy";
 const BUDDY_POST_URL: &str =
-    "https://x.com/intent/post?text=dear+%40AnthropicAI%2C+please+bring+back+%2Fbuddy";
+    "https://x.com/compose/post?text=dear+%40AnthropicAI%2C+please+bring+back+%2Fbuddy";
 
 /// Quelpaw's card, reproduced from the 2.1.96 recording — the one artifact this
 /// story is told from rather than about. The em dash and the missing space
@@ -603,17 +603,38 @@ impl Story {
         // every chapter — so the blank belongs here, once, instead of at each
         // call site where it can be forgotten.
         self.blank();
+        // Says what to do, not just which key. The bare "· enter ·" read as
+        // decoration beside the tour's "Press Enter to …" pauses, and walking
+        // the build by hand, a page ending on it was taken for a pause with no
+        // instruction at all (2026-09-10).
+        const LABEL: &str = "· press enter to continue ·";
+        let visible = LABEL.chars().count() + 2;
         let prompt = format!(
-            "{}{DIM}· enter ·{RESET}",
-            " ".repeat(2.max(self.width.saturating_sub(11) / 2))
+            "{}{DIM}{LABEL}{RESET}",
+            " ".repeat(2.max(self.width.saturating_sub(visible) / 2))
         );
         print!("{prompt}");
         let _ = io::stdout().flush();
-        let mut line = String::new();
-        if io::stdin().read_line(&mut line).is_ok() {
-            print!("\x1b[F\x1b[2K");
-            let _ = io::stdout().flush();
+        // A keypress, not a line. `read_line` needs the terminal in cooked
+        // mode to turn Enter into the newline it waits for — and the tour runs
+        // full-screen children between chapters. One that is killed rather
+        // than exited (a Claude session with no way out, 2026-09-03) leaves
+        // the terminal raw, where Enter arrives as a bare `\r` and a line read
+        // never returns: the prompt is on screen and nothing answers it. A key
+        // read sets its own mode for the duration and takes `\r` and `\n`
+        // alike, so the story goes on whatever state a child left behind.
+        let term = console::Term::stderr();
+        if term.is_term() {
+            while !matches!(term.read_key(), Ok(console::Key::Enter) | Err(_)) {}
+            // No echo in raw mode, so the cursor is still on the prompt line.
+            print!("\r\x1b[2K");
+        } else {
+            let mut line = String::new();
+            if io::stdin().read_line(&mut line).is_ok() {
+                print!("\x1b[F\x1b[2K");
+            }
         }
+        let _ = io::stdout().flush();
     }
 
     /// A terminal hyperlink (OSC 8): ctrl/cmd-click opens it, exactly like a

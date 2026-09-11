@@ -10,6 +10,11 @@ use std::process::{Command, Stdio};
 /// Launch a managed product with the active or overridden version.
 pub fn run(product: Product, args: &[String]) -> Result<()> {
     let vm = VersionManager::new(product)?;
+    // Heal a machine that manages a product but is missing its yolo shims —
+    // an install from before they were written on every path, or a tour that
+    // hung before the screen that wrote them. Free once healed (see
+    // `shortcuts::reconcile_for_managed_products`), so it can sit on launch.
+    super::shortcuts::reconcile_for_managed_products();
     let (requested_version, product_args) = extract_ovm_version(args)?;
     // A launch-supplied version becomes a filesystem path handed to exec; it
     // must be rejected for traversal/separators here, since the launch path
@@ -28,7 +33,9 @@ pub fn run(product: Product, args: &[String]) -> Result<()> {
                 // Nothing managed could be installed, but the machine already
                 // has a working install. They asked to launch the product —
                 // launch it.
-                Bootstrap::Foreign(binary) => return exec_foreign(product, &binary, &product_args),
+                Bootstrap::Foreign(binary) => {
+                    return exec_foreign(product, &binary, &product_args, &vm);
+                }
             },
         },
     };
@@ -128,6 +135,15 @@ pub fn run(product: Product, args: &[String]) -> Result<()> {
     command.args(&product_args).stdin(Stdio::inherit());
     for (key, value) in launch_environment(product, &version, dev_metadata.as_ref()) {
         command.env(key, value);
+    }
+    if !version_request {
+        apply_offline_launch_environment(
+            &mut command,
+            product,
+            &product_args,
+            &vm.dirs.base,
+            &vm.config,
+        );
     }
 
     if product == Product::Claude {
@@ -285,7 +301,12 @@ fn install_latest_and_select(vm: &VersionManager) -> Result<String> {
 /// environment and no companions, because OVM did not install this binary and
 /// cannot say which version it is. The warning names the path so the launch is
 /// never silently un-managed.
-fn exec_foreign(product: Product, binary: &Path, args: &[String]) -> Result<()> {
+fn exec_foreign(
+    product: Product,
+    binary: &Path,
+    args: &[String],
+    vm: &VersionManager,
+) -> Result<()> {
     eprintln!(
         "  {} Launching the existing unmanaged {} at {}",
         console::style("!").yellow(),
@@ -301,6 +322,12 @@ fn exec_foreign(product: Product, binary: &Path, args: &[String]) -> Result<()> 
         .stderr(Stdio::inherit());
     if product == Product::Claude {
         command.env_remove("CLAUDECODE");
+    }
+    // Unmanaged, but still ours to launch well: this path is reached exactly
+    // when the network is down (the managed install could not be fetched), so
+    // the offline hint matters here more than anywhere.
+    if !is_passthrough_metadata_request(args) {
+        apply_offline_launch_environment(&mut command, product, args, &vm.dirs.base, &vm.config);
     }
     let status = command.status()?;
     std::process::exit(status.code().unwrap_or(1));
@@ -349,6 +376,12 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
     if active_version.starts_with("dev:") {
         return Ok(active_version.to_string());
     }
+    // A caller on a deadline launches what is already here. Checked before the
+    // policy, because the point is to be unconditional: whoever set this
+    // cannot wait, whatever the config says.
+    if crate::autoupdate::auto_update_suppressed() {
+        return Ok(active_version.to_string());
+    }
     match vm.config.auto_update.policy_for(vm.product()) {
         AutoUpdatePolicy::Off => return Ok(active_version.to_string()),
         AutoUpdatePolicy::Notify => return maybe_notify_product(vm, active_version),
@@ -367,6 +400,26 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
     let Some(latest) = cached_upgrade_target(vm, active_version) else {
         return Ok(active_version.to_string());
     };
+    // A download that failed a moment ago (typically: no network) is not
+    // retried on this launch. Without this gate an offline machine paid the
+    // whole connect-and-give-up cost on EVERY launch for as long as the outage
+    // lasted. The active version launches; the retry waits for the backoff.
+    // Only a download is gated: a target that is already complete on disk
+    // (installed by hand after the failures, say) is a symlink flip, which
+    // needs no network and cannot fail the way the backoff exists for.
+    let base = &vm.dirs.base;
+    let subject = vm.product().canonical_name();
+    let needs_download = !vm.standard_install_is_complete(&latest);
+    if needs_download
+        && !crate::autoupdate::install_retry_due(
+            base,
+            subject,
+            &latest,
+            install_backoff_cap_secs(&vm.config),
+        )
+    {
+        return Ok(active_version.to_string());
+    }
 
     crate::mochi::say(
         crate::mochi::WORKING,
@@ -380,8 +433,14 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
     );
 
     match install_and_use_latest_skippable(vm, &latest, active_version) {
-        Ok(version) => Ok(version),
+        Ok(version) => {
+            if version == latest {
+                crate::autoupdate::clear_install_failure(base, subject);
+            }
+            Ok(version)
+        }
         Err(error) => {
+            crate::autoupdate::record_install_failure(base, subject, &latest);
             eprintln!(
                 "  {} Auto-update to {} {} failed; launching active {} ({})",
                 console::style("!").yellow(),
@@ -390,9 +449,20 @@ fn maybe_auto_update(vm: &VersionManager, active_version: &str) -> Result<String
                 active_version,
                 console::style(format!("error: {error}")).dim()
             );
+            eprintln!(
+                "  {} It will retry later, not on the next launch",
+                console::style("→").dim(),
+            );
             Ok(active_version.to_string())
         }
     }
+}
+
+/// The longest a failed launch-time install waits before retrying: the
+/// configured check interval, the same bound the self-update staging uses, so
+/// a release that can never install costs no more than ordinary polling.
+fn install_backoff_cap_secs(config: &OvmConfig) -> u64 {
+    config.update_check_interval.saturating_mul(3600)
 }
 
 /// [`install_and_use_latest`] for the automatic launch path, escapable by
@@ -605,6 +675,11 @@ pub(super) fn install_and_use_latest(vm: &VersionManager, latest: &str) -> Resul
     // Following latest again — drop any pin so future plain launches keep
     // auto-updating without prompting.
     vm.clear_pin();
+    // `ovm update`, an `autoUpdate: on` launch, and `ovm cc latest` all land
+    // here rather than in `install::run`, so this is where an existing user is
+    // brought up to a complete set of shims on their next update. No-op once
+    // they are all present.
+    super::shortcuts::reconcile_for_managed_products();
     Ok(latest.to_string())
 }
 
@@ -744,13 +819,31 @@ fn maybe_emit_update_banner(
     }
 
     let latest = checked_latest(config, base, product);
-    if let Some(text) = banner_text(product, active_version, latest.as_deref()) {
+    let service_unreachable = crate::update_cache::latest_probe_failing(base);
+    if let Some(text) = banner_text(
+        product,
+        active_version,
+        latest.as_deref(),
+        service_unreachable,
+    ) {
         eprintln!("{text}");
     }
 }
 
 /// Pure function: decide whether to emit a banner and what text to use.
-fn banner_text(product: Product, active_version: &str, latest: Option<&str>) -> Option<String> {
+///
+/// `service_unreachable` marks the line as coming from the cache when the last
+/// probe of the update service failed. Seen live on 2026-09-04: this banner
+/// printed from cache on an offline machine, the product then sat quiet for
+/// fifteen seconds on its own startup network calls, and the reader put the two
+/// together as "it is waiting to download that version" with no way to skip.
+/// The banner was never the wait — so say where it came from.
+fn banner_text(
+    product: Product,
+    active_version: &str,
+    latest: Option<&str>,
+    service_unreachable: bool,
+) -> Option<String> {
     if active_version.starts_with("dev:") {
         return None;
     }
@@ -763,13 +856,95 @@ fn banner_text(product: Product, active_version: &str, latest: Option<&str>) -> 
         return None;
     }
 
+    let provenance = if service_unreachable {
+        console::style(" (cached; the update service was unreachable on the last check)")
+            .dim()
+            .to_string()
+    } else {
+        String::new()
+    };
     Some(format!(
-        "{} {} {} available. Run: {}",
+        "{} {} {} available. Run: {}{}",
         console::style("(≈^.^≈)").dim(),
         product.display_name(),
         console::style(&normalized).bold(),
         console::style(format!("ovm {} latest", product.shortest_alias())).cyan(),
+        provenance,
     ))
+}
+
+/// Env var Pi reads to skip its startup network calls (`--offline` sets it).
+const PI_OFFLINE_ENV: &str = "PI_OFFLINE";
+
+/// Extra launch environment when the network looks down.
+///
+/// Pi awaits a remote model-catalog refresh (and any due OAuth token refresh)
+/// before it paints its first frame, with a fifteen-second abort and no key to
+/// skip it. On a link where connections hang rather than fail — the common
+/// shape of "no internet" on a Wi-Fi that is up — that is fifteen seconds of a
+/// blank terminal on the first launch after a few hours. Pi's own `--offline`
+/// flag skips every one of those calls, so when OVM's last probe of the update
+/// service failed (the one network fact a launch knows for free), Pi is
+/// launched with it set. Everything it skips is recovered lazily: the catalog
+/// comes from Pi's cache and tokens refresh on the first request that needs
+/// one. Nothing is set when the user already decided — `PI_OFFLINE` in the
+/// environment (any value, including an explicit `0`) or `--offline` on the
+/// command line both win.
+fn offline_launch_environment(
+    product: Product,
+    product_args: &[impl AsRef<str>],
+    service_unreachable: bool,
+    user_set_offline_env: bool,
+) -> Option<(&'static str, String)> {
+    if product != Product::Pi || !service_unreachable {
+        return None;
+    }
+    if user_set_offline_env || product_args.iter().any(|arg| arg.as_ref() == "--offline") {
+        return None;
+    }
+    Some((PI_OFFLINE_ENV, "1".to_string()))
+}
+
+/// Apply [`offline_launch_environment`] to a real launch, and say so on a
+/// terminal: the skipped update notice is the only visible difference, and a
+/// silent change in behaviour is how the last offline surprise happened.
+fn apply_offline_launch_environment(
+    command: &mut Command,
+    product: Product,
+    product_args: &[impl AsRef<str>],
+    base: &std::path::Path,
+    config: &OvmConfig,
+) {
+    // No update checks means no probe, so no signal — never guess.
+    if !config.check_for_updates {
+        return;
+    }
+    let service_unreachable = crate::update_cache::latest_probe_failing(base);
+    let user_set = std::env::var_os(PI_OFFLINE_ENV).is_some();
+    let Some((key, value)) =
+        offline_launch_environment(product, product_args, service_unreachable, user_set)
+    else {
+        return;
+    };
+    command.env(key, &value);
+    let quiet = std::env::var("OVM_QUIET").is_ok_and(|v| !v.is_empty() && v != "0");
+    if !quiet && console::Term::stderr().is_term() {
+        eprintln!(
+            "{} Network looked down on the last check — launching {} offline ({}={}).",
+            console::style("(≈^.^≈)").dim(),
+            product.display_name(),
+            key,
+            value,
+        );
+        eprintln!(
+            "{}",
+            console::style(
+                "        Otherwise Pi waits up to 15 s for its model catalog and OAuth token refresh \
+                 before drawing; skipped here, both happen on first use instead."
+            )
+            .dim()
+        );
+    }
 }
 
 fn format_dev_build_banner(version: &str, metadata: &DevInstallMetadata) -> String {
@@ -788,9 +963,9 @@ fn format_dev_build_banner(version: &str, metadata: &DevInstallMetadata) -> Stri
 mod tests {
     use super::{
         apply_yolo, banner_text, cached_upgrade_target, checked_latest, extract_ovm_version,
-        format_dev_build_banner, is_passthrough_metadata_request, is_version_request,
-        launch_environment, make_latest_default, maybe_auto_update, maybe_notify_product,
-        yolo_passthrough_flag,
+        format_dev_build_banner, install_backoff_cap_secs, is_passthrough_metadata_request,
+        is_version_request, launch_environment, make_latest_default, maybe_auto_update,
+        maybe_notify_product, offline_launch_environment, yolo_passthrough_flag,
     };
     use crate::config::{AutoUpdateConfig, AutoUpdatePolicy, OvmConfig, OvmDirs};
     use crate::dev_metadata::{DevInstallMetadata, DevInstallMode};
@@ -997,7 +1172,7 @@ mod tests {
 
     #[test]
     fn banner_emitted_when_latest_is_newer() {
-        let text = banner_text(Product::Claude, "2.1.85", Some("2.1.91"))
+        let text = banner_text(Product::Claude, "2.1.85", Some("2.1.91"), false)
             .expect("banner should be emitted");
         let plain = console::strip_ansi_codes(&text).to_string();
         assert!(plain.contains("(≈^.^≈)"));
@@ -1008,28 +1183,39 @@ mod tests {
 
     #[test]
     fn banner_suppressed_when_active_matches_latest() {
-        assert!(banner_text(Product::Claude, "2.1.91", Some("2.1.91")).is_none());
+        assert!(banner_text(Product::Claude, "2.1.91", Some("2.1.91"), false).is_none());
     }
 
     #[test]
     fn banner_suppressed_when_active_is_newer() {
-        assert!(banner_text(Product::Claude, "2.2.0", Some("2.1.91")).is_none());
+        assert!(banner_text(Product::Claude, "2.2.0", Some("2.1.91"), false).is_none());
     }
 
     #[test]
     fn banner_suppressed_when_no_cache_entry() {
-        assert!(banner_text(Product::Claude, "2.1.85", None).is_none());
+        assert!(banner_text(Product::Claude, "2.1.85", None, false).is_none());
     }
 
     #[test]
     fn banner_suppressed_for_dev_versions() {
-        assert!(banner_text(Product::Codex, "dev:resume-fix", Some("rust-v0.120.0")).is_none());
+        assert!(banner_text(
+            Product::Codex,
+            "dev:resume-fix",
+            Some("rust-v0.120.0"),
+            false
+        )
+        .is_none());
     }
 
     #[test]
     fn banner_uses_cx_alias_for_codex() {
-        let text =
-            banner_text(Product::Codex, "rust-v0.118.0", Some("rust-v0.120.0")).expect("banner");
+        let text = banner_text(
+            Product::Codex,
+            "rust-v0.118.0",
+            Some("rust-v0.120.0"),
+            false,
+        )
+        .expect("banner");
         let plain = console::strip_ansi_codes(&text).to_string();
         assert!(plain.contains("Run: ovm cx latest"));
     }
@@ -1302,6 +1488,132 @@ mod tests {
             maybe_auto_update(&vm, "2.1.159").expect("auto update"),
             "2.1.159"
         );
+    }
+
+    #[test]
+    fn banner_names_the_cache_when_the_update_service_was_unreachable() {
+        let text = banner_text(Product::Claude, "2.1.85", Some("2.1.91"), true).expect("banner");
+        let plain = console::strip_ansi_codes(&text);
+        assert!(plain.contains("Claude Code 2.1.91 available"));
+        assert!(plain.contains("(cached; the update service was unreachable on the last check)"));
+
+        let online = banner_text(Product::Claude, "2.1.85", Some("2.1.91"), false).expect("banner");
+        assert!(!console::strip_ansi_codes(&online).contains("cached"));
+    }
+
+    #[test]
+    fn pi_launches_offline_only_when_the_service_was_unreachable_and_the_user_did_not_decide() {
+        let no_args: [&str; 0] = [];
+        assert_eq!(
+            offline_launch_environment(Product::Pi, &no_args, true, false),
+            Some(("PI_OFFLINE", "1".to_string()))
+        );
+        // Service reachable: Pi does its own startup checks as usual.
+        assert_eq!(
+            offline_launch_environment(Product::Pi, &no_args, false, false),
+            None
+        );
+        // The user's own PI_OFFLINE (whatever its value) is theirs to keep.
+        assert_eq!(
+            offline_launch_environment(Product::Pi, &no_args, true, true),
+            None
+        );
+        // `--offline` already does the same thing; do not double up.
+        assert_eq!(
+            offline_launch_environment(Product::Pi, &["--offline"], true, false),
+            None
+        );
+        // Only Pi reads this variable.
+        assert_eq!(
+            offline_launch_environment(Product::Claude, &no_args, true, false),
+            None
+        );
+        assert_eq!(
+            offline_launch_environment(Product::Codex, &no_args, true, false),
+            None
+        );
+    }
+
+    #[test]
+    fn install_backoff_is_capped_by_the_check_interval() {
+        let config = OvmConfig {
+            update_check_interval: 4,
+            ..OvmConfig::default()
+        };
+        assert_eq!(install_backoff_cap_secs(&config), 4 * 3600);
+    }
+
+    #[test]
+    fn auto_update_on_holds_off_after_a_recent_failed_install() {
+        // A fresh cache says 2.1.160 is out and 2.1.160 just failed to install
+        // (no network). The launch must not try again: the active version
+        // comes back and the failure record is untouched — an attempt would
+        // either have cleared it or bumped its counter.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159"]);
+        vm.use_version("2.1.159").expect("seed current");
+        // `use_version` pins; a pin routes to notify before the gate. Clear it
+        // so this exercises the plain `on` path.
+        vm.clear_pin();
+        let index = VersionIndex::new(vec!["2.1.159".into(), "2.1.160".into()], Default::default());
+        save_version_index(&vm.dirs.base, Product::Claude, &index).expect("seed index");
+        assert_eq!(
+            cached_upgrade_target(&vm, "2.1.159").as_deref(),
+            Some("2.1.160"),
+            "the fixture must present a real upgrade target"
+        );
+        crate::autoupdate::record_install_failure(&vm.dirs.base, "claude", "2.1.160");
+        let before = std::fs::read_to_string(
+            vm.dirs
+                .base
+                .join("cache")
+                .join("autoupdate")
+                .join("claude.json"),
+        )
+        .expect("failure record");
+
+        assert_eq!(
+            maybe_auto_update(&vm, "2.1.159").expect("auto update"),
+            "2.1.159"
+        );
+        let after = std::fs::read_to_string(
+            vm.dirs
+                .base
+                .join("cache")
+                .join("autoupdate")
+                .join("claude.json"),
+        )
+        .expect("failure record survives");
+        assert_eq!(before, after, "no install attempt was made");
+    }
+
+    #[test]
+    fn auto_update_on_flips_to_a_completed_install_despite_the_backoff() {
+        // 2.1.160 failed to download earlier (record on file), but has since
+        // been installed by hand. The backoff guards downloads, not symlink
+        // flips: the launch must move to 2.1.160 and clear the record.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vm = seeded_claude_vm(temp.path(), &["2.1.159", "2.1.160"]);
+        vm.use_version("2.1.159").expect("seed current");
+        // `use_version` pins; a pin routes to notify before the gate. Clear it
+        // so this exercises the plain `on` path.
+        vm.clear_pin();
+        crate::autoupdate::record_install_failure(&vm.dirs.base, "claude", "2.1.160");
+
+        assert_eq!(
+            maybe_auto_update(&vm, "2.1.159").expect("auto update"),
+            "2.1.160"
+        );
+        assert_eq!(
+            vm.current_version().expect("current"),
+            Some("2.1.160".into())
+        );
+        assert!(crate::autoupdate::install_retry_due(
+            &vm.dirs.base,
+            "claude",
+            "2.1.160",
+            3600
+        ));
     }
 
     #[test]

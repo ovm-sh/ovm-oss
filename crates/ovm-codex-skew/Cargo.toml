@@ -1,6 +1,6 @@
 [package]
 name = "ovm-codex-skew"
-version = "0.1.8-alpha.1"
+version.workspace = true
 edition = "2021"
 license = "MIT"
 description = "Codex state-DB schema-skew guard — an OVM companion plugin"

@@ -149,6 +149,69 @@ ovm help >/dev/null 2>&1 || fail "ovm help"
 pass "ovm help"
 
 # ---------------------------------------------------------------------------
+echo "→ bundled plugins stay with the selected snapshot unless explicitly overridden"
+# Keep PATH and the opt-in scoped to this subshell so later dispatch checks
+# cannot inherit the foreign fixture or accidentally run with overrides enabled.
+(
+  unset OVM_ALLOW_PLUGIN_OVERRIDE
+  foreign_plugins="$TMP/foreign-plugins"
+  mkdir -p "$foreign_plugins"
+  cat > "$foreign_plugins/ovm-claudex" <<'FOREIGN_PLUGIN'
+#!/bin/sh
+printf 'foreign-claudex-fixture:%s\n' "$*"
+FOREIGN_PLUGIN
+  chmod +x "$foreign_plugins/ovm-claudex"
+  export PATH="$foreign_plugins:$PATH"
+
+  bundled_out=$(ovm ccx help 2>&1) \
+    || fail "bundled ccx help failed with a foreign plugin on PATH. Got: $bundled_out"
+  grep -qi 'claudex' <<<"$bundled_out" \
+    || fail "ccx help did not reach the bundled claudex. Got: $bundled_out"
+  if grep -Fq 'foreign-claudex-fixture:' <<<"$bundled_out"; then
+    fail "ccx silently selected the foreign PATH plugin. Got: $bundled_out"
+  fi
+  grep -qiE "$OVM_LEVEL" <<<"$bundled_out" \
+    && fail "ccx fell through to the ovm parser. Got: $bundled_out"
+  pass "ovm ccx help ignores a foreign plugin earlier on PATH"
+
+  # A user may expose the selected snapshot through a launcher symlink in a
+  # separate bin directory. No plugin sits next to this launcher; resolution
+  # must follow it to the installed snapshot even with the foreign PATH entry.
+  mkdir -p "$TMP/symlink-launcher"
+  ln -s "$HOME/.ovm/self/current/ovm" "$TMP/symlink-launcher/ovm"
+  symlink_out=$("$TMP/symlink-launcher/ovm" ccx help 2>&1) \
+    || fail "symlinked snapshot launcher failed to find its bundled plugin. Got: $symlink_out"
+  grep -qi 'claudex' <<<"$symlink_out" \
+    || fail "symlinked snapshot launcher did not reach claudex. Got: $symlink_out"
+  if grep -Fq 'foreign-claudex-fixture:' <<<"$symlink_out"; then
+    fail "symlinked snapshot launcher selected the foreign plugin. Got: $symlink_out"
+  fi
+  pass "a symlinked snapshot launcher resolves the actual bundle's plugin"
+
+  override_out=$(OVM_ALLOW_PLUGIN_OVERRIDE=1 ovm ccx help 2>&1) \
+    || fail "explicit ccx plugin override failed. Got: $override_out"
+  grep -Fxq 'foreign-claudex-fixture:help' <<<"$override_out" \
+    || fail "explicit override did not reach the foreign plugin. Got: $override_out"
+  pass "OVM_ALLOW_PLUGIN_OVERRIDE=1 opts into the foreign PATH plugin"
+
+  # Damage only a copy of the snapshot installed in this test's throwaway HOME.
+  # The selected installation and the caller's real bundle remain untouched.
+  incomplete_bundle="$TMP/incomplete-bundle"
+  mkdir -p "$incomplete_bundle" "$TMP/incomplete-home"
+  cp -R "$HOME/.ovm/self/current/." "$incomplete_bundle/"
+  rm "$incomplete_bundle/ovm-claudex"
+  if missing_out=$(HOME="$TMP/incomplete-home" "$incomplete_bundle/ovm" ccx help 2>&1); then
+    fail "an incomplete bundle accepted the foreign claudex. Got: $missing_out"
+  fi
+  grep -qi 'claudex plugin not found' <<<"$missing_out" \
+    || fail "incomplete bundle did not report the missing plugin. Got: $missing_out"
+  if grep -Fq 'foreign-claudex-fixture:' <<<"$missing_out"; then
+    fail "incomplete bundle executed the foreign PATH plugin. Got: $missing_out"
+  fi
+  pass "an incomplete copied snapshot refuses to borrow a PATH plugin"
+)
+
+# ---------------------------------------------------------------------------
 echo "→ claudex launch shims dispatch to the plugin (the ccxy regression class)"
 # ccx / ccxy: `<alias> help` reaches claudex's help subcommand (no proxy, no
 # network) — a clean positive check that dispatch traversed the full chain.

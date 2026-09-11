@@ -84,6 +84,16 @@ fn margin() -> &'static str {
     &layout().margin
 }
 
+/// Open a page of its own, like every scene in the tour. The tour never
+/// scrolls: paged output is the aesthetic, and the emulators that record it
+/// (VHS) reproducibly wedge at a would-be scroll — every stall in the
+/// recording sessions happened at one. A page that outgrows the terminal is
+/// therefore a bug, and any act long enough to risk it opens fresh.
+fn fresh_page() {
+    print!("\x1b[2J\x1b[H");
+    let _ = io::stdout().flush();
+}
+
 /// Fold `text` to `width` display columns, hanging the continuation under the
 /// line's own leading indent.
 ///
@@ -279,7 +289,12 @@ macro_rules! ask {
     ($($arg:tt)*) => { ask_prompt(&format!($($arg)*)) };
 }
 
-pub fn run() -> Result<()> {
+/// `story` / `tldr` are the installer's hand-off: it asked "hatch now?" with
+/// the story or without, so asking again here would be the same question on
+/// a different-looking screen. With a path chosen the hatch clears the
+/// installer's flush-left output and opens on its own margin, welcome first,
+/// no prompt. Run by hand, it still asks.
+pub fn run(story: bool, tldr: bool) -> Result<()> {
     // Fixes the shared margin before anything prints.
     let _ = margin();
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -289,7 +304,22 @@ pub fn run() -> Result<()> {
                 .into(),
         ));
     }
-    match choose_path()? {
+    let chosen = if story {
+        Some(Path::Story)
+    } else if tldr {
+        Some(Path::Tldr)
+    } else {
+        None
+    };
+    let path = match chosen {
+        Some(path) => {
+            print!("\x1b[2J\x1b[H");
+            welcome();
+            path
+        }
+        None => choose_path()?,
+    };
+    match path {
         Path::Story => story_path(),
         Path::Tldr => tldr_path(),
     }
@@ -313,9 +343,9 @@ enum Path {
 /// only when it was filmed. Hence [`opening_summary_fits_a_narrow_terminal`].
 const OPENING_SUMMARY: &str = "Hatching sets up Claude Code, Codex, and claudex (Pi optional).";
 
-fn choose_path() -> Result<Path> {
-    // The brand cat, on the tour's margin rather than mochi::say's flush-left
-    // layout — one left edge for the whole run.
+/// The brand cat and the opening line, on the tour's margin rather than
+/// mochi::say's flush-left layout — one left edge for the whole run.
+fn welcome() {
     eprintln!();
     for (index, line) in crate::mochi::HAPPY.lines().enumerate() {
         if index == 1 {
@@ -330,6 +360,10 @@ fn choose_path() -> Result<Path> {
     }
     eprintln!();
     say!("{OPENING_SUMMARY}");
+}
+
+fn choose_path() -> Result<Path> {
+    welcome();
     say!(
         "The story is why this exists — two cats and an echo. {} skips to setup.",
         style("n").bold()
@@ -387,8 +421,8 @@ fn story_path() -> Result<()> {
     let claudex = act_claudex();
     let pi = act_pi()?;
     // The summary is about to name `ccy` and its siblings, so put them on
-    // disk first — see `shortcuts::install_for_tour`.
-    shortcuts::install_for_tour();
+    // disk first — see `shortcuts::ensure_yolo_shims`.
+    shortcuts::ensure_yolo_shims();
     // Commands first, then the globe closes the show — the summary must not
     // be the thing on screen after "fin."
     print_summary(claude, codex, claudex, pi, false);
@@ -410,7 +444,7 @@ fn tldr_path() -> Result<()> {
     act_keep_history();
     let claudex = act_claudex();
     let pi = act_pi()?;
-    shortcuts::install_for_tour();
+    shortcuts::ensure_yolo_shims();
     print_summary(claude, codex, claudex, pi, true);
     print_outro(claude, codex, claudex);
     Ok(())
@@ -423,8 +457,7 @@ fn print_summary(claude: bool, codex: bool, claudex: bool, pi: bool, mention_sto
     // paged output is the aesthetic, and emulators that record it (VHS)
     // reproducibly wedge on scroll-region output from non-shell processes —
     // every stall in the recording sessions happened at a would-be scroll.
-    print!("\x1b[2J\x1b[H");
-    let _ = io::stdout().flush();
+    fresh_page();
     eprintln!();
     say!("{} Done. Your commands:", style("✓").green());
     if claude {
@@ -585,12 +618,86 @@ fn and_list(items: &[&str]) -> String {
 
 // ---- acts -------------------------------------------------------------------
 
+/// Hand the pace to the reader before the screen is taken away from them.
+///
+/// These moments were fixed sleeps: two seconds after an act's ✓ before the
+/// next chapter wipes it, three before the picker takes the screen, four
+/// before Claude Code does. Each one prints something the reader has never
+/// seen and then deletes it, so that wait was their entire chance to take it
+/// in. Two seconds is not a read, it is a glimpse, and the reader who needs
+/// longest is exactly the one the tour is for. A timer also cannot know
+/// whether anybody is still looking.
+///
+/// So the reader says when. The hatch already refuses to run without a
+/// terminal on both ends (see `run`), so there is always somebody to ask, and
+/// EOF simply falls through rather than trapping a pipe forever.
+fn wait_for_reader(what: &str) {
+    say!();
+    // On the tour margin like every other line. The first version printed at
+    // column two and sat flush-left under a centred page (2026-09-10).
+    let prompt = format!("  {}", style(format!("Press Enter {what}")).dim());
+    let rows = fold(&prompt, layout().usable).len();
+    ask_prompt(&prompt);
+    let _ = io::stderr().flush();
+    let mut input = String::new();
+    let answered = io::stdin().read_line(&mut input).unwrap_or(0) > 0;
+    // Take the prompt back off the screen: scaffolding for the pause, not part
+    // of the page. Enter's echo has already moved the cursor below the prompt,
+    // so step back up over every row it folded to before clearing -- clearing
+    // where the cursor lands wipes the blank line under the prompt and leaves
+    // the prompt standing, which is what the first version did. At EOF nothing
+    // was echoed and the cursor is still on the prompt's last row.
+    let up = if answered { rows } else { rows - 1 };
+    if up > 0 {
+        eprint!("\x1b[{up}A");
+    }
+    eprint!("\r\x1b[J");
+    let _ = io::stderr().flush();
+}
+
+/// A shell prompt on the tour margin that accepts one command: the reader
+/// types `command` and presses Enter, and the line stays on screen the way a
+/// shell would leave it. Anything else is named and asked again, so a typo
+/// reads as a nudge rather than a prompt that did not hear. Returns `false`
+/// only when input ends (EOF) — a scripted or redirected run cannot type, and
+/// the act it was going to open is then skipped rather than opened unasked.
+///
+/// Whitespace is forgiven (`ovm  switch`, a trailing space) because the shell
+/// forgives it too, and the point is the gesture, not the spelling test.
+fn type_command(command: &str) -> Result<bool> {
+    let expected: Vec<&str> = command.split_whitespace().collect();
+    loop {
+        ask!("{} ", style("$").dim());
+        io::stderr().flush()?;
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input)? == 0 {
+            eprintln!();
+            return Ok(false);
+        }
+        let typed: Vec<&str> = input.split_whitespace().collect();
+        if typed == expected {
+            return Ok(true);
+        }
+        if typed.is_empty() {
+            say!(
+                "  {} Nothing typed — it is {} then Enter.",
+                style("!").yellow(),
+                style(command).bold(),
+            );
+        } else {
+            say!(
+                "  {} Not {} — it is {} then Enter.",
+                style("!").yellow(),
+                style(typed.join(" ")).bold(),
+                style(command).bold(),
+            );
+        }
+    }
+}
+
 /// A breath between an act's last ✓ and the next chapter's screen-clear.
-/// Without it the success line is wiped the same instant it prints — the
-/// reader answers a prompt, the install runs, and the confirmation is gone
-/// before their eyes reach it.
 fn act_beat() {
-    std::thread::sleep(std::time::Duration::from_millis(2000));
+    wait_for_reader("to go on");
 }
 
 /// Chapter i's setup step. Three states, in order of likelihood for a fresh
@@ -713,6 +820,11 @@ fn act_install(product: Product) -> bool {
             "ok",
             &[("product", product.canonical_name()), ("version", &latest)],
         );
+        // The shims the summary names go in the moment a product does, not at
+        // the end of the tour: a reader whose session hangs and who force-quits
+        // out of the story still lands with `ccy`/`cxy` on PATH. Idempotent, so
+        // the summary's own call later is just a stat.
+        super::shortcuts::ensure_yolo_shims();
         Ok(())
     })();
     if let Err(error) = outcome {
@@ -749,7 +861,7 @@ fn act_hatch() -> Result<bool> {
         "  {} still hatches (~190MB). Getting there is one gesture — and",
         style(HATCH_VERSION).bold()
     );
-    say!("  rather than describe it, OVM will do it once while you watch.");
+    say!("  rather than describe it, the picker walks you through it, key by key.");
     if !confirm_default_no("Hatch your own?")? {
         say!(
             "{} Skipped. Anytime: {} → Claude → {} for the versions that still have one.",
@@ -761,22 +873,50 @@ fn act_hatch() -> Result<bool> {
         return Ok(false);
     }
 
-    // The gesture, performed rather than described. Printing the command the
-    // way a shell would is the whole teaching move: what follows on screen is
-    // what `ovm switch` looks like when THEY run it, because it is the real
-    // picker with a scripted hand on the keys.
+    // The gesture, performed by the reader rather than described to them or
+    // played for them. They type the command at a prompt that looks like a
+    // shell's, and what opens is the real picker with its bottom line naming
+    // the one key to press next (see `Keys::Coached`). Nothing here is a
+    // mock-up: the same `ovm switch` on any machine looks exactly like this.
+    //
+    // Earlier cuts had OVM press the keys itself, with the reader told to keep
+    // their hands off. A gesture watched is not a gesture learned, and the
+    // warning existed only because a press that arrived mid-script queued up
+    // behind it. With the reader driving there is nothing to queue behind.
+    //
+    // On a page of its own. The quelpaw page already holds the chapter, the
+    // Claude install and the offer; with the prompt, the picker's transcript,
+    // the recap and the launch note under them it ran past 43 rows, and the
+    // recording's final gate sat below the fold where its matcher never looks.
+    fresh_page();
     eprintln!();
+    say!("{} Your hands this time.", style("→").dim());
     say!(
-        "{} Watch — this is the gesture, and next time it is yours:",
-        style("→").dim()
+        "  Type {} — the picker then names the key to press next: {} → {} → {}.",
+        style("ovm switch").bold(),
+        style("Claude").bold(),
+        style("b").bold(),
+        style("Enter").bold(),
+    );
+    say!(
+        "  Any other key waits until you press that one. {} leaves the picker.",
+        style("Esc").bold(),
     );
     eprintln!();
-    say!("  {} {}", style("$").dim(), style("ovm switch").bold());
-    std::thread::sleep(std::time::Duration::from_millis(1400));
+    if !type_command("ovm switch")? {
+        say!(
+            "{} Skipped. Anytime: {} → Claude → {}.",
+            style("→").dim(),
+            style("ovm switch").bold(),
+            style("b").bold(),
+        );
+        event("hatch", "skipped", &[("reason", "did not run the command")]);
+        return Ok(false);
+    }
 
-    let selected = super::select::run_guided_buddy_switch()?;
+    let selected = super::select::run_coached_buddy_switch()?;
     let Some(version) = selected else {
-        // They took the keyboard back and left the picker. Not a failure —
+        // They walked out of the picker. Not a failure —
         // just a tour that stops teaching and gets out of the way.
         say!(
             "{} Left the picker. Anytime: {} → Claude → {}.",
@@ -788,10 +928,27 @@ fn act_hatch() -> Result<bool> {
         return Ok(false);
     };
 
+    // The recap names the gesture as a sequence the reader can replay, then
+    // says what the next screen is and whose it is: Claude Code's first run
+    // on a fresh machine asks for a theme and a sign-in before anything else,
+    // and without a word about it those screens read as OVM losing the plot.
     eprintln!();
     say!(
-        "{} Inside, type {} — then {} brings you back here.",
+        "{} You just did the whole gesture: {} → {} → {} → {}. Yours from now on.",
         style("→").dim(),
+        style("ovm switch").bold(),
+        style("Claude").bold(),
+        style("b").bold(),
+        style("Enter").bold(),
+    );
+    eprintln!();
+    say!(
+        "{} Claude Code {version} opens next — the keyboard is yours again.",
+        style("→").dim(),
+    );
+    say!("  If this is Claude's first run here, it asks for a theme and a sign-in first.");
+    say!(
+        "  Inside, type {} — then {} brings you back here.",
         style("/buddy").bold(),
         style("/exit").bold(),
     );
@@ -800,15 +957,16 @@ fn act_hatch() -> Result<bool> {
         style("ovm cc latest").bold()
     );
     eprintln!();
-    // Let the instruction land before the takeover.
-    std::thread::sleep(std::time::Duration::from_millis(2500));
+    // Let the instruction land before the takeover — for as long as the
+    // reader wants, since this is the last thing they see before Claude Code
+    // owns the terminal.
+    wait_for_reader("to start Claude Code");
     // Hand the TUI a clean screen. Launched at the bottom of a full, scrolled
     // page, Claude Code's inline pre-launch screens (workspace trust) paint
     // into the scroll region and can wedge terminal emulators mid-render —
     // VHS's recorder reproducibly stalls there. A cleared screen is also
     // simply the better stage direction.
-    print!("\x1b[2J\x1b[H");
-    let _ = io::stdout().flush();
+    fresh_page();
     // A child launch rather than in-process: the launch path ends in exec.
     // The child takes the terminal, the user hatches, and the tour resumes
     // when the session ends.
@@ -826,7 +984,12 @@ fn act_hatch() -> Result<bool> {
             "failed",
             &[("error", "the 2.1.96 launch exited non-zero")],
         );
+        return Ok(true);
     }
+    // Whether anything hatched is the caller's to read off disk; this records
+    // that the launch ran and came back, which the ledger could not tell from
+    // a hatch that never happened.
+    event("hatch", "ok", &[("version", &version)]);
     Ok(true)
 }
 
@@ -867,8 +1030,7 @@ fn act_claudex() -> bool {
     // Same stage direction as the hatch: the wizard opens with a ~30-line
     // intro, and starting that at the bottom of a scrolled page both looks
     // cluttered and reproducibly wedges recording emulators mid-scroll.
-    print!("\x1b[2J\x1b[H");
-    let _ = io::stdout().flush();
+    fresh_page();
     eprintln!();
     let mut cmd = Command::new(plugin);
     cmd.args(["setup", "--no-launch"]);
@@ -1154,6 +1316,13 @@ fn offer_latest_after_adopt(vm: &VersionManager, product: Product) {
 
 /// Pi sits off the golden path: offered once, default no.
 fn act_pi() -> Result<bool> {
+    // A page of its own. This question used to land on the last row under a
+    // screenful of claudex wizard output — where the recording's matcher never
+    // sees it, so the tapes keyed on the wizard's sign-off instead — and the
+    // sign-in note the wizard gained on 2026-09-10 pushed even that below the
+    // fold. A fresh page puts the question where both a reader and a matcher
+    // find it.
+    fresh_page();
     eprintln!();
     // Already ovm-managed (a ✓, exactly like Claude and Codex above), or
     // present-but-unmanaged and adoptable — either way, offering to "manage Pi"
@@ -1196,9 +1365,11 @@ fn run_shielded(cmd: &mut Command) -> io::Result<std::process::ExitStatus> {
             Ok(())
         });
     }
+    let terminal = TerminalState::capture();
     let previous = unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) };
     let status = cmd.status();
     unsafe { libc::signal(libc::SIGINT, previous) };
+    terminal.restore();
     // A full-screen child does its own job control: the Claude TUI moves the
     // pty's foreground process group to itself and exits without putting it
     // back. Left stale, the NEXT child that touches the terminal is stopped
@@ -1214,6 +1385,56 @@ fn run_shielded(cmd: &mut Command) -> io::Result<std::process::ExitStatus> {
         }
     }
     status
+}
+
+/// The terminal as it was before a full-screen child took it.
+///
+/// A TUI that exits cleanly puts the terminal back. One that is killed does
+/// not — and the hatch launch is exactly the child a reader kills, because
+/// ctrl-C is a byte in raw mode, not a signal. What it leaves behind is a
+/// terminal that echoes nothing and turns Enter into a bare `\r`, on which
+/// the story's next line read waits forever: the prompt is on screen and no
+/// key answers it. So the modes are captured before the child and put back
+/// after, and the handful of terminal features a TUI switches on (cursor
+/// hidden, bracketed paste, mouse and focus reporting, the kitty keyboard
+/// protocol) are switched back off in the same breath. Each of those is a
+/// no-op on a terminal that never had it on, or does not know it.
+struct TerminalState {
+    termios: Option<libc::termios>,
+}
+
+impl TerminalState {
+    fn capture() -> Self {
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: tcgetattr writes a whole termios into the buffer it is given
+        // and reports failure by return value; the value is only read on success.
+        let termios = unsafe {
+            if libc::isatty(libc::STDIN_FILENO) == 1
+                && libc::tcgetattr(libc::STDIN_FILENO, termios.as_mut_ptr()) == 0
+            {
+                Some(termios.assume_init())
+            } else {
+                None
+            }
+        };
+        Self { termios }
+    }
+
+    fn restore(&self) {
+        let Some(termios) = &self.termios else {
+            return;
+        };
+        // SAFETY: restoring a termios this process read from the same descriptor.
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, termios);
+        }
+        // Cursor shown; bracketed paste, mouse (all three modes and SGR
+        // encoding) and focus reporting off; kitty keyboard flags popped.
+        print!(
+            "\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[<u"
+        );
+        let _ = io::stdout().flush();
+    }
 }
 
 /// Enter means yes: the fork's happy path (the story) should be reachable by

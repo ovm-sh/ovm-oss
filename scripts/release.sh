@@ -29,15 +29,15 @@ if [ "$BRANCH" != "main" ]; then
 fi
 
 BUNDLE_MANIFEST="crates/ovm/ovm-bundle-v1.tsv"
-OVM_CARGO_TOML="crates/ovm/Cargo.toml"
 scripts/bundle-manifest.sh validate "$BUNDLE_MANIFEST"
-CURRENT=$(grep -m1 '^version = ' "$OVM_CARGO_TOML" | sed -E 's/version = "(.*)"/\1/')
+metadata=$(cargo metadata --locked --no-deps --format-version 1)
+CURRENT=$(printf '%s\n' "$metadata" | jq -er '.packages[] | select(.name == "ovm") | .version')
 echo "→ Current version: $CURRENT"
 
 case "$1" in
     patch|minor|major)
         IFS='.' read -r MAJOR MINOR PATCH <<EOF
-$CURRENT
+${CURRENT%%-*}
 EOF
         case "$1" in
             patch) PATCH=$((PATCH + 1));;
@@ -63,26 +63,27 @@ if [ "$ANSWER" != "y" ] && [ "$ANSWER" != "Y" ]; then
     exit 0
 fi
 
-# Keep every manifest-declared Cargo package on the same release version. Side
-# binaries are published separately, but direct/Cargo updates require a coherent
-# bundle for both stable and prerelease channels.
-CARGO_TOMLS=""
-while IFS= read -r package; do
-    cargo_toml="crates/$package/Cargo.toml"
-    if [ ! -f "$cargo_toml" ]; then
-        echo "ERROR: manifest package '$package' has no $cargo_toml" >&2
-        exit 1
-    fi
-    old=$(grep -m1 '^version = ' "$cargo_toml" | sed -E 's/version = "(.*)"/\1/')
-    sed -i.bak -E "s/^version = \"$old\"/version = \"$NEW\"/" "$cargo_toml"
-    rm -f "$cargo_toml.bak"
-    CARGO_TOMLS="$CARGO_TOMLS $cargo_toml"
-done <<EOF
-$(scripts/bundle-manifest.sh packages "$BUNDLE_MANIFEST")
-EOF
+# Every bundle crate inherits this one version. Restrict the edit to the
+# workspace.package section so dependency versions can never be rewritten.
+python3 - "$NEW" <<'PY_VERSION'
+import pathlib
+import re
+import sys
 
-# Update Cargo.lock
-cargo check --quiet >/dev/null 2>&1 || true
+version = sys.argv[1]
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?", version):
+    raise SystemExit(f"invalid release version: {version}")
+manifest = pathlib.Path("Cargo.toml")
+text = manifest.read_text()
+pattern = r'(?ms)(^\[workspace\.package\]\s*\n(?:(?!^\[).)*?^version\s*=\s*)"[^"\n]+"'
+updated, count = re.subn(pattern, lambda match: match[1] + '"' + version + '"', text)
+if count != 1:
+    raise SystemExit("expected one version in [workspace.package]")
+manifest.write_text(updated)
+PY_VERSION
+
+# Refresh workspace versions in Cargo.lock without compiling or ignoring errors.
+cargo update --workspace --offline
 
 # Run the full pre-flight (formatting, clippy, tests).
 echo "→ Running pre-flight checks..."
@@ -104,10 +105,7 @@ if ! grep -q "^## \[$NEW\]" CHANGELOG.md 2>/dev/null; then
 fi
 
 # Commit + tag
-# Manifest validation restricts package-derived paths to safe crate names.
-# shellcheck disable=SC2086
-git add $CARGO_TOMLS Cargo.lock CHANGELOG.md 2>/dev/null || true
-git commit -m "release: v$NEW"
+git commit -m "release: v$NEW" -- Cargo.toml Cargo.lock CHANGELOG.md
 git tag "v$NEW"
 
 echo

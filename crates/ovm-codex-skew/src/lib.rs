@@ -61,8 +61,8 @@ pub struct Migration {
 
 // CODEX_STATE_MIGRATIONS_BEGIN
 // Codex `state` migrator — generated from openai/codex codex-rs/state/migrations
-// at rust-v0.152.0 (regenerate with scripts/gen-codex-migration-manifest.py).
-// source commit: 316795b3cf2a45e90d121d9f46499d4658b2645c
+// at rust-v0.154.0 (regenerate with scripts/gen-codex-migration-manifest.py).
+// source commit: 6b9826e3aa83b1a5947db50f4332cb9c65f1b340
 // Keep in version
 // order; `breaking` flags removals only.
 #[rustfmt::skip]
@@ -119,6 +119,8 @@ const CODEX_STATE_MIGRATIONS: &[Migration] = &[
     Migration { version: 50, description: "threads section empty preview indexes", breaking: false },
     Migration { version: 51, description: "thread artifacts", breaking: false },
     Migration { version: 52, description: "projects recency", breaking: false },
+    Migration { version: 53, description: "threads originator", breaking: false },
+    Migration { version: 54, description: "threads daybreak enabled", breaking: false },
 ];
 // CODEX_STATE_MIGRATIONS_END
 

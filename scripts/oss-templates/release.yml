@@ -84,11 +84,8 @@ jobs:
             echo "invalid private build commit: $PRIVATE_COMMIT" >&2
             exit 1
           }
-          # `shell: bash` runs with -o pipefail, so `| head -1` would fail this
-          # assignment the moment sed has a second line to write. Take the first
-          # line in the shell instead.
-          crate_versions=$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/ovm/Cargo.toml)
-          crate_version=${crate_versions%%$'\n'*}
+          metadata=$(cargo metadata --locked --no-deps --format-version 1)
+          crate_version=$(jq -er '.packages[] | select(.name == "ovm") | .version' <<<"$metadata")
           [[ "$tag" == "v$crate_version" ]] || {
             echo "tag $tag does not match crate version $crate_version" >&2
             exit 1
@@ -101,7 +98,6 @@ jobs:
             echo "workflow commit does not match the pushed tag" >&2
             exit 1
           }
-          metadata=$(cargo metadata --locked --no-deps --format-version 1)
           while IFS= read -r package; do
             package_version=$(jq -r --arg package "$package" \
               '.packages[] | select(.name == $package) | .version' <<<"$metadata")
@@ -502,6 +498,19 @@ jobs:
         with:
           subject-path: artifacts/ovm-${{ inputs.tag }}.spdx.json
 
+      - name: Bind public artifacts to their source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 scripts/release-manifest.py --tag "$RELEASE_TAG" \
+            --source-commit "$GITHUB_SHA" --role public \
+            --artifacts-dir artifacts --output "artifacts/ovm-$RELEASE_TAG.release.json"
+
+      - name: Attest public release manifest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: artifacts/ovm-${{ inputs.tag }}.release.json
+
       - name: Bind draft creation to the unchanged public tag
         shell: bash
         run: |
@@ -589,6 +598,7 @@ jobs:
           files: |
             artifacts/*/ovm-*.tar.gz*
             artifacts/ovm-*.spdx.json*
+            artifacts/ovm-*.release.json
       - name: Verify every uploaded draft asset
         shell: bash
         env:
@@ -631,6 +641,19 @@ jobs:
               shasum -a 256 -c "$sidecar"
             )
           done
+          release_manifest="ovm-$GITHUB_REF_NAME.release.json"
+          manifest_ids=$(jq -r --arg name "$release_manifest" \
+            '[.assets[] | select(.name == $name) | .id] | .[]' <<<"$release")
+          [[ $(printf '%s\n' "$manifest_ids" | sed '/^$/d' | wc -l | tr -d ' ') == 1 ]] || {
+            echo "draft release must contain exactly one $release_manifest" >&2
+            exit 1
+          }
+          gh api -H "Accept: application/octet-stream" \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$manifest_ids" \
+            > "verified-draft-assets/$release_manifest"
+          python3 scripts/release-manifest.py --tag "$GITHUB_REF_NAME" \
+            --source-commit "$GITHUB_SHA" --artifacts-dir verified-draft-assets \
+            --verify "verified-draft-assets/$release_manifest"
       - name: Report the staged draft
         shell: bash
         env:
@@ -730,7 +753,7 @@ jobs:
                 echo "::error::$binary in $archive is not signed by a Developer ID Application certificate"
                 exit 1
               }
-            done < <(printf '%s\n' ovm ovm-codex-skew ovm-claudex)
+            done < <(printf '%s\n' ovm ovm-codex-skew ovm-claudex ovm-limits)
           done
           # Preserve the release id in logs without trusting a tag-only lookup.
           echo "Verified Darwin signatures for staged release $release_id."
@@ -911,6 +934,23 @@ jobs:
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
               --source-ref "refs/tags/$RELEASE_TAG"
           done
+          release_manifest="ovm-$RELEASE_TAG.release.json"
+          [[ $(printf '%s\n' "$asset_names" | grep -Fxc "$release_manifest") == 1 ]] || {
+            echo "release $RELEASE_TAG must contain exactly one $release_manifest" >&2
+            exit 1
+          }
+          manifest_id=$(jq -r --arg name "$release_manifest" \
+            '.assets[] | select(.name == $name) | .id' <<<"$release")
+          gh api -H "Accept: application/octet-stream" \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$manifest_id" \
+            > "verified-release-assets/$release_manifest"
+          python3 scripts/release-manifest.py --tag "$RELEASE_TAG" \
+            --source-commit "$GITHUB_SHA" --artifacts-dir verified-release-assets \
+            --verify "verified-release-assets/$release_manifest"
+          gh attestation verify "verified-release-assets/$release_manifest" \
+            -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG"
           if [[ "$is_draft" == true ]]; then
             # Close the verify→publish window: re-fetch the draft and require
             # the exact asset set (ids, names, sizes) and repo immutability

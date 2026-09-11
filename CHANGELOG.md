@@ -5,7 +5,381 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.8] - 2026-09-11
+
+The stable cut of the `0.1.8-alpha.1` … `0.1.8-alpha.8` series below, plus:
+
+### Changed
+
+- **The hatch's `ovm switch` lesson is the reader's to perform.** OVM used to
+  play the gesture itself — Enter, `b`, Enter on a timer — with the reader told
+  to keep their hands off. A gesture watched is not a gesture learned, and the
+  warning only existed because a press that arrived mid-script queued up
+  behind it. Now the reader types `ovm switch` at a shell-style prompt, and the
+  real picker's bottom line names the one key to press next (`Your turn · press
+  b — show only the versions that still hatch a buddy`). The key asked for does
+  exactly what it always does; any other key is dropped and named (`not ↑ —
+  press b`), so the picker cannot wander off the gesture, and `Esc` still
+  leaves. Nothing is scripted, timed, or confirmed with an extra key: `b`
+  filters the instant it is pressed, as it does outside the tour. The gesture
+  opens on a page of its own, so the quelpaw page never outgrows the terminal.
+  The scripted key source (`Keys::Guided`) is gone with it.
+
+## [0.1.8-alpha.8] - 2026-09-09
+
+### Added
+
+- Limits Watch (`.github/workflows/limits-watch.yml`): an hourly canary that
+  notices when the usage poller stops. It needs nothing new from the poller —
+  `resets.json` already says `last_poll_at`, `next_poll_at` and
+  `poll_every_minutes`, so liveness was already on the wire — and it takes its
+  grace from the feed's own cadence, so changing the interval on the mini does
+  not mean editing the workflow. It opens one issue, comments at most every six
+  hours while the outage lasts, and closes itself on recovery.
+- `scripts/mini/install-mini-limits.sh`, the sibling of `install-mini-watch.sh`:
+  idempotent, records `installedFromSha` so the canary can spot a mini running
+  stale config, and reloads the agent on a re-run. It never signs an account in
+  — a poll refreshes the login it runs as, so the credential belongs to the
+  person who owns it — and it reports an unexpected account rather than
+  removing it, because `remove` deletes a home and a home holds a login.
+- The mini's version watcher says when a release goes live, at the edge it was
+  already detecting: one low-priority ntfy per consumed edge, covered by the
+  existing dispatch throttle, naming the products that moved. The topic comes
+  from `OVM_NTFY_TOPIC` and is substituted into the plist by the installer.
+
+### Fixed
+
+- A limits poll launches what is installed instead of auto-updating first.
+  Polls run on a clock — 45s to Claude's statusline, 60s to Codex's app-server
+  — so when a Claude Code release landed, the launch began a ~200 MB inline
+  download, missed its budget, and reported that Claude was not signed in. It
+  could not recover on its own either: the timed-out poll kills the process
+  group, so the install failure was never recorded and the backoff that exists
+  for this never armed, and every poll restarted the same download from zero.
+  `OVM_NO_AUTO_UPDATE` is honoured before the policy is consulted and set by
+  both poll launchers, so a Codex release cannot do the same to Codex polls.
+- The `hook ntfy` preset had its filter inverted: it sent the four events about
+  the poller's own weather — a missed poll, its recovery — and dropped the two
+  about usage. A night of flapping polls buzzed a phone while an account
+  crossing 70, 90 and finally 100% said nothing. Now it sends the bars, a reset
+  nobody asked for, a credit the operator spent, and a poll that has failed
+  twice; thresholds carry `OVM_LIMITS_LEVEL` so 100% can shout where 70% only
+  mentions.
+- A window emptied by a reset credit the operator spent is no longer reported
+  as a provider reset. The drop looks identical, but the balance only ever
+  falls when a credit is spent, so `reset_credits_available` tells them apart.
+  It is a `credit_reset` — recorded, never alarmed about, and absent from the
+  public feed by construction, since that feed is built from surprise resets
+  alone. A reset someone paid for is nobody else's news.
+- A failed poll says what was on the screen. The message was one fixed sentence
+  blaming a sign-out; it covered two unrelated faults in one night and was
+  wrong for both, because the terminal was read and discarded. The pty now
+  keeps a bounded, escape-stripped tail, and the failure names the likeliest
+  cause from it — an install in progress, a login prompt, a silent product, an
+  unknown screen — and quotes the last lines back. Nothing parses it; a poll's
+  verdict still comes only from the statusline payload.
+
+### Changed
+
+- The installer asks about the hatch once, with three answers — with the
+  story, setup only, not now — and hands the answer to `ovm hatch --story`
+  or `--tldr`, which clears the screen and opens on its own welcome without
+  asking again. `ovm hatch` run by hand still asks.
+- `try-release.sh` says how to leave the sandbox (type `exit`; Ctrl-C only
+  cancels a line in there), and its teardown names the field that moved
+  instead of printing two JSON blobs — an ovm self link that changed under
+  the sandbox is called what it is, a dev-install on this machine.
+- A Codex poll gives the app-server 60 seconds, not 30; it answers in one
+  when the machine is idle and missed the shorter window twice while the
+  laptop compiled.
+
+## [0.1.8-alpha.7] - 2026-09-08
+
+### Added
+
+- `ovm limits` notices what changed between polls and says so: a window that
+  reset early — usage falling while its reset time was still ahead, the way a
+  provider clears limits after an incident — a scheduled rollover, a usage
+  threshold crossed (70, 90, 100%), a poll that starts failing or recovers.
+  Events go to `events.jsonl`, ride along in `limits.json` with each window's
+  `last_reset_at`, and `ovm limits events --since 24h` reads them back (`e` in
+  the registry screen).
+- Hooks: `ovm limits hook on-event <command>` runs once per event with the
+  event as JSON on stdin and in `OVM_LIMITS_EVENT_*`; `hook on-poll` runs after
+  every poll. `hook ntfy <topic>` is a one-line preset that pushes surprise
+  resets and poll failures to an ntfy topic; `hook publish` uploads the public
+  feed to Vercel Blob after each poll; `hook test` fires a synthetic event.
+- `resets.json`, written beside `limits.json`: the public feed — surprise
+  resets, when the poller last ran and will run next, which products are
+  watched. No usage, no account names, no host.
+- A poll that misses once is a `retrying` event — a busy machine, most
+  likely — the second miss in a row is `failed`, a third says nothing more,
+  and the recovery that ends the streak is `recovered`. A home with no login
+  in it is `failed` at once and says `run: ovm limits login <account>`. The
+  ntfy preset pushes all of them, each with its own icon. Snapshots carry
+  `consecutive_failures` and `failure_alerted`.
+- `ovm limits interval 15m` (or `i` in the screen) sets how often a Claude
+  account is polled at most; `agent install --every 15m` does both at once.
+  `limits.json` now says `last_poll_at` and, with the agent installed,
+  `next_poll_at`.
+- `limits.json` — `ovm limits show --json` — now carries everything the
+  products report, so it can stand as the one structured endpoint: every
+  window with its used percentage, reset time and length; the plan; Codex's
+  account id, credit state, spend-control flag, and each reset credit with
+  its status and expiry; the model, product version and cost a Claude poll
+  ran on; and under `raw` the product's own object, verbatim. Fields are only
+  ever added. The poll narration, `show`, and the registry screen say when
+  each window resets — `5h 26% (resets in 4h 10m)` — and `show` adds the
+  local day and time beside it.
+
+### Changed
+
+- `ovm limits` is an account registry. Run it and you get the same kind of
+  screen as `ovm switch`: every registered login with its latest numbers, and
+  one key each to add (`a`), sign in (`l`), rename (`r`), remove (`d`), poll
+  (`enter`, `p` for all) and turn the background poller on or off (`b`). The
+  subcommands do the same things for scripts: `add`, `login`, `rename`,
+  `remove`, `list`, `poll`, `show`, `agent`, `doctor`, `uninstall`.
+- An account is `claude-1`, `codex-2` — an id it is given once — plus a label
+  you can change whenever you like. The id names the account's home, so
+  renaming never costs a sign-in. Either name selects an account on the
+  command line, and a label may not be another account's id.
+- Nothing is inherited from `~/.claude` or `~/.codex` any more. Every account
+  is registered on purpose and signs in to a home of its own; `setup` and the
+  proposed "default" accounts are gone. A registry file from before accounts
+  had ids is refused with the way out (`ovm limits uninstall --yes`, then add
+  the accounts again).
+- Removing an account deletes the home this tool made for it, sign-in and all.
+  A home you named with `--home` is left in place.
+- The screen, key loop, prompts and footer that `ovm switch` is drawn with
+  now live in one crate (`ovm-tui`) that every OVM picker shares.
+
+### Fixed
+
+- A Claude poll could hang forever on the way out. A session told to leave
+  restores its screen, and a process cannot finish closing its terminal until
+  that output has been read; the poller had stopped reading by then and was
+  blocked in `wait` on a child stuck in exit (42 minutes, before anyone
+  noticed). Every wait now keeps draining the terminal and is bounded, and the
+  poller no longer holds the terminal's slave side itself.
+- `ovm limits` polls in a home of its own and never in `~/.claude` or
+  `~/.codex`. A poll is a real product session, a real session refreshes the
+  login it runs as, and refreshing the login you work in signs your own open
+  sessions out — which is what happened on 2026-09-06. Each account now keeps
+  its own home under `~/.ovm/limits/homes/`, signed in once with
+  `ovm limits login <account>`, so its OAuth grant is its own; a
+  poll or login aimed at a product's default home is refused outright.
+  Accounts configured before this change resolve to their own home and need
+  that one sign-in; until they get it, `list`, `doctor` and `show`
+  each say so rather than let numbers captured in the old home read as
+  current. A first-run screen in a fresh home (the trust dialog is
+  pre-answered, "Claude in Chrome extension detected" is not) is now declined
+  with Escape rather than left to time out, and a home signed in by
+  `ovm limits login` gets the onboarding flags it needs to reach the
+  statusline.
+- `ovm limits show` points at `ovm limits poll` when nothing has been polled,
+  including after the last account is removed and `limits.json` is rebuilt
+  empty.
+
+## [0.1.8-alpha.6] - 2026-09-06
+
+### Changed
+
+- `ovm limits` is inert until `ovm limits setup` runs: no config, nothing under
+  `~/.ovm/limits`, no trust entry in any `.claude.json`, no Claude turn spent.
+  Setup explains the mechanism and its cost, proposes the logins it can see,
+  and offers a per-user launchd agent (`ovm limits agent`) that ticks every
+  five minutes running `poll --due` — a paid Claude poll only once the
+  configured interval (default 60 min) has passed or a window has reset since
+  the last snapshot, so resets are confirmed for one turn each. `ovm limits
+  login <claude|codex> <name>` signs a second account in inside its own home
+  through the product's own flow; `ovm limits uninstall` removes the agent,
+  the trust entries, and the directory.
+
+## [0.1.8-alpha.5] - 2026-09-06
+
+### Added
+
+- `ovm limits` — a side binary that reports how much of each Claude Code and
+  Codex subscription is used and when each window resets, for any number of
+  accounts. Claude is polled the only way that keeps the credential inside
+  Claude Code: a throwaway interactive session in an empty directory, one word
+  on the cheapest model, and the statusline payload that follows carries the
+  5h / 7d windows. Codex is asked over `codex app-server`
+  (`account/rateLimits/read`) at no quota cost. Snapshots merge into
+  `~/.ovm/limits/limits.json` (`schema: ovm-limits/v1`) for menu bars and
+  sweep gates to read; `ovm limits show` renders it. Accounts with their own
+  `CLAUDE_CONFIG_DIR` / `CODEX_HOME` are added with `ovm limits accounts add`.
+
+### Fixed
+
+- The version watcher takes a new Pi or Codex release as seen only once its
+  GitHub release carries every asset the installer can select from, and
+  otherwise holds the previous version until the next tick. Pi 0.85.1 reached
+  npm ten minutes before its release had tarballs; the run that fired in
+  between died on a 404 and paged.
+
+### Changed
+
+- Developer flow: `scripts/ci-local.py` runs the CI job set locally from
+  `ci.yml` itself (macOS natively, `rust` and `e2e` also in a Linux
+  container), and the pre-push hook refuses a release tag whose commit has
+  no successful CI run.
+
+## [0.1.8-alpha.4] - 2026-09-05
+
+### Fixed
+
+- `ovm install codex <version>` repairs an install that looks complete but
+  lacks a sidecar its release publishes, instead of reporting it as already
+  installed. Every Linux install made before the bundled bubblewrap was
+  fetched has that shape; a whole tree still gets the ordinary refusal, and
+  an unreadable release listing keeps the install and says so.
+- Stamped Codex release manifests on ovm.sh now carry the `bwrap-<target>`
+  asset family, so installs answered from the registry can fetch the bundled
+  bubblewrap at all. Every Codex release was re-stamped.
+
+## [0.1.8-alpha.3] - 2026-09-05
+
+### Changed
+
+- OVM and its bundled plugins inherit one workspace version. Bundled plugins
+  now run from the selected OVM snapshot; development PATH overrides require
+  `OVM_ALLOW_PLUGIN_OVERRIDE=1`.
+- Release artifacts, registry snapshots and benchmark measurements carry
+  explicit content identities, independently of their format/schema versions.
+  New public release manifests bind source, installer and all platform bundles
+  and are verified before finalization.
+- Release recordings pin one public candidate across all required takes. Video
+  cuts verify input provenance and record their exact source and output hashes.
+  Exact public drafts can be recorded before publication; site deployment
+  verifies that the selected release and its media still match.
+
+### Fixed
+
+- Recording paths work when absolute; the release wrapper records the switch
+  footage the site builder consumes. Failed authenticated recordings clean up
+  their sandbox credentials, and manual onboarding checks propagate failures.
+- Linux installs of Codex now include the bundled bubblewrap
+  (`codex-resources/bwrap`) that the official npm package ships. Without it,
+  on a host with no system `bwrap`, Codex 0.153.4 panicked on its first
+  sandboxed command ("bubblewrap is unavailable") while `--version` and the
+  response benchmark passed. Installs from GitHub releases fetch the
+  `bwrap-<triple>` asset; installs from npm keep the package's copy; a
+  release that publishes bwrap for other Linux platforms but not ours is
+  refused, like a missing code-mode host.
+
+## [0.1.8-alpha.2] - 2026-09-04
+
+### Added
+
+- **A live model-releases page, and the newest models on the homepage.** The
+  model registry and its Atom feed had no page reading them: the homepage said
+  nothing about models, and the only way to learn that one had shipped was to
+  subscribe to `/models.atom`. `/models` now lists every model the registry
+  knows with three dates side by side — the vendor's release date, the day the
+  benchmark first saw it answer through a real CLI release, and the age — plus
+  the newest admitted version of each CLI and a days-since-the-last-new-model
+  headline. The homepage carries the four newest lines under the lede. Both are
+  read live from `/api/models.json`, `/api/registry.json` and
+  `/model-matrix.json`, and stay hidden rather than half-filled if a feed is
+  unreachable.
+
+- **OpenAI models reach the registry on their own.** The `openai` block of
+  `docs/api/models.json` was typed in by hand, so GPT-6 Astra — which Codex
+  0.153.1 added to its catalog — had no way to arrive. The daily refresh now
+  reads the frontier `gpt-N(.M)[-codename]` slugs OpenAI's models page links to,
+  under the same fail-closed rule as the Anthropic scrape. OpenAI publishes no
+  keyless release date, so a new model lands with `released: null` and
+  `first_seen` set to the day the page first listed it; the refresh opens its
+  backfill issue for the real date, and the feed carries the model once it has
+  one.
+
+### Changed
+
+- **The guided `ovm switch` demonstration says what it is doing.** The hatch runs
+  the real picker with a scripted hand on the keys; it now tells the reader to
+  take their hands off first, and the picker's bottom line names each key as it
+  is pressed (`OVM is driving · pressing b — …`). Without that, a reader who did
+  not know it was scripted reached for the keyboard and their presses queued
+  behind the script. The pauses between presses were also evened out and made to
+  rise toward the press that installs, so the pacing reads as a hand slowing down
+  rather than a machine ticking.
+
+### Fixed
+
+- **The tool the installer launches can be typed into.** Under `curl | sh` the
+  installer re-attaches the terminal with `< /dev/tty` and every child of the
+  hatch inherited it — including the buddy launch of Claude Code. `/dev/tty` is
+  the kernel's alias for the controlling terminal, not the terminal, and on
+  macOS it cannot be watched with kqueue: a Bun program given it on stdin (Claude
+  Code is one) draws its screen and then hears no key, with ctrl-C already
+  swallowed by raw mode. Seen live on 2026-09-03. The installer now hands
+  children the real pty by name, and OVM swaps a `/dev/tty` stdin for the pty at
+  the top of every invocation, so no launch path can inherit an unreadable one.
+
+- **The `ccy` / `cxy` shims are there whenever a product is, and heal
+  themselves.** They were written only on the tour's final screen, so a tour
+  that ended early — a launched session force-quit, the hang above — left the
+  reader with the aliases the summary had just named but no files behind them.
+  They are now written the moment the first product installs, and a plain
+  `ovm install claude|codex` writes them too. An install that already missed
+  them is repaired without any special command: every product launch and every
+  update checks, and writes any that are absent, so an existing user is brought
+  whole by ordinary use. The check is a handful of `stat`s once the shims are
+  in place, and it never touches a `ccy` the user wrote themselves.
+
+- **The story is not stranded when a launched session is force-quit.** A
+  full-screen child that exits cleanly restores the terminal; one that is killed
+  — which is how a reader leaves a Claude session, ctrl-C being a byte in raw
+  mode there — does not, and the story's next Enter prompt then read a terminal
+  left in raw mode where Enter never arrives as a line. The tour now restores the
+  terminal's modes after every launched child, and its prompts read a keypress
+  rather than a line, so the story continues whatever state a child left behind.
+
+- **Launching on a connection that is down but not off no longer sits on a
+  blank screen.** Seen live on 2026-09-04: `pi` printed the cached "Pi 0.84.4
+  available" line and then showed nothing for fifteen seconds, which read as
+  "waiting to download that version, no way to skip". The wait was Pi's own
+  startup: it awaits a remote model-catalog refresh with a fifteen-second abort,
+  and on Wi-Fi with no upstream every connection hangs to that limit rather than
+  failing. OVM already knew the network was down — its background probe of the
+  update service had just failed — and now acts on it: Pi is launched with
+  `PI_OFFLINE=1` (what its own `--offline` flag sets), which skips those calls;
+  the catalog comes from Pi's cache and tokens refresh on the first request
+  that needs one. A `PI_OFFLINE` you set yourself, or `--offline` on the command
+  line, is never overridden; the fallback launch of an unmanaged Pi found on
+  PATH gets the same treatment. The notice says what Pi would otherwise have
+  waited on, and the banner, when it prints from a cache the service could not
+  refresh, now says so, so it is not mistaken for the wait.
+
+- **A failed auto-update is not retried on every launch.** Under policy `on`, a
+  cached newer release and no network meant each `claude` or `codex` launch
+  started the download, waited out the request timeout, reported the failure,
+  and launched the active version — and the next launch did it all again. A
+  failed install now backs off: five minutes after the first failure, doubling,
+  capped at the configured `updateCheckInterval`. Only downloads wait: a release
+  that failed to download and was then installed by hand is switched to at once.
+  A newer release than the one that failed is never held back, and Enter still
+  skips a download in progress.
+
+- **Every network client gives up on a dead link in ten seconds.** The
+  per-request timeouts (30 s for GitHub release metadata, minutes for a
+  download) were also the time a connection that never answered could hold a
+  foreground install. A separate connect timeout now bounds that; requests that
+  do connect keep their full budget, and a slow inspecting proxy still has
+  room to finish its handshake.
+
+- **A brand-new Codex release no longer pages as "Quarantined".** A stable that
+  shipped the minute a Benchmark Deep run started was withheld with
+  "compatibility is unknown, not bad" — the gate's second way of saying nothing
+  has qualified it yet. The alert filter knew only the other phrase ("not yet
+  verified"), so codex rust-v0.150.0, 0.150.1 and 0.153.2 each opened a
+  Quarantined issue on a queue state, and nothing closed it when the next run
+  admitted them. Withheld records now carry `pending: true` when their summary
+  is a missing verdict, the alert step reads that field (and both phrases, for
+  older ledger records), and a later `gate-cleared` record closes the matching
+  issue automatically.
 
 ## [0.1.8] - 2026-08-28
 
@@ -1286,7 +1660,8 @@ the real first public release carries the version the public repo ships.
 
 <!-- v0.0.3-alpha.4 is the first tag on the repaired public history; older
      versions predate it and intentionally have no public link targets. -->
-[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/ovm-sh/ovm-oss/compare/v0.1.4...v0.1.5

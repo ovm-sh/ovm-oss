@@ -53,6 +53,7 @@ mock_bin="$fixture_root/bin"
 mock_python="$fixture_root/python"
 mkdir -p "$fixture_repo/scripts" "$fixture_repo/docs/api" "$mock_bin" "$mock_python"
 cp scripts/update-registry.sh "$fixture_repo/scripts/update-registry.sh"
+cp scripts/registry-snapshot.py "$fixture_repo/scripts/registry-snapshot.py"
 
 cat > "$mock_bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash

@@ -116,10 +116,7 @@ impl VersionEntry {
     }
 }
 
-pub(super) fn fixed_width_cell(value: &str, width: usize) -> String {
-    let truncated = console::truncate_str(value, width, "…");
-    console::pad_str(&truncated, width, console::Alignment::Left, None).into_owned()
-}
+pub(super) use ovm_tui::fixed_width_cell;
 
 /// A pick's version-picker loop target: a managed product, or OVM itself.
 enum Target {
@@ -191,35 +188,29 @@ pub fn run_top(product: Option<&str>, direct_version: Option<&str>) -> Result<()
     }
 }
 
-/// Perform the switch gesture on the reader's behalf: `ovm switch` → Claude →
-/// `b` → the newest version that still hatches a buddy.
+/// Walk the reader through the switch gesture: `ovm switch` → Claude → `b` →
+/// the newest version that still hatches a buddy, with their hands on the keys.
 ///
 /// The tour reaches a point where the honest answer to "how do I get one?" is
 /// a four-step gesture through a picker the reader has never seen. Telling
 /// them in prose asks them to hold four steps in their head and trust that the
-/// screens will look the way the sentence said. So OVM performs it instead,
-/// through the real picker, at a pace a person can follow — the reader answers
-/// one question and watches the thing they will do themselves next time.
-///
-/// The pauses are deliberately long. This is a demonstration, not a fast path;
-/// a viewer who cannot see WHICH row the cursor was on when `b` was pressed
-/// has learned nothing.
+/// screens will look the way the sentence said. So the real picker opens
+/// instead, and its bottom line names the one key to press next; the reader
+/// presses it and sees what it does. The picker is the ordinary picker in
+/// every respect but that line — see [`Keys::Coached`] — so what they learn
+/// is exactly what they will do next time.
 ///
 /// Returns the version now selected, or `None` if the picker was left without
-/// selecting anything (the reader can always take the keyboard back — see
-/// [`Keys`] — and a gesture they interrupted is not an error).
-pub(crate) fn run_guided_buddy_switch() -> Result<Option<String>> {
-    let beat = std::time::Duration::from_millis(2200);
-    let read_the_list = std::time::Duration::from_millis(3400);
-
+/// selecting anything (the reader can always walk out — `Esc` goes through
+/// the lesson untouched — and a gesture they left is not an error).
+pub(crate) fn run_coached_buddy_switch() -> Result<Option<String>> {
     // Claude is the first row of the product picker, so the cursor is already
-    // on it: the whole gesture is one Enter, and the pause before it is what
-    // shows the reader WHAT is being selected.
-    let mut product_keys = Keys::guided([(beat, Key::Enter)]);
+    // on it: the whole step is one Enter, and the cue says what it selects.
+    let mut product_keys = Keys::coached([(Key::Enter, "Claude is the row already selected")]);
     match picker::pick_product_with(&mut product_keys)? {
         Some(ProductPick::Product(Product::Claude)) => {}
-        // The reader took the keyboard back and went somewhere else. Their
-        // call — the tour does not drag them back to Claude.
+        // Only Esc gets past the cue, so this is the reader walking out. Their
+        // call — the tour does not drag them back.
         _ => return Ok(None),
     }
 
@@ -228,8 +219,13 @@ pub(crate) fn run_guided_buddy_switch() -> Result<Option<String>> {
     // `b` filters to the versions that still hatch, which also drops the
     // cursor from the newest release (past the buddy window) onto the first
     // surviving row: the newest version that still has one. Enter takes it.
-    let mut version_keys =
-        Keys::guided([(read_the_list, Key::Char('b')), (read_the_list, Key::Enter)]);
+    let mut version_keys = Keys::coached([
+        (
+            Key::Char('b'),
+            "show only the versions that still hatch a buddy",
+        ),
+        (Key::Enter, "install the newest of them and switch to it"),
+    ]);
     match run_version_picker_with(&vm, false, &mut version_keys, false)? {
         PickerResult::Selected => Ok(vm.current_version()?),
         PickerResult::Back => Ok(None),
@@ -317,7 +313,8 @@ fn run_self_version_picker(can_go_back: bool) -> Result<PickerResult> {
             let row = &rows[index];
             if row.current {
                 eprintln!(
-                    "  {} Already on OVM {}",
+                    "{}{} Already on OVM {}",
+                    crate::mochi::indent(),
                     style("✓").green(),
                     style(&row.version).green().bold()
                 );
@@ -343,7 +340,8 @@ fn select_self_direct(version: &str) -> Result<()> {
     }
     if manager.current_version()?.as_deref() == Some(version) {
         eprintln!(
-            "  {} Already on OVM {}",
+            "{}{} Already on OVM {}",
+            crate::mochi::indent(),
             style("✓").green(),
             style(version).green().bold()
         );
@@ -357,7 +355,7 @@ fn select_self_direct(version: &str) -> Result<()> {
 fn run_claudex_plugin() -> Result<()> {
     let Some(path) = crate::plugins::find_bundled("claudex") else {
         return Err(OvmError::Message(
-            "claudex plugin not found — the ovm-claudex binary must be on your PATH.".into(),
+            "claudex plugin not found — restore or reinstall the selected OVM bundle.".into(),
         ));
     };
     let status = std::process::Command::new(path).status()?;
@@ -519,7 +517,8 @@ fn run_version_picker_with(
                 let version = entries[index].version.clone();
                 vm.uninstall(&version)?;
                 eprintln!(
-                    "  {} Removed {} {}",
+                    "{}{} Removed {} {}",
+                    crate::mochi::indent(),
                     style("✓").green(),
                     product.display_name(),
                     style(&version).bold()
@@ -533,7 +532,8 @@ fn run_version_picker_with(
 
                 if entry.active {
                     eprintln!(
-                        "  {} Already on {} {}",
+                        "{}{} Already on {} {}",
+                        crate::mochi::indent(),
                         style("✓").green(),
                         vm.product().display_name(),
                         style(&entry.version).green().bold()
@@ -543,7 +543,8 @@ fn run_version_picker_with(
 
                 if !entry.installed {
                     eprintln!(
-                        "\n  {} Installing {} {}...",
+                        "\n{}{} Installing {} {}...",
+                        crate::mochi::indent(),
                         style("↓").cyan(),
                         vm.product().display_name(),
                         style(&entry.version).bold()
@@ -588,12 +589,13 @@ fn select_direct(vm: &VersionManager, version: &str) -> Result<()> {
 
     // Not installed — prompt
     eprintln!(
-        "  {} {} {} is not installed.",
+        "{}{} {} {} is not installed.",
+        crate::mochi::indent(),
         style("!").yellow(),
         vm.product().display_name(),
         style(&version).bold()
     );
-    eprint!("  Install it now? [Y/n] ");
+    eprint!("{}Install it now? [Y/n] ", crate::mochi::indent());
     let _ = std::io::Write::flush(&mut std::io::stderr());
 
     let mut input = String::new();
@@ -601,12 +603,13 @@ fn select_direct(vm: &VersionManager, version: &str) -> Result<()> {
     let answer = input.trim().to_lowercase();
 
     if !answer.is_empty() && answer != "y" && answer != "yes" {
-        eprintln!("  {} Cancelled", style("✗").dim());
+        eprintln!("{}{} Cancelled", crate::mochi::indent(), style("✗").dim());
         return Ok(());
     }
 
     eprintln!(
-        "\n  {} Installing {} {}...",
+        "\n{}{} Installing {} {}...",
+        crate::mochi::indent(),
         style("↓").cyan(),
         vm.product().display_name(),
         style(&version).bold()
@@ -629,19 +632,14 @@ fn select_direct(vm: &VersionManager, version: &str) -> Result<()> {
 
 /// Print Mochi the Cat with a "Now using" message on successful switch.
 fn show_happy_switch(product_name: &str, version: &str) {
-    let msg = format!(
-        "Now using {} {}",
-        product_name,
-        style(version).green().bold()
+    crate::mochi::say(
+        crate::mochi::HAPPY,
+        &format!(
+            "Now using {} {}",
+            product_name,
+            style(version).green().bold()
+        ),
     );
-    eprintln!();
-    for (i, line) in crate::mochi::HAPPY.lines().enumerate() {
-        if i == 1 {
-            eprintln!("{}  {}", crate::mochi::face_style(line), msg);
-        } else {
-            eprintln!("{}", crate::mochi::face_style(line));
-        }
-    }
 }
 
 /// What the user picked at the post-switch launch prompt.
@@ -685,7 +683,8 @@ fn prompt_launch(product: Product) -> Result<LaunchChoice> {
     };
     eprintln!();
     eprint!(
-        "  {} Launch now? {}  ",
+        "{}{} Launch now? {}  ",
+        crate::mochi::indent(),
         style("?").yellow().bold(),
         style(options).dim(),
     );

@@ -70,9 +70,12 @@ PUBLIC_PATHS=(
   crates/ovm
   crates/ovm-claudex
   crates/ovm-codex-skew
+  crates/ovm-limits
+  crates/ovm-tui
   deny.toml
   docs/api
   docs/architecture.md
+  docs/component-versioning.md
   docs/features
   docs/fork-build-import.md
   install.sh
@@ -86,11 +89,15 @@ PUBLIC_PATHS=(
   scripts/oss-templates
   scripts/publish-npm.sh
   scripts/release.sh
+  scripts/release-manifest.py
+  scripts/registry-snapshot.py
   scripts/sync-codex-migration-manifest.sh
   scripts/update-brew-formula.sh
   scripts/update-registry.sh
   scripts/version-canary-test.sh
   tests/compatibility
+  tests/python/test_release_manifest.py
+  tests/python/test_registry_snapshot.py
   tests/scripts/bundle-contract.sh
   tests/scripts/bundle-manifest.sh
   tests/scripts/canary-missing-version.sh

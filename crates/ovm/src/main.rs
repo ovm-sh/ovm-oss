@@ -18,6 +18,7 @@ mod release_metadata;
 mod self_manager;
 mod sources;
 mod symlink;
+mod tty;
 mod update_cache;
 mod util;
 mod version_manager;
@@ -62,6 +63,9 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    // Before anything reads or hands out stdin: a `< /dev/tty` inherited from
+    // `curl | sh` is a stdin Claude Code cannot read from — see `tty`.
+    tty::adopt_real_terminal_stdin();
     if self_manager::run_lock_helper_if_requested()? {
         return Ok(());
     }
@@ -268,7 +272,7 @@ fn run() -> Result<()> {
         }
         Commands::Stats => commands::stats::run(),
         Commands::Story { fast } => commands::story::run(fast),
-        Commands::Hatch => commands::hatch::run(),
+        Commands::Hatch { story, tldr } => commands::hatch::run(story, tldr),
         Commands::Statusline => commands::statusline::run(),
         Commands::Select { product, version } => {
             commands::select::run_top(product.as_deref(), version.as_deref())
@@ -434,7 +438,7 @@ fn run_fast_codex(args: &[String], yolo: bool) -> Result<()> {
 fn run_claudex(args: &[String], yolo: bool, fast: bool) -> Result<()> {
     let Some(plugin_path) = plugins::find_bundled("claudex") else {
         return Err(OvmError::Message(
-            "claudex plugin not found — the ovm-claudex binary must be on your PATH.".into(),
+            "claudex plugin not found — restore or reinstall the selected OVM bundle.".into(),
         ));
     };
     let args = claudex_plugin_args(args, yolo, fast);

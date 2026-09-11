@@ -266,10 +266,11 @@ def compute_retired_versions(previous, current_versions, sort_key):
     return sorted(retired.values(), key=lambda entry: sort_key(entry['version']))
 
 def write_if_changed(path, registry):
+    registry['schema_version'] = 1
     previous = load_previous(path)
     if previous:
-        old_semantic = {k: v for k, v in previous.items() if k != 'updated_at'}
-        new_semantic = {k: v for k, v in registry.items() if k != 'updated_at'}
+        old_semantic = {k: v for k, v in previous.items() if k not in ('updated_at', 'snapshot_revision')}
+        new_semantic = {k: v for k, v in registry.items() if k not in ('updated_at', 'snapshot_revision')}
         if old_semantic == new_semantic:
             return previous
     with open(path, 'w') as f:
@@ -514,10 +515,11 @@ def compute_retired_versions(previous, current_versions, sort_key):
     return sorted(retired.values(), key=lambda entry: sort_key(entry['version']))
 
 def write_if_changed(path, registry):
+    registry['schema_version'] = 1
     previous = load_previous(path)
     if previous:
-        old_semantic = {k: v for k, v in previous.items() if k != 'updated_at'}
-        new_semantic = {k: v for k, v in registry.items() if k != 'updated_at'}
+        old_semantic = {k: v for k, v in previous.items() if k not in ('updated_at', 'snapshot_revision')}
+        new_semantic = {k: v for k, v in registry.items() if k not in ('updated_at', 'snapshot_revision')}
         if old_semantic == new_semantic:
             return previous
     with open(path, 'w') as f:
@@ -766,6 +768,7 @@ for path in sorted(glob.glob(os.path.join(api_dir, '*.json'))):
             data = json.load(f)
         products.append({
             'product': data['product'],
+            'snapshot_revision': data.get('snapshot_revision', ''),
             'display_name': data['display_name'],
             'source': data['source'],
             'latest': data.get('dist_tags', {}).get('latest', ''),
@@ -791,8 +794,8 @@ except (FileNotFoundError, json.JSONDecodeError):
     previous = None
 
 if previous:
-    old_semantic = {k: v for k, v in previous.items() if k != 'updated_at'}
-    new_semantic = {k: v for k, v in index.items() if k != 'updated_at'}
+    old_semantic = {k: v for k, v in previous.items() if k not in ('updated_at', 'snapshot_revision')}
+    new_semantic = {k: v for k, v in index.items() if k not in ('updated_at', 'snapshot_revision')}
     if old_semantic == new_semantic:
         index = previous
     else:
@@ -940,10 +943,11 @@ def compute_retired_versions(previous, current_versions):
     return sorted(retired.values(), key=lambda entry: parse_pi_version(entry['version']))
 
 def write_if_changed(path, registry):
+    registry['schema_version'] = 1
     previous = load_previous(path)
     if previous:
-        old_semantic = {k: v for k, v in previous.items() if k != 'updated_at'}
-        new_semantic = {k: v for k, v in registry.items() if k != 'updated_at'}
+        old_semantic = {k: v for k, v in previous.items() if k not in ('updated_at', 'snapshot_revision')}
+        new_semantic = {k: v for k, v in registry.items() if k not in ('updated_at', 'snapshot_revision')}
         if old_semantic == new_semantic:
             return previous
     with open(path, 'w') as f:
@@ -1152,10 +1156,11 @@ def compute_retired_versions(previous, current_versions):
     return sorted(retired.values(), key=lambda entry: parse_version(entry['version']))
 
 def write_if_changed(path, registry):
+    registry['schema_version'] = 1
     previous = load_previous(path)
     if previous:
-        old_semantic = {k: v for k, v in previous.items() if k != 'updated_at'}
-        new_semantic = {k: v for k, v in registry.items() if k != 'updated_at'}
+        old_semantic = {k: v for k, v in previous.items() if k not in ('updated_at', 'snapshot_revision')}
+        new_semantic = {k: v for k, v in registry.items() if k not in ('updated_at', 'snapshot_revision')}
         if old_semantic == new_semantic:
             return previous
     with open(path, 'w') as f:
@@ -1244,6 +1249,7 @@ for product in "${PRODUCTS[@]}"; do
 done
 
 write_index
+python3 "$SCRIPT_DIR/registry-snapshot.py" --registry-dir "$API_DIR"
 
 echo ""
 echo "  Done. Files at: $API_DIR/"

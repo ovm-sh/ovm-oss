@@ -5,8 +5,22 @@ pub mod npm;
 pub mod pi;
 pub mod registry;
 
+/// How long any client waits for a TCP connection before giving up.
+///
+/// Separate from the per-request total timeout on purpose. The totals are sized
+/// for the work (30 s to page GitHub release metadata, minutes for a download);
+/// a link that is *down* should not be allowed to spend that whole budget
+/// saying nothing. On a network where connections hang rather than fail — a
+/// captive portal, Wi-Fi with no upstream, a dead VPN — this is what a
+/// foreground install costs before it reports the failure and the launch goes
+/// on with the active version. Ten rather than five: the connect phase here
+/// includes DNS and the TLS handshake, and an inspecting corporate proxy can
+/// legitimately spend several seconds on those before a byte of payload.
+const CONNECT_TIMEOUT_SECS: u64 = 10;
+
 pub(crate) fn http_client(timeout_secs: u64) -> crate::error::Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .user_agent("ovm")
         .redirect(https_only_redirect_policy())
@@ -100,6 +114,7 @@ pub(crate) fn download_http_client(
     allowed_hosts: &[&str],
 ) -> crate::error::Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .user_agent("ovm")
         .redirect(download_redirect_policy(allowed_hosts))

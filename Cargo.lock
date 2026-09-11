@@ -1052,7 +1052,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "ovm"
-version = "0.1.8-alpha.1"
+version = "0.1.8"
 dependencies = [
  "assert_cmd",
  "base64",
@@ -1067,6 +1067,7 @@ dependencies = [
  "indicatif",
  "libc",
  "mockito",
+ "ovm-tui",
  "predicates",
  "reqwest",
  "rexpect",
@@ -1081,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-claudex"
-version = "0.1.8-alpha.1"
+version = "0.1.8"
 dependencies = [
  "assert_cmd",
  "console 0.16.4",
@@ -1101,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-codex-skew"
-version = "0.1.8-alpha.1"
+version = "0.1.8"
 dependencies = [
  "console 0.15.11",
  "dirs",
@@ -1109,6 +1110,29 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "ovm-limits"
+version = "0.1.8"
+dependencies = [
+ "assert_cmd",
+ "console 0.16.4",
+ "dirs",
+ "libc",
+ "ovm-tui",
+ "predicates",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "ovm-tui"
+version = "0.1.8"
+dependencies = [
+ "console 0.16.4",
 ]
 
 [[package]]

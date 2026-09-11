@@ -128,6 +128,123 @@ pub fn record_snooze(base: &Path, subject: &str, version: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Launch-time install backoff
+// ---------------------------------------------------------------------------
+
+/// After a launch-time install fails, the first retry waits this long; each
+/// further consecutive failure for the same version doubles it.
+const INSTALL_BACKOFF_BASE_SECS: u64 = 5 * 60;
+/// Doubling stops here so the arithmetic cannot overflow; the caller's cap
+/// (the configured check interval) is what actually bounds the wait.
+const INSTALL_BACKOFF_MAX_SHIFT: u32 = 16;
+
+/// The last failed launch-time install of a subject, so the next launch can
+/// decide whether to try again or leave it alone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InstallAttempt {
+    version: String,
+    failed_at: u64,
+    /// Consecutive failures for `version`, counting from zero.
+    failures: u32,
+}
+
+fn install_attempt_path(base: &Path, subject: &str) -> PathBuf {
+    base.join("cache")
+        .join("autoupdate")
+        .join(format!("{subject}.json"))
+}
+
+fn load_install_attempt(base: &Path, subject: &str) -> Option<InstallAttempt> {
+    let raw = std::fs::read_to_string(install_attempt_path(base, subject)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Whether a launch may try installing `version` for `subject` now.
+///
+/// Before this existed, the `on` policy retried a failed download on EVERY
+/// launch. On a link that is down that meant each `claude` or `codex` paid the
+/// full connect-and-give-up cost before falling back to the active version —
+/// and on a connection that hangs rather than refuses, that cost was the whole
+/// request timeout, every time, for as long as the outage lasted. Now the
+/// first failure buys five minutes of quiet, the next ten, and so on, capped
+/// at `cap_secs` (the configured check interval) so a release that can never
+/// install costs no more than the ordinary polling cadence. A record for a
+/// DIFFERENT version never holds back a newer one.
+pub fn install_retry_due(base: &Path, subject: &str, version: &str, cap_secs: u64) -> bool {
+    install_retry_is_due(
+        load_install_attempt(base, subject).as_ref(),
+        version,
+        now_secs(),
+        cap_secs,
+    )
+}
+
+fn install_retry_is_due(
+    record: Option<&InstallAttempt>,
+    version: &str,
+    now: u64,
+    cap_secs: u64,
+) -> bool {
+    let Some(record) = record else {
+        return true;
+    };
+    if record.version != version {
+        return true;
+    }
+    if record.failed_at > now {
+        // Clock skew: a future stamp would otherwise suppress every retry
+        // until real time caught up. Treat it as due; the next failure
+        // re-stamps it under the current clock.
+        return true;
+    }
+    let cap = cap_secs.max(INSTALL_BACKOFF_BASE_SECS);
+    let backoff = INSTALL_BACKOFF_BASE_SECS
+        .saturating_mul(1u64 << record.failures.min(INSTALL_BACKOFF_MAX_SHIFT))
+        .min(cap);
+    now.saturating_sub(record.failed_at) >= backoff
+}
+
+/// Record that installing `version` for `subject` just failed. Best-effort: a
+/// record that cannot be written only means the next launch retries at once,
+/// which is exactly the pre-backoff behaviour.
+pub fn record_install_failure(base: &Path, subject: &str, version: &str) {
+    let failures = match load_install_attempt(base, subject) {
+        Some(previous) if previous.version == version => previous.failures.saturating_add(1),
+        _ => 0,
+    };
+    let record = InstallAttempt {
+        version: version.to_string(),
+        failed_at: now_secs(),
+        failures,
+    };
+    write_json_atomically(&install_attempt_path(base, subject), &record);
+}
+
+/// Forget the failure record once a launch-time install actually succeeds, so
+/// the next release starts with a clean slate.
+pub fn clear_install_failure(base: &Path, subject: &str) {
+    let _ = std::fs::remove_file(install_attempt_path(base, subject));
+}
+
+/// Write `value` as pretty JSON via a temp file and rename, so a concurrent
+/// reader sees the old or new record, never a torn one. Best-effort.
+fn write_json_atomically<T: Serialize>(path: &Path, value: &T) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(payload) = serde_json::to_string_pretty(value) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, payload).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
 /// The user's answer to a notify prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyChoice {
@@ -335,6 +452,28 @@ fn drain_pending_input(fd: libc::c_int) -> bool {
 /// [`arm_parent_watchdog`]).
 pub const WATCH_PARENT_ENV: &str = "OVM_EXIT_WITH_PARENT";
 
+/// Set by a caller that needs the launch to start now and cannot wait behind
+/// a download: the active version launches and the upgrade is left for a
+/// launch that can afford it.
+///
+/// This exists for automation on a deadline. `ovm limits` polls Claude by
+/// driving a real session with a 45s budget to reach the statusline, and
+/// Codex by asking its app-server inside 60s. A release landing turned both
+/// into an inline ~200 MB download — 4m20s on 2026-09-08 — so every poll for
+/// the next several hours died on a timeout and blamed a first-run screen.
+/// Worse, the poll kills the process group when it gives up, so the install
+/// failure was never recorded and the backoff that exists to stop exactly
+/// this never armed: each poll started the same download again from zero.
+pub const NO_AUTO_UPDATE_ENV: &str = "OVM_NO_AUTO_UPDATE";
+
+/// Whether [`NO_AUTO_UPDATE_ENV`] is set to something meaning it.
+pub fn auto_update_suppressed() -> bool {
+    matches!(
+        std::env::var(NO_AUTO_UPDATE_ENV).as_deref(),
+        Ok("1" | "true" | "yes" | "on")
+    )
+}
+
 /// Exit this process if the parent named by [`WATCH_PARENT_ENV`] dies.
 ///
 /// Called once at startup by every invocation; a no-op unless the variable is
@@ -442,6 +581,127 @@ fn wait_child_with(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn attempt(version: &str, failed_at: u64, failures: u32) -> InstallAttempt {
+        InstallAttempt {
+            version: version.into(),
+            failed_at,
+            failures,
+        }
+    }
+
+    #[test]
+    fn install_retry_backs_off_per_consecutive_failure() {
+        let now = 1_000_000;
+        let cap = 4 * 3600;
+        // Nothing on record: try.
+        assert!(install_retry_is_due(None, "2.1.160", now, cap));
+        // Just failed: hold for five minutes.
+        let first = attempt("2.1.160", now, 0);
+        assert!(!install_retry_is_due(
+            Some(&first),
+            "2.1.160",
+            now + 299,
+            cap
+        ));
+        assert!(install_retry_is_due(
+            Some(&first),
+            "2.1.160",
+            now + 300,
+            cap
+        ));
+        // Second consecutive failure: ten minutes.
+        let second = attempt("2.1.160", now, 1);
+        assert!(!install_retry_is_due(
+            Some(&second),
+            "2.1.160",
+            now + 599,
+            cap
+        ));
+        assert!(install_retry_is_due(
+            Some(&second),
+            "2.1.160",
+            now + 600,
+            cap
+        ));
+    }
+
+    #[test]
+    fn install_retry_never_waits_longer_than_the_cap() {
+        let now = 1_000_000;
+        let cap = 3600;
+        // 5 min << 10 would be ~85 hours; the cap holds it to one hour.
+        let many = attempt("2.1.160", now, 10);
+        assert!(!install_retry_is_due(
+            Some(&many),
+            "2.1.160",
+            now + 3599,
+            cap
+        ));
+        assert!(install_retry_is_due(
+            Some(&many),
+            "2.1.160",
+            now + 3600,
+            cap
+        ));
+        // A cap below the base cannot make the wait shorter than the base.
+        let tiny_cap = attempt("2.1.160", now, 0);
+        assert!(!install_retry_is_due(
+            Some(&tiny_cap),
+            "2.1.160",
+            now + 60,
+            0
+        ));
+        assert!(install_retry_is_due(
+            Some(&tiny_cap),
+            "2.1.160",
+            now + 300,
+            0
+        ));
+    }
+
+    #[test]
+    fn install_retry_ignores_other_versions_and_future_stamps() {
+        let now = 1_000_000;
+        let record = attempt("2.1.160", now, 3);
+        // A newer release is not held back by an older one's failures.
+        assert!(install_retry_is_due(Some(&record), "2.1.161", now, 3600));
+        // A record from the future (clock moved back) is not trusted.
+        let future = attempt("2.1.160", now + 900, 0);
+        assert!(install_retry_is_due(Some(&future), "2.1.160", now, 3600));
+    }
+
+    #[test]
+    fn install_failures_round_trip_and_clear() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        assert!(install_retry_due(base, "claude", "2.1.160", 3600));
+
+        record_install_failure(base, "claude", "2.1.160");
+        assert!(!install_retry_due(base, "claude", "2.1.160", 3600));
+        assert_eq!(
+            load_install_attempt(base, "claude").map(|a| a.failures),
+            Some(0)
+        );
+
+        // Same version again: the counter climbs.
+        record_install_failure(base, "claude", "2.1.160");
+        assert_eq!(
+            load_install_attempt(base, "claude").map(|a| a.failures),
+            Some(1)
+        );
+        // A different version starts over.
+        record_install_failure(base, "claude", "2.1.161");
+        assert_eq!(
+            load_install_attempt(base, "claude").map(|a| (a.version, a.failures)),
+            Some(("2.1.161".to_string(), 0))
+        );
+        // Subjects are independent.
+        assert!(install_retry_due(base, "codex", "rust-v0.130.0", 3600));
+
+        clear_install_failure(base, "claude");
+        assert!(install_retry_due(base, "claude", "2.1.161", 3600));
+    }
 
     #[cfg(unix)]
     fn spawn_sleeper(seconds: &str) -> std::process::Child {

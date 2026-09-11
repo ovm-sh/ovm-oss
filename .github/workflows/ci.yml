@@ -60,6 +60,7 @@ jobs:
           bash tests/scripts/canary-missing-version.sh
           bash tests/scripts/export-oss.sh
           bash tests/scripts/update-registry-smoke.sh
+          python3 -B -m unittest discover -s tests/python -p 'test_*.py'
 
   hygiene:
     name: Workflow lint

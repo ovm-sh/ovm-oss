@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(manifest.main().binary, "ovm");
         assert_eq!(
             manifest.binary_names().collect::<Vec<_>>(),
-            vec!["ovm", "ovm-codex-skew", "ovm-claudex"]
+            vec!["ovm", "ovm-codex-skew", "ovm-claudex", "ovm-limits"]
         );
         assert_eq!(manifest.to_tsv(), EMBEDDED_MANIFEST);
     }

@@ -114,10 +114,9 @@ if [ -n "${OVM_NPM_VALIDATE_ARCHIVE:-}" ]; then
     exit $?
 fi
 
-# pipefail-safe: /bin/sh with `set -e` only. `head -1` does cut grep off (its
-# status is 141), but without pipefail the assignment takes cut's status, so the
-# version still lands. Rewrite this line before adding `set -o pipefail`.
-VERSION=$(cargo metadata --no-deps --format-version=1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4) # pipefail-safe: see the note above
+# Select the bundle's main package explicitly; metadata order is not a version contract.
+metadata=$(cargo metadata --locked --no-deps --format-version 1)
+VERSION=$(printf '%s\n' "$metadata" | jq -er '.packages[] | select(.name == "ovm") | .version')
 NPM_TAG="${NPM_TAG:-latest}"
 echo "Publishing OVM v${VERSION} to npm with dist-tag '${NPM_TAG}'..."
 

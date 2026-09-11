@@ -9,14 +9,13 @@ use crate::error::{OvmError, Result};
 use crate::product::Product;
 use crate::sources::github_releases;
 use console::{style, Key, Term};
+use ovm_tui::{select_one, terminal_width, Footer, Screen};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 
-const DEFAULT_TERMINAL_WIDTH: usize = 80;
 const MIN_VERSION_WIDTH: usize = 12;
 const ROW_PREFIX_WIDTH: usize = 3;
 // Everything in a row except the version cell: kind(7) + date(10) +
@@ -24,113 +23,13 @@ const ROW_PREFIX_WIDTH: usize = 3;
 // Must match the column widths in `VersionEntry::display_line`.
 const TABLE_FIXED_WIDTH: usize = 47;
 
-/// Where a picker's keystrokes come from.
-///
-/// The tour performs the switch gesture on the reader's behalf: they answer
-/// one question and OVM drives the picker, so they watch the navigation they
-/// would otherwise have to be told about in prose. The picker still renders
-/// every frame it always renders — only the input changes — which is what
-/// makes the demonstration honest rather than a mock-up of one.
-///
-/// Each scripted key carries the pause that PRECEDES it, because the pause is
-/// the point: a gesture replayed at machine speed teaches nothing.
-pub(crate) enum Keys {
-    /// A person is driving. Read the real terminal.
-    User,
-    /// A scripted gesture, played back one key at a time.
-    Guided(std::collections::VecDeque<(Duration, Key)>),
-}
-
-impl Keys {
-    pub(crate) fn guided(steps: impl IntoIterator<Item = (Duration, Key)>) -> Self {
-        Keys::Guided(steps.into_iter().collect())
-    }
-
-    /// The next scripted step, if the script has one left.
-    ///
-    /// Separate from [`Keys::next`] so the sequencing is testable without a
-    /// terminal and without actually sleeping through a demonstration.
-    fn scripted(&mut self) -> Option<(Duration, Key)> {
-        match self {
-            Keys::User => None,
-            Keys::Guided(steps) => steps.pop_front(),
-        }
-    }
-
-    /// The next keystroke.
-    ///
-    /// A script that runs dry falls back to the terminal rather than quitting
-    /// or deadlocking: a gesture that reaches a prompt its author did not
-    /// anticipate hands control back to the reader, who is sitting right there.
-    fn next(&mut self, term: &Term) -> Result<Key> {
-        match self.scripted() {
-            Some((pause, key)) => {
-                std::thread::sleep(pause);
-                Ok(key)
-            }
-            None => term
-                .read_key()
-                .map_err(|e| OvmError::Message(e.to_string())),
-        }
-    }
-}
+pub(crate) use ovm_tui::Keys;
 
 /// Outcome of a single pass through the version picker.
 pub(super) enum SelectAction {
     Select(usize),
     Delete(usize),
     Cancel,
-}
-
-struct PickerScreen<'a> {
-    term: &'a Term,
-    alternate: bool,
-}
-
-impl<'a> PickerScreen<'a> {
-    fn enter(term: &'a Term) -> Result<Self> {
-        let alternate = term.is_term();
-        if alternate {
-            write_terminal_escape("\x1b[?1049h\x1b[2J\x1b[H")?;
-        }
-        term.hide_cursor()?;
-        Ok(Self { term, alternate })
-    }
-
-    fn clear_frame(&self, last_line_count: usize) -> Result<()> {
-        if self.alternate {
-            write_terminal_escape("\x1b[H\x1b[2J")
-        } else if last_line_count > 0 {
-            Ok(self.term.clear_last_lines(last_line_count)?)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        self.term.show_cursor()?;
-        if self.alternate {
-            write_terminal_escape("\x1b[?1049l")?;
-            self.alternate = false;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for PickerScreen<'_> {
-    fn drop(&mut self) {
-        let _ = self.term.show_cursor();
-        if self.alternate {
-            let _ = write_terminal_escape("\x1b[?1049l");
-        }
-    }
-}
-
-fn write_terminal_escape(sequence: &str) -> Result<()> {
-    let mut stderr = std::io::stderr();
-    stderr.write_all(sequence.as_bytes())?;
-    stderr.flush()?;
-    Ok(())
 }
 
 /// What the product picker can return: a managed product, the claudex
@@ -181,66 +80,9 @@ pub fn pick_product() -> Result<Option<ProductPick>> {
 pub(crate) fn pick_product_with(keys: &mut Keys) -> Result<Option<ProductPick>> {
     let term = Term::stderr();
     let entries = product_picker_entries();
-    let items: Vec<&str> = entries.iter().map(|(label, _)| label.as_str()).collect();
-
-    let mut screen = PickerScreen::enter(&term)?;
-
-    let mut cursor: usize = 0;
-
-    loop {
-        let mut lines: Vec<String> = Vec::new();
-        lines.push(String::new());
-        lines.push(format!("  {}", style("Select a product").bold()));
-        lines.push(String::new());
-
-        for (i, item) in items.iter().enumerate() {
-            if i == cursor {
-                lines.push(format!("{} {}", style("›").cyan().bold(), item));
-            } else {
-                lines.push(format!("  {item}"));
-            }
-        }
-
-        lines.push(String::new());
-        lines.push(format!(
-            "  {} {} · {} {} · {} {}",
-            style("↑↓").bold(),
-            "navigate",
-            style("enter").bold(),
-            "select",
-            style("esc").bold(),
-            "quit"
-        ));
-
-        for line in &lines {
-            term.write_line(line)
-                .map_err(|e| OvmError::Message(e.to_string()))?;
-        }
-
-        let key = keys.next(&term)?;
-
-        screen.clear_frame(lines.len())?;
-
-        match key {
-            Key::ArrowUp | Key::Char('k') => cursor = cursor.saturating_sub(1),
-            Key::ArrowDown | Key::Char('j') if cursor < items.len() - 1 => {
-                cursor += 1;
-            }
-            Key::Enter => {
-                screen.finish()?;
-                let pick = entries
-                    .get(cursor)
-                    .map(|(_, pick)| *pick)
-                    .unwrap_or(ProductPick::Claudex);
-                return Ok(Some(pick));
-            }
-            Key::Escape => {
-                screen.finish()?;
-                return Ok(None);
-            }
-            _ => {}
-        }
-    }
+    let items: Vec<String> = entries.iter().map(|(label, _)| label.clone()).collect();
+    let chosen = select_one(&term, "Select a product", &items, keys, Footer::Quit)?;
+    Ok(chosen.map(|index| entries[index].1))
 }
 
 /// Render a single OVM self-version row: version cell, a `dev`/`release` kind
@@ -388,7 +230,7 @@ pub(super) fn pick_self_menu(
         .unwrap_or(0)
         .max(12);
 
-    let mut screen = PickerScreen::enter(&term)?;
+    let mut screen = Screen::enter(&term)?;
     // Start on the active version when swapping is on, else the first toggle.
     let mut cursor = if state.manage_on() {
         rows.iter()
@@ -949,7 +791,7 @@ pub(super) fn interactive_select(
     // that legitimately does nothing still says so instead of looking dead.
     let mut notice: Option<String> = None;
 
-    let mut screen = PickerScreen::enter(&term)?;
+    let mut screen = Screen::enter(&term)?;
     // Live-refresh window: while the first check is in flight, wait briefly so a
     // fast result paints without a keypress. Bounded so the picker never feels
     // frozen — after this, a late result folds in on the next keypress instead.
@@ -997,7 +839,10 @@ pub(super) fn interactive_select(
             show_all_releases,
             can_go_back: session.can_go_back,
             terminal_width: terminal_width(&term),
-            status_line: notice.take().or_else(|| status_line(session)),
+            status_line: notice
+                .take()
+                .or_else(|| keys.status_line())
+                .or_else(|| status_line(session)),
             downloads: &session.downloads,
         });
 
@@ -1284,34 +1129,7 @@ fn render_version_picker_frame(frame: VersionPickerFrame<'_>) -> Vec<String> {
     lines
 }
 
-fn terminal_width(term: &Term) -> usize {
-    term.size_checked()
-        .map(|(_, cols)| cols as usize)
-        .filter(|&cols| cols > 0)
-        .unwrap_or(DEFAULT_TERMINAL_WIDTH)
-}
-
-/// Render an inline y/N confirm. Returns true on `y` or `Y`.
-pub(super) fn confirm_inline(term: &Term, prompt: &str) -> Result<bool> {
-    term.write_line("")
-        .map_err(|e| OvmError::Message(e.to_string()))?;
-    term.write_line(&format!(
-        "  {} {} {}",
-        style("?").yellow().bold(),
-        prompt,
-        style("[y/N]").dim()
-    ))
-    .map_err(|e| OvmError::Message(e.to_string()))?;
-
-    let key = term
-        .read_key()
-        .map_err(|e| OvmError::Message(e.to_string()))?;
-    let confirmed = matches!(key, Key::Char('y') | Key::Char('Y'));
-
-    term.clear_last_lines(2)
-        .map_err(|e| OvmError::Message(e.to_string()))?;
-    Ok(confirmed)
-}
+pub(super) use ovm_tui::confirm_inline;
 
 /// Display release notes inline, wait for any key to dismiss.
 pub(super) fn show_release_notes(term: &Term, version: &str, product: Product) -> Result<()> {
@@ -1382,8 +1200,8 @@ mod tests {
     use super::{
         build_rows, first_selectable, is_codex_prerelease, product_picker_entries, relative_time,
         render_self_row, render_version_picker_frame, self_menu_rows, status_line, DownloadJobs,
-        Duration, Key, Keys, PickerSession, ProductPick, RefreshHandle, Row, SelfMenuRow,
-        SelfMenuState, VersionPickerFrame,
+        PickerSession, ProductPick, RefreshHandle, Row, SelfMenuRow, SelfMenuState,
+        VersionPickerFrame,
     };
     use crate::commands::select::{SelfVersionRow, VersionEntry};
     use crate::product::Product;
@@ -1896,40 +1714,5 @@ mod tests {
         assert_eq!(relative_time(now.saturating_sub(5 * 60)), "5m ago");
         assert_eq!(relative_time(now.saturating_sub(3 * 3600)), "3h ago");
         assert_eq!(relative_time(now.saturating_sub(2 * 86_400)), "2d ago");
-    }
-
-    /// The tour's gesture is a SEQUENCE — Claude, then `b`, then Enter. A
-    /// queue that reordered or dropped a step would drive the picker
-    /// somewhere the narration says it did not go.
-    #[test]
-    fn a_guided_script_plays_its_keys_in_order() {
-        let beat = Duration::from_millis(10);
-        let mut keys = Keys::guided([
-            (beat, Key::Enter),
-            (beat, Key::Char('b')),
-            (beat, Key::Enter),
-        ]);
-
-        assert_eq!(keys.scripted().map(|(_, k)| k), Some(Key::Enter));
-        assert_eq!(keys.scripted().map(|(_, k)| k), Some(Key::Char('b')));
-        assert_eq!(keys.scripted().map(|(_, k)| k), Some(Key::Enter));
-    }
-
-    /// A script that runs dry must hand the keyboard back, not repeat its last
-    /// key forever: `next` falls through to the terminal only when `scripted`
-    /// says there is nothing left.
-    #[test]
-    fn a_spent_script_yields_nothing_further() {
-        let mut keys = Keys::guided([(Duration::from_millis(0), Key::Enter)]);
-        assert!(keys.scripted().is_some());
-        assert!(keys.scripted().is_none());
-        assert!(keys.scripted().is_none());
-    }
-
-    /// A picker driven by a person has no script at all — the same call must
-    /// report "nothing scripted" so `next` reads the terminal.
-    #[test]
-    fn a_user_driven_picker_is_never_scripted() {
-        assert!(Keys::User.scripted().is_none());
     }
 }

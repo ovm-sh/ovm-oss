@@ -365,6 +365,54 @@ fn codex_install_also_installs_code_mode_host_sidecar() {
     );
 }
 
+/// An install from before OVM fetched a sidecar looks complete to its own
+/// marker. `ovm install` of that version reinstalls it rather than reporting
+/// "already installed" — the shape every Linux install had before the bundled
+/// bwrap was fetched, exercised here with the sidecar every platform needs.
+#[test]
+fn codex_install_repairs_a_complete_install_missing_a_published_sidecar() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let version = "rust-v0.144.0";
+    let binary_contents = b"fake-codex-binary";
+    let sidecar_contents = b"fake-host-binary";
+
+    let (_server, releases_url) =
+        setup_codex_mock_with_sidecar(version, binary_contents, sidecar_contents);
+
+    let release_dir = home
+        .path()
+        .join(".ovm/products/codex/versions")
+        .join(version)
+        .join("release");
+    let bin_dir = release_dir.join("bin");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    fs::write(bin_dir.join("codex"), b"stale-codex-binary").expect("stale binary");
+    fs::write(release_dir.join(".complete"), b"").expect("complete marker");
+
+    ovm(home.path(), &releases_url)
+        .args(["install", "codex", version])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("reinstalling"));
+
+    assert_eq!(
+        fs::read(bin_dir.join("codex")).expect("read main binary"),
+        binary_contents,
+        "the repair replaces the whole tree, not just the sidecar"
+    );
+    assert_eq!(
+        fs::read(bin_dir.join("codex-code-mode-host")).expect("read sidecar binary"),
+        sidecar_contents
+    );
+
+    // Whole now: a second install is the ordinary already-installed refusal.
+    ovm(home.path(), &releases_url)
+        .args(["install", "codex", version])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("already installed"));
+}
+
 #[test]
 fn codex_ls_remote_hits_mock_registry() {
     let home = tempfile::tempdir().expect("tempdir");
@@ -776,4 +824,95 @@ fn explicit_use_records_pin_and_use_latest_clears_it() {
         .assert()
         .success();
     assert!(!pin.exists(), "`use latest` should clear the pin");
+}
+
+/// The nine yolo shims are written when a product installs, and restored on the
+/// next launch if they ever go missing.
+///
+/// The second half is the self-heal an existing user relies on: an install made
+/// before OVM wrote the shims on every path — a hatch that hung before its
+/// summary — is repaired by ordinary use, no `ovm shortcuts` needed. Deleting
+/// the shims and launching stands in for that machine.
+#[test]
+fn a_launch_backfills_missing_yolo_shims() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let version = "rust-v0.141.0";
+    let (_server, releases_url) = setup_codex_mock(version, b"#!/bin/sh\necho fake-codex\n");
+
+    let bin = home.path().join(".ovm/bin");
+    let shims = [
+        "ccy", "cxy", "cxf", "cxyf", "claudex", "ccx", "ccxy", "ccxf", "ccxyf",
+    ];
+
+    // Installing a product writes the shims (the on-install guarantee).
+    ovm(home.path(), &releases_url)
+        .args(["install", "codex", version])
+        .assert()
+        .success();
+    for name in shims {
+        assert!(
+            bin.join(name).exists(),
+            "install should have written the {name} shim",
+        );
+    }
+
+    // The broken state: a machine that has the product but lost the shims.
+    for name in shims {
+        std::fs::remove_file(bin.join(name)).expect("remove shim");
+    }
+    assert!(
+        !bin.join("cxy").exists(),
+        "shims are gone before the launch"
+    );
+
+    // Any launch heals it — reconcile runs before the binary is exec'd, so the
+    // fake codex actually running afterwards is beside the point.
+    ovm(home.path(), &releases_url)
+        .args(["cx", "--version"])
+        .assert()
+        .success();
+    for name in shims {
+        assert!(
+            bin.join(name).exists(),
+            "the launch should have backfilled the {name} shim",
+        );
+    }
+
+    // The healed shim routes through `ovm`, so it never goes stale.
+    let cxy = std::fs::read_to_string(bin.join("cxy")).expect("read cxy");
+    assert!(cxy.contains("exec ovm cxy"), "cxy execs ovm: {cxy}");
+}
+
+/// A shim the user wrote themselves is never clobbered by the heal.
+#[test]
+fn the_heal_leaves_a_foreign_shim_alone() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let version = "rust-v0.141.0";
+    let (_server, releases_url) = setup_codex_mock(version, b"#!/bin/sh\necho fake-codex\n");
+
+    ovm(home.path(), &releases_url)
+        .args(["install", "codex", version])
+        .assert()
+        .success();
+
+    // Replace one shim with the user's own script; leave the rest deleted.
+    let bin = home.path().join(".ovm/bin");
+    let mine = "#!/bin/sh\necho my own cxy\n";
+    std::fs::write(bin.join("cxy"), mine).expect("write foreign cxy");
+    std::fs::remove_file(bin.join("ccy")).expect("remove ccy");
+
+    ovm(home.path(), &releases_url)
+        .args(["cx", "--version"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        std::fs::read_to_string(bin.join("cxy")).expect("cxy"),
+        mine,
+        "the user's own cxy must survive the heal",
+    );
+    assert!(
+        bin.join("ccy").exists(),
+        "the missing ccy is still restored alongside it",
+    );
 }

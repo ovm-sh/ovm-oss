@@ -50,7 +50,11 @@ pub(crate) fn maintain_claude_launcher(vm: &crate::version_manager::VersionManag
     let managed = vm.dirs.bin.join(vm.product().binary_name());
     if let Ok(Some(action)) = crate::claude_install::ensure_owned_launcher(&native, &managed) {
         if std::env::var_os("OVM_VERBOSE").is_some() {
-            eprintln!("  {} claude launcher: {action}", console::style("·").dim());
+            eprintln!(
+                "{}{} claude launcher: {action}",
+                crate::mochi::indent(),
+                console::style("·").dim()
+            );
         }
     }
 }

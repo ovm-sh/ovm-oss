@@ -2,11 +2,267 @@
   "product": "cliproxyapi",
   "display_name": "CLIProxyAPI",
   "source": "github:router-for-me/CLIProxyAPI",
-  "updated_at": "2026-09-01T02:08:25Z",
+  "updated_at": "2026-09-11T19:39:50Z",
   "dist_tags": {
-    "latest": "7.2.146"
+    "latest": "7.2.158"
   },
   "versions": [
+    {
+      "version": "6.3.22",
+      "date": "2025-11-08",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.23",
+      "date": "2025-11-08",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.24",
+      "date": "2025-11-09",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.25",
+      "date": "2025-11-09",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.26",
+      "date": "2025-11-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.27",
+      "date": "2025-11-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.28",
+      "date": "2025-11-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.29",
+      "date": "2025-11-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.30",
+      "date": "2025-11-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.31",
+      "date": "2025-11-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.32",
+      "date": "2025-11-11",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.33",
+      "date": "2025-11-11",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.34",
+      "date": "2025-11-11",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.35",
+      "date": "2025-11-12",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.36",
+      "date": "2025-11-13",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.37",
+      "date": "2025-11-13",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.38",
+      "date": "2025-11-13",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.39",
+      "date": "2025-11-13",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.40",
+      "date": "2025-11-13",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.41",
+      "date": "2025-11-14",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.42",
+      "date": "2025-11-14",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.43",
+      "date": "2025-11-14",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.44",
+      "date": "2025-11-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.45",
+      "date": "2025-11-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.46",
+      "date": "2025-11-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.47",
+      "date": "2025-11-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.48",
+      "date": "2025-11-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.49",
+      "date": "2025-11-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.50",
+      "date": "2025-11-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.51",
+      "date": "2025-11-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.52",
+      "date": "2025-11-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "6.3.53",
+      "date": "2025-11-19",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
     {
       "version": "6.3.54",
       "date": "2025-11-19",
@@ -2894,6 +3150,102 @@
         "linux-auth": true,
         "macos-auth": true
       }
+    },
+    {
+      "version": "7.2.147",
+      "date": "2026-09-01",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.148",
+      "date": "2026-09-03",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.149",
+      "date": "2026-09-03",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.150",
+      "date": "2026-09-04",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.151",
+      "date": "2026-09-04",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.152",
+      "date": "2026-09-06",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.153",
+      "date": "2026-09-07",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.154",
+      "date": "2026-09-07",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.155",
+      "date": "2026-09-08",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.156",
+      "date": "2026-09-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.157",
+      "date": "2026-09-10",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.2.158",
+      "date": "2026-09-11",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
     }
   ],
   "retired_versions": [
@@ -2903,5 +3255,7 @@
       "last_seen_at": "2026-07-17T12:41:28Z",
       "retired_at": "2026-07-17T12:42:21Z"
     }
-  ]
+  ],
+  "schema_version": 1,
+  "snapshot_revision": "sha256:af03693843d07f4916dfda9fc28ddf5ca3c5ce8b5c034bbc46d3ea4489252eba"
 }

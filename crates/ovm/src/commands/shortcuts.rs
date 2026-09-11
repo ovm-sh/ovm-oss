@@ -22,6 +22,8 @@
 
 use crate::config::OvmDirs;
 use crate::error::{OvmError, Result};
+use crate::product::Product;
+use crate::version_manager::VersionManager;
 use console::style;
 use std::path::{Path, PathBuf};
 
@@ -160,16 +162,68 @@ fn install_all(bin_dir: &Path, mut on_skip: impl FnMut(&str, &Path)) -> Result<u
     Ok(installed)
 }
 
-/// Install the shims as part of the tour, silently.
+/// Write the shims into OVM's own `bin`, silently and best-effort.
 ///
-/// The tour now ends by telling the reader to type `ccy`, which is only true
-/// if the shims exist — so it writes them rather than asking. A smaller step
-/// than it looks: the files land in OVM's own `bin`, the directory the
-/// installer created and put on PATH minutes earlier, and [`classify`] still
-/// refuses to overwrite anything that is not already ours. Best-effort, because
-/// a tour must not fail on its last act.
-pub(crate) fn install_for_tour() {
+/// Called wherever OVM sets a product up: the tour (whose last screen tells the
+/// reader to type `ccy`), and a plain `ovm install claude|codex` (so the yolo
+/// aliases are there without running the whole tour — someone who only ever
+/// installs a product still expects `ccy` to work). The tour also calls it as
+/// soon as the FIRST product lands rather than only at the summary: a tour
+/// abandoned late — a launched session force-quit, say — must still leave the
+/// shims behind, not gate them on reaching the final screen.
+///
+/// A smaller step than it looks: the files land in the directory the installer
+/// created and put on PATH, and [`classify`] refuses to overwrite anything that
+/// is not already ours. Idempotent, so the repeated calls cost only a stat each.
+/// Never fails a caller — a shim that cannot be written is not worth ending an
+/// install or a tour over.
+pub(crate) fn ensure_yolo_shims() {
     if let Ok(dirs) = OvmDirs::new() {
+        let _ = install_all(&dirs.bin, |_, _| {});
+    }
+}
+
+/// Backfill the shims for a machine that already manages a product but is
+/// missing them, and heal it through ordinary use rather than a command the
+/// user has to know about.
+///
+/// This is the safety net for an install made before the shims were written on
+/// every path — a tour that hung before its summary (the whole reason this
+/// exists), or an `ovm install` from a build that predated it. It runs on every
+/// product launch and every update, so the aliases the summary promised appear
+/// the next time the user reaches for their tools, not only if they happen to
+/// re-run the full hatch.
+///
+/// Two gates keep it free once healed, so putting it on the hot launch path is
+/// cheap: it does nothing unless a shim is genuinely absent (a `stat` each, no
+/// product lookup), and nothing unless a launchable product is actually managed
+/// (no point in a `ccy` for a machine with no Claude). A shim the user owns is
+/// left alone by [`classify`], so this never fights a real `ccy` of theirs.
+pub(crate) fn reconcile_for_managed_products() {
+    let Ok(dirs) = OvmDirs::new() else {
+        return;
+    };
+    let any_missing = SHORTCUTS
+        .iter()
+        .any(|(name, _)| classify(&dirs.bin.join(name), name) == ExistingFile::Missing);
+    if !any_missing {
+        return;
+    }
+    // Installed, not merely selected: a product can be on disk without being
+    // the current version (installed but never launched, or switched away
+    // from), and its shim should exist all the same. `current_version` missed
+    // exactly that — and, on the launch path where this runs before the
+    // first-launch bootstrap selects anything, missed a fresh product on its
+    // very first launch too.
+    let manages_launchable = [Product::Claude, Product::Codex]
+        .into_iter()
+        .any(|product| {
+            VersionManager::new(product)
+                .ok()
+                .and_then(|vm| vm.list_installed().ok())
+                .is_some_and(|installed| !installed.is_empty())
+        });
+    if manages_launchable {
         let _ = install_all(&dirs.bin, |_, _| {});
     }
 }

@@ -1,9 +1,20 @@
 use crate::error::Result;
+use crate::product::Product;
 use crate::version_manager::{InstallRequest, VersionManager};
 
 pub fn run(vm: &VersionManager, request: InstallRequest) -> Result<()> {
     let standard_install = matches!(request, InstallRequest::Standard { .. });
     vm.install(request)?;
+
+    // The yolo aliases (`ccy`, `cxy`, …) are OVM's headline way to launch, and
+    // a user who runs `ovm install claude` rather than the hatch still expects
+    // them to be there. Write them here too — best-effort, into OVM's own bin,
+    // and only for a standard install of a product that has one, so the dev
+    // flows (`--dev`, imports) stay untouched. The tour writes the same set;
+    // this is the same guarantee for the path that never enters the tour.
+    if standard_install && matches!(vm.product(), Product::Claude | Product::Codex) {
+        super::shortcuts::ensure_yolo_shims();
+    }
 
     // An unmanaged copy earlier on PATH silently wins over what was just
     // installed, and only `launch`/`adopt` used to say so — someone who only

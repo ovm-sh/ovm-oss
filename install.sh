@@ -361,6 +361,28 @@ configure_path() {
 # Whether the shell that launched this installer will find `ovm` afterwards.
 # Only `already` and a successful rc write leave a usable shell behind, and a
 # written rc helps NEW shells only — a child cannot alter its parent's PATH.
+# The terminal itself, by name — never the /dev/tty alias — for anything that
+# hands the terminal to a child.
+#
+# Under `curl | sh` stdin is the pipe, so the prompts and the hatch below have
+# to re-attach the terminal. `< /dev/tty` did that, and it is wrong: /dev/tty
+# is the kernel's alias for "the controlling terminal", not the terminal, and
+# on macOS it cannot be polled — Claude Code (a Bun binary) given that alias on
+# stdin draws its screen and then hears no key, with ctrl-C already swallowed
+# by raw mode. Seen live on 2026-09-03; 2.1.96 and 2.1.258 alike. stdout and
+# stderr are still the terminal under the pipe, so ask them for its name and
+# open that. Falls back to the alias when neither is a terminal, which the
+# tour then refuses on its own terms.
+#
+# Sets TTY_DEVICE rather than printing it: inside $( ) stdout is the capture
+# pipe, so `tty` has to be asked through descriptors duplicated beforehand.
+resolve_terminal_device() {
+    exec 3>&1 4>&2
+    TTY_DEVICE=$(tty <&3 2>/dev/null) || TTY_DEVICE=$(tty <&4 2>/dev/null) || TTY_DEVICE=/dev/tty
+    exec 3>&- 4>&-
+    [ -c "$TTY_DEVICE" ] || TTY_DEVICE=/dev/tty
+}
+
 path_is_pending() {
     case "${PATH_OUTRO_KIND:-none}" in
         already) return 1 ;;
@@ -1209,13 +1231,21 @@ configure_path "$INSTALL_DIR"
 # try to read an answer from the pipe. Skipped when --claudex was asked for:
 # that flag IS a chosen onboarding path.
 if [ "$CLAUDEX_SETUP" != 1 ] && [ ! -d "$HOME/.ovm/products" ] && (exec < /dev/tty) 2>/dev/null; then
+    resolve_terminal_device
     echo ""
-    printf "Hatch your setup now? Claude Code, Codex and claudex, with the story. [Y/n] "
+    # One question, three answers. The answer travels into the hatch as a
+    # flag, so the hatch opens on its first act rather than asking the same
+    # thing again on a different-looking screen.
+    printf "Hatch your setup now? Claude Code, Codex and claudex. [Y] with the story  [s] setup only  [n] not now  "
     hatch_answer=""
-    IFS= read -r hatch_answer < /dev/tty || hatch_answer="n"
+    IFS= read -r hatch_answer < "$TTY_DEVICE" || hatch_answer="n"
     case "$hatch_answer" in
         [Nn]*) echo "Anytime later:  ovm hatch" ;;
         *)
+            case "$hatch_answer" in
+                [Ss]*) hatch_path="--tldr" ;;
+                *) hatch_path="--story" ;;
+            esac
             release_operation_lock
             HATCH_RAN=1
             # OVM_PATH_PENDING says what the injected PATH below hides: this
@@ -1226,7 +1256,7 @@ if [ "$CLAUDEX_SETUP" != 1 ] && [ ! -d "$HOME/.ovm/products" ] && (exec < /dev/t
                 HATCH_PATH_PENDING=1
             fi
             OVM_PATH_PENDING="$HATCH_PATH_PENDING" \
-            PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" hatch < /dev/tty || {
+            PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" hatch "$hatch_path" < "$TTY_DEVICE" || {
                 echo ""
                 echo "The hatch did not finish — the OVM install itself succeeded."
                 echo "Pick it back up anytime with:  ovm hatch"
@@ -1248,10 +1278,11 @@ if [ "$CLAUDEX_SETUP" = 1 ]; then
     # redirect below would then kill a script whose install already succeeded.
     release_operation_lock
     if (exec < /dev/tty) 2>/dev/null; then
+        resolve_terminal_device
         # configure_path updates future shells, not this installer process. Put
         # the fresh control plane on PATH for setup and every child it launches
         # (`ovm install`, `ovm use`, and the generated shims all invoke `ovm`).
-        PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" claudex setup < /dev/tty || {
+        PATH="$INSTALL_DIR:$PATH" "$INSTALL_DIR/$BINARY" claudex setup < "$TTY_DEVICE" || {
             echo ""
             echo "The guided claudex setup did not finish — the OVM install itself succeeded."
             echo "Pick it back up anytime with:  ovm claudex setup"

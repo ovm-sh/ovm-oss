@@ -1,0 +1,34 @@
+[package]
+name = "ovm-limits"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+description = "limits — subscription usage windows for Claude Code and Codex accounts, polled through the products themselves (OVM plugin)"
+repository = "https://github.com/ovm-sh/ovm-oss"
+
+# Binary name = package name = `ovm-limits`, i.e. the OVM subcommand
+# `ovm limits` via PATH plugin dispatch.
+[[bin]]
+name = "ovm-limits"
+path = "src/main.rs"
+
+[dependencies]
+console = "0.16"
+dirs = "6"
+ovm-tui = { path = "../ovm-tui" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+libc = "0.2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+print_stderr = "allow"  # eprintln! is the project's primary UX channel
+print_stdout = "allow"  # commands deliberately use stdout for data output

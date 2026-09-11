@@ -745,6 +745,24 @@ impl VersionManager {
         Ok(total)
     }
 
+    /// Sidecars a complete-looking Codex install lacks although its release
+    /// publishes them. A release listing that cannot be read keeps the install
+    /// as it is and says so: an offline `ovm install` of an already installed
+    /// version must not turn into a failed reinstall.
+    fn codex_sidecars_to_repair(&self, version: &str) -> Vec<&'static str> {
+        match codex::missing_published_sidecars(version, &self.product_dirs.release_bin(version)) {
+            Ok(missing) => missing,
+            Err(error) => {
+                eprintln!(
+                    "  {} Could not check whether Codex {version} is missing a sidecar ({error}); \
+                     keeping the install as it is.",
+                    style("!").yellow()
+                );
+                Vec::new()
+            }
+        }
+    }
+
     fn install_standard(&self, version: &str, use_npm: bool) -> Result<String> {
         if use_npm && !self.product().supports_npm() {
             return Err(OvmError::Message(format!(
@@ -769,7 +787,18 @@ impl VersionManager {
         } else {
             source.is_complete()
         };
-        if source_is_complete {
+        // Complete by its own marker, yet missing a helper Codex spawns at
+        // runtime: an install made before OVM fetched that sidecar (every
+        // Linux install before the bundled bwrap, 2026-09-05). Such a tree is
+        // reinstalled through the ordinary transaction below instead of being
+        // reported as done, because `--version` passes on it and the first
+        // shell command does not.
+        let repair = if source_is_complete && self.product() == Product::Codex {
+            self.codex_sidecars_to_repair(&version)
+        } else {
+            Vec::new()
+        };
+        if source_is_complete && repair.is_empty() {
             if install_lock.waited {
                 self.report_reused_install(&version);
                 return Ok(version);
@@ -786,7 +815,15 @@ impl VersionManager {
             return Err(OvmError::VersionAlreadyInstalled(version));
         }
 
-        if install_lock.waited {
+        if !repair.is_empty() {
+            eprintln!(
+                "  {} {} {} was installed without {}; reinstalling",
+                style("⟳").cyan(),
+                self.product().display_name(),
+                style(&version).green().bold(),
+                repair.join(", ")
+            );
+        } else if install_lock.waited {
             self.report_taking_over_install(&version);
         }
         let result = self.run_install_transaction(&version, &source, || {
@@ -2639,18 +2676,35 @@ mod tests {
         assert_eq!(metadata.archive_sha256, "deadbeef");
     }
 
+    /// The fixture tree has no sidecars, and since 2026-09-05 an install over a
+    /// complete tree asks the release listing whether one is owed (the repair
+    /// path). Answered from ovm.sh, rust-v0.130.0 publishes bwrap for Linux,
+    /// and this test reinstalled from GitHub on the Ubuntu runner. The listing
+    /// is pointed at a server that has no such release, which is the
+    /// "could not check; keeping the install" arm: the refusal must hold
+    /// without touching the network.
     #[test]
     fn install_exact_existing_version_still_rejects() {
+        let _signature = crate::sources::SIGNATURE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut server = mockito::Server::new();
+        let _absent = server
+            .mock("GET", "/tags/rust-v0.130.0")
+            .with_status(404)
+            .create();
+        std::env::set_var("OVM_CODEX_RELEASES_URL", server.url());
+
         let (vm, _dir) = setup_test_vm(Product::Codex);
         create_codex_release(&vm, "rust-v0.130.0");
 
-        let error = vm
-            .install(InstallRequest::Standard {
-                use_npm: false,
-                version: "rust-v0.130.0".to_string(),
-            })
-            .expect_err("already installed");
+        let result = vm.install(InstallRequest::Standard {
+            use_npm: false,
+            version: "rust-v0.130.0".to_string(),
+        });
+        std::env::remove_var("OVM_CODEX_RELEASES_URL");
 
+        let error = result.expect_err("already installed");
         assert!(error.to_string().contains("already installed"));
     }
 

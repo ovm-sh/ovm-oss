@@ -1,6 +1,6 @@
 [package]
 name = "ovm"
-version = "0.1.8-alpha.1"
+version.workspace = true
 edition = "2021"
 description = "Open Version Manager for AI coding tools"
 license = "MIT"
@@ -28,6 +28,7 @@ tar = "0.4"
 indicatif = "0.18"
 fs4 = "1.1"
 console = "0.16"
+ovm-tui = { path = "../ovm-tui" }
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 thiserror = "2"
 dirs = "6"
