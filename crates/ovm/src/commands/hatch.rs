@@ -555,51 +555,61 @@ fn print_outro(claude: bool, codex: bool, claudex: bool) {
         .filter(|(shim, set_up)| *set_up && shortcuts::shim_is_ready(shim))
         .map(|(shim, _)| shim)
         .collect();
+    let pending = path_pending();
+    let export = style("export PATH=\"$HOME/.ovm/bin:$PATH\"").bold();
     // Nothing to name — but the PATH problem is the reader's either way, and
     // this is still the last place to say so.
     if ready.is_empty() {
-        if path_pending() {
+        if pending {
             eprintln!();
             say!(
-                "{} This shell started before the install, so it cannot see ovm yet.",
-                style("◇").dim()
+                "{} Open a new terminal session to use {}.",
+                style("◇").dim(),
+                style("ovm").bold()
             );
-            say!("  Open a new terminal session, or run here:");
-            say!("  {}", style("export PATH=\"$HOME/.ovm/bin:$PATH\"").bold());
+            say!("  This one started before the install, so it can't see it yet.");
+            say!("  To use it in this shell instead, run:  {export}");
             eprintln!();
         }
         return;
     }
     eprintln!();
-    say!(
-        "{} Open a new terminal session, then try {}.",
-        style("◇").dim(),
-        style(and_list(&ready)).bold()
-    );
-    if path_pending() {
-        say!("  This shell started before the install — to use them here:");
-        say!("  {}", style("export PATH=\"$HOME/.ovm/bin:$PATH\"").bold());
+    // Say WHY a new terminal, and only when one is needed. The first version
+    // told everyone to open one, then followed with "This shell started before
+    // the install — to use them here:" and a bare export line, which read as
+    // three unrelated instructions (2026-09-12). A reader whose shell can
+    // already see the commands is simply told to try them.
+    if pending {
+        say!(
+            "{} Open a new terminal session, then try {}.",
+            style("◇").dim(),
+            style(and_list(&ready)).bold()
+        );
+        say!("  This one started before the install, so it can't see them yet.");
+        say!("  To use them in this shell instead, run:  {export}");
+    } else {
+        say!(
+            "{} Ready to try: {}.",
+            style("◇").dim(),
+            style(and_list(&ready)).bold()
+        );
     }
     // The tour installs Claude Code and never signs anyone in. That is
     // deliberate — first-run auth is Claude's own business, and staying
     // credential-free is what makes this whole flow testable — but the summary
     // above promises `ccy` works, and meeting that promise with an unannounced
-    // login screen is a poor handoff. One line closes it, and names the
-    // asymmetry a reader would otherwise trip over: claudex opened a browser
-    // during setup, Claude never did.
+    // login screen is a poor handoff. Two lines close it: what signs in where,
+    // and that nothing has yet. ccxy names the ACCOUNT it runs on, not that a
+    // grant exists — the claudex act can finish having declined the browser.
     if ready.contains(&"ccy") {
         eprintln!();
         say!(
-            "  First run of {} signs you in to Claude.",
+            "  {} asks you to sign in to Claude the first time — nothing has signed you in yet.",
             style("ccy").bold()
         );
-        // Which ACCOUNT it runs on, not that a grant exists. The claudex act
-        // can finish having declined the browser step, and the first version of
-        // this line said "ccxy already has the ChatGPT account you connected"
-        // on exactly that take — a promise the run had not kept.
         if ready.contains(&"ccxy") {
             say!(
-                "  {} runs on your ChatGPT account instead.",
+                "  {} runs Claude Code on your ChatGPT account (claudex), so it signs in there instead.",
                 style("ccxy").bold()
             );
         }
@@ -1093,7 +1103,16 @@ fn act_statusline() -> bool {
             style("!").yellow(),
             style(existing).dim(),
         );
-        say!("  Kept as is unless you want Echo instead — backed up either way.");
+        say!(
+            "  Kept as is unless you want Echo instead. Replacing backs your settings up first, as {}.",
+            style("settings.json.before-echo").bold()
+        );
+        // Both is a real answer: the script is a plain file, and the reader's
+        // own assistant can fold it into the line they already have.
+        say!(
+            "  Want both? Echo's script is {} — ask your Claude to fold it into yours, and press n here.",
+            style(crate::claude_settings::script_path(&dirs.base).display()).bold()
+        );
     });
     let choice = if has_own.is_some() {
         confirm_default_no("Replace it with Echo?")
@@ -1466,23 +1485,11 @@ fn confirm_default_no(question: &str) -> Result<bool> {
 /// `ovm hatch 2>file`. The line path is what every prompt did before this, so
 /// a redirected or scripted run behaves exactly as it used to.
 fn read_confirm_key(default_yes: bool) -> Result<bool> {
-    let term = console::Term::stderr();
-    if !term.is_term() {
-        return read_confirm_line(default_yes);
-    }
-    loop {
-        let answer = match term
-            .read_key()
-            .map_err(|e| OvmError::Message(e.to_string()))?
-        {
-            console::Key::Enter => default_yes,
-            console::Key::Char('y' | 'Y') => true,
-            console::Key::Char('n' | 'N') | console::Key::Escape => false,
-            console::Key::Unknown => return read_confirm_line(default_yes),
-            _ => continue,
-        };
-        eprintln!("{}", if answer { "y" } else { "n" });
-        return Ok(answer);
+    match ovm_tui::confirm_key(&console::Term::stderr(), default_yes)
+        .map_err(|e| OvmError::Message(e.to_string()))?
+    {
+        Some(answer) => Ok(answer),
+        None => read_confirm_line(default_yes),
     }
 }
 
@@ -1490,11 +1497,7 @@ fn read_confirm_key(default_yes: bool) -> Result<bool> {
 fn read_confirm_line(default_yes: bool) -> Result<bool> {
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    if answer.is_empty() {
-        return Ok(default_yes);
-    }
-    Ok(answer == "y" || answer == "yes")
+    Ok(ovm_tui::parse_confirm_line(&input, default_yes))
 }
 
 #[cfg(test)]

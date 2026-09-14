@@ -43,7 +43,7 @@ fn settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".claude").join("settings.json"))
 }
 
-fn script_path(base: &Path) -> PathBuf {
+pub fn script_path(base: &Path) -> PathBuf {
     base.join("statusline").join("echo.py")
 }
 

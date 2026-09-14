@@ -96,6 +96,9 @@ EOF
 branch=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "local")
 branch=$(printf '%s' "$branch" | sed 's/[^a-zA-Z0-9-]/-/g' | cut -c1-24)
 version="dev-$branch-$(date +%m%d)-$(printf '%s' "$content_hash" | cut -c1-8)"
+# A caller that cuts a described iteration (scripts/cut-local.sh) names the
+# snapshot itself, so the installed id and the iteration record agree.
+version="${OVM_DEV_VERSION:-$version}"
 
 echo "→ Installing standalone snapshot $version..."
 if ! OVM_LOCAL_ARTIFACT_DIR="$ARTIFACT_DIR" \

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product": "codex",
-  "generated_at": "2026-09-11T19:39:05.929Z",
+  "generated_at": "2026-09-13T17:15:56.701Z",
   "manifest": {
     "source_ref": "rust-v0.154.0",
     "source_commit": "6b9826e3aa83b1a5947db50f4332cb9c65f1b340",
@@ -1450,9 +1450,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1462,9 +1462,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1474,9 +1474,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1486,9 +1486,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1498,9 +1498,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1510,9 +1510,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1522,9 +1522,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1534,9 +1534,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1546,9 +1546,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1558,9 +1558,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1570,9 +1570,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1582,9 +1582,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1594,9 +1594,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1606,9 +1606,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1618,9 +1618,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1630,9 +1630,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1642,9 +1642,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1654,9 +1654,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1666,9 +1666,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1678,9 +1678,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1690,9 +1690,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1702,9 +1702,9 @@
         "downgrade": "compatible",
         "recovery": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     },
     {
       "db_migration": 54,
@@ -1714,9 +1714,9 @@
         "recovery": "compatible",
         "qualification": "compatible"
       },
-      "runs": 4,
-      "run_number": 159,
-      "observed_at": "2026-09-11T19:39:05.929Z"
+      "runs": 8,
+      "run_number": 163,
+      "observed_at": "2026-09-13T17:15:56.701Z"
     }
   ]
 }

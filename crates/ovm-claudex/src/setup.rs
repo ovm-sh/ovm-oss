@@ -241,10 +241,18 @@ fn confirm(question: &str) -> Result<bool> {
     }
     ask!("  {} {} [Y/n] ", style("?").yellow().bold(), question);
     std::io::stderr().flush()?;
+    answer_key(true)
+}
+
+/// One keypress, like every yes/no on the hatch path that launches this
+/// wizard; a line read only when a key cannot be read (piped stdin).
+fn answer_key(default_yes: bool) -> Result<bool> {
+    if let Some(answer) = ovm_tui::confirm_key(&console::Term::stderr(), default_yes)? {
+        return Ok(answer);
+    }
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+    Ok(ovm_tui::parse_confirm_line(&input, default_yes))
 }
 
 /// A prompt whose safe answer is "no": optional extras must not install
@@ -256,10 +264,7 @@ fn confirm_default_no(question: &str) -> Result<bool> {
     }
     ask!("  {} {} [y/N] ", style("?").yellow().bold(), question);
     std::io::stderr().flush()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    Ok(answer == "y" || answer == "yes")
+    answer_key(false)
 }
 
 /// CLIProxyAPI YAML: bind localhost only, our key, tokens inside our dir.
@@ -330,6 +335,14 @@ fn proxy_config_yaml(config: &ClaudexConfig, auth_dir: &str) -> String {
 }
 
 /// The distinct registry models that get a fast alias.
+/// The tiers that get a forked `<model>-fast` alias at the priority service
+/// tier.
+///
+/// The fable tier is deliberately absent: it is the expensive, considered
+/// choice, and a "fast" variant of it is a contradiction rather than a gap.
+/// Adding it here without also changing `launch::launch_env` and
+/// `doctor::fast_alias_models` would make doctor demand an alias that launches
+/// never ask for.
 fn fast_eligible_models(config: &ClaudexConfig) -> Vec<String> {
     let mut models = vec![
         config.models.opus.clone(),
@@ -460,16 +473,21 @@ fn write_json_object(path: &std::path::Path, map: &Map<String, Value>) -> Result
 /// personal preferences apply in both worlds.
 fn claude_md_contents(config: &ClaudexConfig, import_user_global: bool) -> String {
     let mut contents = format!(
-        "# claudex — Claude Code on GPT-5.6\n\n\
-         This session runs a GPT-5.6 model through Claude Code. Model registry:\n\n\
+        "# claudex — Claude Code on GPT\n\n\
+         This session runs a GPT model through Claude Code. Model registry:\n\n\
          | /model slot | backend model |\n\
          |---|---|\n\
          | opus | {} |\n\
          | sonnet | {} |\n\
          | haiku | {} |\n\
+         | fable | {} |\n\
          | (subagents) | {} |\n\n\
-         Switch with `/model opus|sonnet|haiku`",
-        config.models.opus, config.models.sonnet, config.models.haiku, config.models.subagent
+         Switch with `/model opus|sonnet|haiku|fable`",
+        config.models.opus,
+        config.models.sonnet,
+        config.models.haiku,
+        config.models.fable,
+        config.models.subagent
     );
     if config.models.extra.is_empty() {
         contents.push_str(".\n");
@@ -955,6 +973,7 @@ mod tests {
         assert!(contents.contains("| opus | gpt-5.6-sol |"));
         assert!(contents.contains("| sonnet | gpt-5.6-terra |"));
         assert!(contents.contains("| haiku | gpt-5.6-luna |"));
+        assert!(contents.contains("| fable | gpt-6-astra |"));
         assert!(contents.contains("| (subagents) | gpt-5.6-terra |"));
         assert!(contents.contains("@~/.claude/CLAUDE.md"));
         // Single-seat concurrency guardrail must be present.

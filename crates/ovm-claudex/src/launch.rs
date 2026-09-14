@@ -444,6 +444,19 @@ fn launch_env(config: &ClaudexConfig, dirs: &ClaudexDirs, fast: bool) -> Vec<(St
             pick_model(&config.models.haiku, fast),
         ),
         (
+            "ANTHROPIC_DEFAULT_FABLE_MODEL".to_string(),
+            // Deliberately not `pick_model`. The `-fast` names are aliases
+            // claudex itself forks into the proxy config, and
+            // `setup::fast_eligible_models` does not cover the fable tier — so
+            // no `gpt-6-astra-fast` is ever generated and asking for one would
+            // be refused. That omission is a choice, not a limitation: fable is
+            // the deliberate, expensive tier, where the priority service tier
+            // buys latency on the requests you least want rushed. Keep the
+            // three in step — this slot, `fast_eligible_models`, and
+            // `doctor::fast_alias_models`.
+            config.models.fable.clone(),
+        ),
+        (
             "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
             pick_model(&config.models.subagent, fast),
         ),
@@ -535,6 +548,10 @@ mod tests {
         assert_eq!(
             env_value(&env, "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
             Some("gpt-5.6-luna")
+        );
+        assert_eq!(
+            env_value(&env, "ANTHROPIC_DEFAULT_FABLE_MODEL"),
+            Some("gpt-6-astra")
         );
         assert_eq!(
             env_value(&env, "CLAUDE_CODE_SUBAGENT_MODEL"),
@@ -661,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_mode_selects_fast_aliases_everywhere() {
+    fn fast_mode_selects_fast_aliases_for_every_tier_that_has_one() {
         let config = ClaudexConfig::default();
         let dirs = ClaudexDirs::at(PathBuf::from("/tmp/claudex"));
 
@@ -680,6 +697,14 @@ mod tests {
         assert_eq!(
             env_value(&env, "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
             Some("gpt-5.6-luna-fast")
+        );
+        // The one tier that does not take a fast alias. The proxy serves
+        // `-fast` for the whole 5.6 line and nothing for `gpt-6-astra`, so
+        // appending one here would ask for a model that does not exist and
+        // get "unknown provider" on every fast launch.
+        assert_eq!(
+            env_value(&env, "ANTHROPIC_DEFAULT_FABLE_MODEL"),
+            Some("gpt-6-astra")
         );
         assert_eq!(
             env_value(&env, "CLAUDE_CODE_SUBAGENT_MODEL"),

@@ -5,6 +5,54 @@ All notable changes to OVM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.9] - 2026-09-14
+
+### Fixed
+
+- **claudex fills Claude Code's fable slot, with GPT-6 Astra.** Claude Code
+  exposes four tier slots and claudex mapped three; the fourth was not empty
+  but broken, because picking Fable fell through to Claude Code's own
+  `claude-fable-5-1` and the proxy answered `unknown provider for model
+  claude-fable-5-1`. Astra is the natural occupant — the newest frontier model
+  on the OpenAI side against the newest on Anthropic's, two days apart — and
+  it costs nothing that already works: `opus` keeps `gpt-5.6-sol`, so an error
+  is replaced by a model and no existing mapping moves. Astra shares the 5.6
+  line's 1,050,000 window and its 272K price cliff, so the declared context
+  window is unchanged. The fable tier takes no `-fast` alias: those aliases are
+  forked into the proxy config by claudex itself, and priority routing is least
+  useful on the requests you least want rushed. `ovm claudex doctor` now checks
+  all four tier models are served, while asking for fast aliases only where a
+  launch can request one.
+
+### Changed
+
+- **Every yes/no on the hatch path answers on the keypress.** The tour's own
+  questions did; the claudex wizard it launches (`Proceed?`, `Connect your
+  Codex account now?`, `Launch claudex now?`) and the shortcuts offer read a
+  whole line, so a reader learned to press Enter after `y` on one screen and
+  had that Enter land on the next question. One shared rule now: `y`, `n`,
+  Enter for the default, Escape for no; only free-text prompts take Enter. A
+  piped or redirected run still reads a line, as before.
+
+- **The tour's last word says why a new terminal, and only when one is
+  needed.** It closed with "Open a new terminal session, then try ccy, cxy
+  and ccxy", then "This shell started before the install — to use them here:"
+  and a bare `export PATH` line, which read as three unrelated instructions.
+  Now the reason comes with the advice ("This one started before the install,
+  so it can't see them yet"), the export is introduced as the alternative, and
+  a shell that can already see the commands is simply told they are ready to
+  try. The sign-in lines say what they mean: `ccy` asks you to sign in to
+  Claude the first time and nothing has signed you in yet; `ccxy` runs Claude
+  Code on your ChatGPT account, so it signs in there instead.
+
+- **A statusline you already have gets a third answer.** The hatch already
+  kept it by default and backed the settings file up before replacing it; it
+  now names the backup (`settings.json.before-echo`) and, for readers who want
+  both, names Echo's script so their own Claude can fold it into the line
+  they have — then press n.
+
 ## [0.1.8] - 2026-09-11
 
 The stable cut of the `0.1.8-alpha.1` … `0.1.8-alpha.8` series below, plus:
@@ -381,7 +429,7 @@ The stable cut of the `0.1.8-alpha.1` … `0.1.8-alpha.8` series below, plus:
   older ledger records), and a later `gate-cleared` record closes the matching
   issue automatically.
 
-## [0.1.8] - 2026-08-28
+## [0.1.8-alpha.1] - 2026-09-01
 
 ### Added
 

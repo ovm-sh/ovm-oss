@@ -59,6 +59,16 @@ pub struct ModelRegistry {
     pub opus: String,
     pub sonnet: String,
     pub haiku: String,
+    /// Claude Code's fourth tier slot (`ANTHROPIC_DEFAULT_FABLE_MODEL`).
+    ///
+    /// Left unmapped, the picker's Fable entry falls through to Claude Code's
+    /// own `claude-fable-5-1`, which the proxy refuses with "unknown provider
+    /// for model claude-fable-5-1" — the tier is simply broken rather than
+    /// absent. `gpt-6-astra` is the natural occupant: newest frontier model on
+    /// the OpenAI side (2026-09-03) against the newest on Anthropic's
+    /// (fable 5.1, 2026-09-01), and it shares the 5.6 line's 1,050,000 window
+    /// and 272K price cliff, so `Tuning::max_context_tokens` needs no change.
+    pub fable: String,
     /// Model used when launching without an explicit `--model`.
     pub default: String,
     /// Model spawned subagents use.
@@ -74,6 +84,7 @@ impl Default for ModelRegistry {
             opus: "gpt-5.6-sol".into(),
             sonnet: "gpt-5.6-terra".into(),
             haiku: "gpt-5.6-luna".into(),
+            fable: "gpt-6-astra".into(),
             default: "gpt-5.6-sol".into(),
             subagent: "gpt-5.6-terra".into(),
             extra: Vec::new(),

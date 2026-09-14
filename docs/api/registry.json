@@ -1,27 +1,27 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-11T19:39:50Z",
+  "updated_at": "2026-09-13T17:16:37Z",
   "base_url": "https://ovm.sh/api",
   "products": [
     {
       "product": "claude",
-      "snapshot_revision": "sha256:16b5a929fd655d2a9a14f47ea88506adf80ba663853376ea33c293c2ef27d7e5",
+      "snapshot_revision": "sha256:4f8b92bca2d0d99b7a380364e77ceb88053915e382093f73614563126b5187f5",
       "display_name": "Claude Code",
       "source": "npm:@anthropic-ai/claude-code",
-      "latest": "2.1.269",
-      "version_count": 510,
+      "latest": "2.1.270",
+      "version_count": 511,
       "retired_count": 0,
-      "updated_at": "2026-09-11T19:39:50Z"
+      "updated_at": "2026-09-13T17:16:37Z"
     },
     {
       "product": "cliproxyapi",
-      "snapshot_revision": "sha256:af03693843d07f4916dfda9fc28ddf5ca3c5ce8b5c034bbc46d3ea4489252eba",
+      "snapshot_revision": "sha256:3772c034407447a6bcddbc08451296634a929168dea78d24ddd08a6c0c10a974",
       "display_name": "CLIProxyAPI",
       "source": "github:router-for-me/CLIProxyAPI",
-      "latest": "7.2.158",
-      "version_count": 405,
+      "latest": "7.3.1",
+      "version_count": 408,
       "retired_count": 1,
-      "updated_at": "2026-09-11T19:39:50Z"
+      "updated_at": "2026-09-13T17:16:37Z"
     },
     {
       "product": "codex",
@@ -31,7 +31,7 @@
       "latest": "rust-v0.154.0",
       "version_count": 959,
       "retired_count": 0,
-      "updated_at": "2026-09-11T19:39:50Z"
+      "updated_at": "2026-09-13T17:16:37Z"
     },
     {
       "product": "pi",
@@ -41,8 +41,8 @@
       "latest": "0.85.1",
       "version_count": 258,
       "retired_count": 0,
-      "updated_at": "2026-09-11T19:39:50Z"
+      "updated_at": "2026-09-13T17:16:37Z"
     }
   ],
-  "snapshot_revision": "sha256:b074ccda9fef18aeb921396e1a78639eaba4453c4ccb6395aaab8b6f0729bc22"
+  "snapshot_revision": "sha256:6f51d917cb3278f0b99fa525eb3fc6ffb9524a84dd3fac7de372af42529e850a"
 }

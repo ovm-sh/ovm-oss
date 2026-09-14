@@ -138,10 +138,15 @@ fn confirm(question: &str) -> Result<bool> {
     eprint!("  {} {} [Y/n] ", style("?").yellow().bold(), question);
     use std::io::Write;
     std::io::stderr().flush()?;
+    // One keypress, the hatch path's rule; a line only when no key can be read.
+    if let Some(answer) = ovm_tui::confirm_key(&console::Term::stderr(), true)
+        .map_err(|e| OvmError::Message(e.to_string()))?
+    {
+        return Ok(answer);
+    }
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+    Ok(ovm_tui::parse_confirm_line(&input, true))
 }
 
 /// Write every shim into `bin_dir`, reporting anything it refused to touch

@@ -17,7 +17,9 @@ mod select;
 
 pub use console::{style, Key, Term};
 pub use keys::{Cue, Keys};
-pub use prompt::{confirm_inline, press_any_key, read_line_inline};
+pub use prompt::{
+    confirm_inline, confirm_key, parse_confirm_line, press_any_key, read_line_inline,
+};
 pub use screen::{terminal_width, Screen};
 pub use select::{select_one, Footer};
 

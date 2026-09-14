@@ -135,21 +135,43 @@ enum RegistryStatus {
     Ready,
 }
 
+/// Sorted, de-duplicated, empties dropped.
+fn distinct(models: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = models
+        .into_iter()
+        .filter(|model| !model.trim().is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// The distinct tier models the config asks the proxy to serve.
 fn required_models(config: &ClaudexConfig) -> Vec<String> {
-    let mut required: Vec<String> = vec![
+    distinct(vec![
+        config.models.opus.clone(),
+        config.models.sonnet.clone(),
+        config.models.haiku.clone(),
+        config.models.fable.clone(),
+        config.models.default.clone(),
+        config.models.subagent.clone(),
+    ])
+}
+
+/// The tier models a `--fast` launch rewrites to a `<model>-fast` alias.
+///
+/// Every slot except fable. `launch::launch_env` deliberately passes the fable
+/// model through unchanged, because the 5.6 line publishes a `-fast` alias for
+/// each tier and `gpt-6-astra` does not. Demanding one here would leave doctor
+/// permanently advising a `setup` re-run that cannot produce it.
+fn fast_alias_models(config: &ClaudexConfig) -> Vec<String> {
+    distinct(vec![
         config.models.opus.clone(),
         config.models.sonnet.clone(),
         config.models.haiku.clone(),
         config.models.default.clone(),
         config.models.subagent.clone(),
-    ]
-    .into_iter()
-    .filter(|model| !model.trim().is_empty())
-    .collect();
-    required.sort();
-    required.dedup();
-    required
+    ])
 }
 
 /// Compare the configured tier models against what the proxy actually serves.
@@ -171,7 +193,7 @@ fn model_registry_status(config: &ClaudexConfig, available: &[String]) -> Regist
     if !missing.is_empty() {
         return RegistryStatus::Missing(missing);
     }
-    if !required
+    if !fast_alias_models(config)
         .iter()
         .all(|model| available.contains(&format!("{model}-fast")))
     {
@@ -330,6 +352,7 @@ mod tests {
         config.models.opus = String::new();
         config.models.sonnet = "   ".into();
         config.models.haiku = String::new();
+        config.models.fable = String::new();
         config.models.default = String::new();
         config.models.subagent = String::new();
         assert!(required_models(&config).is_empty());
@@ -361,7 +384,12 @@ mod tests {
         assert_eq!(
             model_registry_status(
                 &config,
-                &models(&["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+                &models(&[
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "gpt-5.6-luna",
+                    "gpt-6-astra"
+                ])
             ),
             RegistryStatus::FastAliasesMissing
         );
@@ -377,6 +405,9 @@ mod tests {
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-5.6-luna",
+                    // The fable tier, served without a `-fast` alias — which
+                    // is the real shape of the proxy and must still be Ready.
+                    "gpt-6-astra",
                     "gpt-5.6-sol-fast",
                     "gpt-5.6-terra-fast",
                     "gpt-5.6-luna-fast",
