@@ -89,9 +89,11 @@ impl Sidecar {
 /// before OVM fetched that sidecar (every Linux install before the bundled
 /// bwrap, 2026-09-05). Empty when the tree is complete, or when the release
 /// does not publish what is missing (a version from before the sidecar
-/// existed). The release listing is read only when something is missing, and
-/// a listing that cannot be read is an error for the caller to report, not a
-/// verdict either way.
+/// existed). On macOS the complete package counts too: a tree without its
+/// manifest is missing it when the release publishes
+/// `codex-package-<triple>.tar.gz` (0.157+). The release listing is read only
+/// when something is missing, and a listing that cannot be read is an error
+/// for the caller to report, not a verdict either way.
 pub fn missing_published_sidecars(version: &str, dest: &Path) -> Result<Vec<&'static str>> {
     missing_published_sidecars_for(version, dest, release_target_triple(), fetch_release)
 }
@@ -108,16 +110,39 @@ fn missing_published_sidecars_for(
     let absent: Vec<&Sidecar> = sidecars_for(triple)
         .filter(|sidecar| !sidecar.dest(bin_dir).exists())
         .collect();
-    if absent.is_empty() {
+    let package_absent = package_install_supported(triple)
+        && !bin_dir
+            .parent()
+            .is_some_and(|root| root.join(PACKAGE_MANIFEST).exists());
+    if absent.is_empty() && !package_absent {
         return Ok(Vec::new());
     }
     let release = fetch(version)?;
-    Ok(absent
+    let mut missing: Vec<&'static str> = absent
         .into_iter()
         .filter(|sidecar| release_publishes_sidecar_family(&release, sidecar.asset))
         .map(|sidecar| sidecar.asset)
-        .collect())
+        .collect();
+    let package_name = package_asset_name(triple);
+    let package_published = release
+        .assets
+        .iter()
+        .any(|asset| asset.name == package_name);
+    if package_absent && package_published {
+        missing.push(MISSING_PACKAGE);
+    }
+    Ok(missing)
 }
+
+/// The manifest the complete package puts beside `bin/`. A macOS install made
+/// before OVM installed the package (bare `bin/codex` + sidecars, 2026-09-27)
+/// lacks it, and the 0.157+ TUI refuses to start its daemon from that tree.
+/// The manifest alone is checked: the rest of the layout is the package's to
+/// change, and a stricter check would reinstall forever once it did.
+const PACKAGE_MANIFEST: &str = "codex-package.json";
+
+/// How [`missing_published_sidecars`] names an absent package.
+const MISSING_PACKAGE: &str = "the daemon package";
 
 /// The sidecars a build for `triple` needs, in [`SIDECARS`] order.
 fn sidecars_for(triple: &str) -> impl Iterator<Item = &'static Sidecar> {
@@ -229,6 +254,10 @@ pub struct ReleaseAsset {
     /// verification rather than failing.
     #[serde(default)]
     pub size: Option<u64>,
+    /// `sha256:<hex>` as the releases API publishes it. Checked against the
+    /// bytes when present; absent on older payloads and stamped manifests.
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -404,6 +433,18 @@ fn install_github_release(
     version: &str,
     dest: &Path,
 ) -> Result<ReleaseInstallMetadata> {
+    // 0.157+ publishes the complete package the TUI's background server needs
+    // (codex-package.json, codex-path/rg, codex-resources); the bare binary
+    // alone makes `codex` refuse to start its daemon ("this CLI has no complete
+    // local package"). Prefer it where it exists; fall back to the old path.
+    match install_github_package(release, version, dest) {
+        Ok(Some(metadata)) => return Ok(metadata),
+        Ok(None) => {}
+        Err(error) => eprintln!(
+            "  ! the complete Codex package could not be installed ({error}); installing the \
+             bare binary — run `codex --no-daemon` if it refuses to start"
+        ),
+    }
     let asset = select_release_asset(release).ok_or_else(|| OvmError::DownloadFailed {
         url: format!("{}/tags/{version}", releases_api_base()),
         message: format!(
@@ -432,6 +473,128 @@ fn install_github_release(
         asset_url,
         archive_sha256,
     ))
+}
+
+/// `codex-package-<triple>.tar.gz`, published from rust-v0.157.0.
+fn package_asset_name(triple: &str) -> String {
+    format!("codex-package-{triple}.tar.gz")
+}
+
+/// macOS only for now: that is where the bare install broke (2026-09-27) and
+/// where the package layout is verified. Linux keeps the binary + sidecar path
+/// its verification lane depends on until its package is checked too.
+fn package_install_supported(triple: &str) -> bool {
+    triple.ends_with("-apple-darwin")
+}
+
+fn install_github_package(
+    release: &Release,
+    version: &str,
+    dest: &Path,
+) -> Result<Option<ReleaseInstallMetadata>> {
+    install_github_package_for(release, version, dest, release_target_triple())
+}
+
+/// Install the complete package into the directory above `bin/` — the same
+/// tree the desktop app and the standalone installer lay down:
+/// `bin/codex`, `bin/codex-code-mode-host`, `codex-package.json`,
+/// `codex-path/rg`, `codex-resources/…`. `None` when the release publishes no
+/// package for this platform (every release before 0.157).
+fn install_github_package_for(
+    release: &Release,
+    version: &str,
+    dest: &Path,
+    triple: &str,
+) -> Result<Option<ReleaseInstallMetadata>> {
+    if !package_install_supported(triple) {
+        return Ok(None);
+    }
+    let name = package_asset_name(triple);
+    let Some(asset) = release.assets.iter().find(|asset| asset.name == name) else {
+        return Ok(None);
+    };
+    let (Some(bin_dir), Some(root)) = (dest.parent(), dest.parent().and_then(Path::parent)) else {
+        return Err(OvmError::Message(format!(
+            "unexpected install path {}",
+            dest.display()
+        )));
+    };
+    if bin_dir.file_name().and_then(|n| n.to_str()) != Some("bin") {
+        return Err(OvmError::Message(format!(
+            "the Codex package installs into <root>/bin/codex, not {}",
+            dest.display()
+        )));
+    }
+    std::fs::create_dir_all(root)?;
+    let parent = root.parent().unwrap_or(root);
+    let archive = parent.join(format!(".{name}.{}", std::process::id()));
+    let staging = parent.join(format!(".codex-package-staging.{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+
+    let url = release_asset_url(&release.tag_name, &name);
+    let size = declared_asset_size(asset)?;
+    let result = (|| -> Result<String> {
+        let sha256 = download_asset(&url, &archive, Some(size))?;
+        if let Some(published) = asset
+            .digest
+            .as_deref()
+            .and_then(|d| d.strip_prefix("sha256:"))
+        {
+            if !published.eq_ignore_ascii_case(&sha256) {
+                return Err(OvmError::DownloadFailed {
+                    url: url.clone(),
+                    message: format!(
+                        "SHA-256 {sha256} does not match the digest GitHub publishes ({published})"
+                    ),
+                });
+            }
+        }
+        super::npm::extract_tarball(&archive, &staging)?;
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(staging.join("codex-package.json")).map_err(|_| {
+                OvmError::ExtractionFailed("the package has no codex-package.json".into())
+            })?,
+        )?;
+        if manifest
+            .get("entrypoint")
+            .and_then(serde_json::Value::as_str)
+            != Some("bin/codex")
+        {
+            return Err(OvmError::ExtractionFailed(
+                "codex-package.json does not name bin/codex as its entrypoint".into(),
+            ));
+        }
+        if !staging.join("bin/codex").is_file() {
+            return Err(OvmError::ExtractionFailed(
+                "the package has no bin/codex".into(),
+            ));
+        }
+        for entry in std::fs::read_dir(&staging)? {
+            let entry = entry?;
+            let target = root.join(entry.file_name());
+            if target.is_dir() {
+                std::fs::remove_dir_all(&target)?;
+            } else if target.exists() {
+                std::fs::remove_file(&target)?;
+            }
+            std::fs::rename(entry.path(), &target)?;
+        }
+        Ok(sha256)
+    })();
+    let _ = std::fs::remove_file(&archive);
+    let _ = std::fs::remove_dir_all(&staging);
+    let sha256 = result?;
+    if let Err(error) = super::verify_product_binary(Product::Codex, dest) {
+        let _ = std::fs::remove_file(dest);
+        return Err(error);
+    }
+    Ok(Some(ReleaseInstallMetadata::new(
+        version,
+        release.tag_name.clone(),
+        name,
+        url,
+        sha256,
+    )))
 }
 
 fn download_npm_release(version: &str, dest: &Path) -> Result<ReleaseInstallMetadata> {
@@ -1264,6 +1427,7 @@ mod tests {
             name: name.to_string(),
             browser_download_url: url.to_string(),
             size: None,
+            digest: None,
         }
     }
 
@@ -2157,6 +2321,7 @@ mod tests {
     fn declared_asset_size_reports_absence_as_a_metadata_failure() {
         let sized = ReleaseAsset {
             size: Some(42),
+            digest: None,
             ..asset("codex.tar.gz", "https://example.com/codex.tar.gz")
         };
         assert_eq!(declared_asset_size(&sized).expect("declared size"), 42);
@@ -2422,6 +2587,146 @@ mod tests {
         result
     }
 
+    fn package_fixture(dir: &std::path::Path) -> Vec<u8> {
+        tarball_bytes(
+            dir,
+            "package.tar.gz",
+            &[
+                ("bin/codex", b"fake-codex-binary"),
+                ("bin/codex-code-mode-host", b"fake-host-binary"),
+                (
+                    "codex-package.json",
+                    br#"{"layoutVersion":1,"entrypoint":"bin/codex","resourcesDir":"codex-resources","pathDir":"codex-path"}"#,
+                ),
+                ("codex-path/rg", b"fake-rg"),
+                ("codex-resources/voice/NOTICE.md", b"notice"),
+            ],
+        )
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn package_release(version: &str, name: &str, body: &[u8], digest: &str) -> Release {
+        Release {
+            tag_name: version.into(),
+            assets: vec![ReleaseAsset {
+                name: name.into(),
+                browser_download_url: "https://example.invalid/decoy".into(),
+                size: Some(body.len() as u64),
+                digest: Some(format!("sha256:{digest}")),
+            }],
+        }
+    }
+
+    /// 2026-09-27: rust-v0.157.1 installed as the bare binary refused to start
+    /// its TUI ("this CLI has no complete local package"). The package puts
+    /// the whole tree the background server checks for beside `bin/`.
+    #[test]
+    fn a_published_package_installs_the_complete_tree() {
+        let dir = tempdir().expect("tempdir");
+        let version = "rust-v0.157.1";
+        let triple = "aarch64-apple-darwin";
+        let name = crate::sources::codex::package_asset_name(triple);
+        let body = package_fixture(dir.path());
+        let mut server = Server::new();
+        let mock = server
+            .mock("GET", format!("/download/{version}/{name}").as_str())
+            .with_status(200)
+            .with_body(body.clone())
+            .create();
+        let root = dir.path().join("versions").join(version).join("release");
+        let dest = root.join("bin").join("codex");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        let release = package_release(version, &name, &body, &sha256_hex(&body));
+        let metadata = with_mock_sources(&server.url(), || {
+            crate::sources::codex::install_github_package_for(&release, version, &dest, triple)
+        })
+        .expect("package install")
+        .expect("a package was published");
+        mock.assert();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fake-codex-binary");
+        for path in [
+            "bin/codex-code-mode-host",
+            "codex-package.json",
+            "codex-path/rg",
+            "codex-resources/voice/NOTICE.md",
+        ] {
+            assert!(root.join(path).is_file(), "{path} missing");
+        }
+        assert_eq!(metadata.asset_name, name);
+        let leftovers: Vec<_> = std::fs::read_dir(root.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "staging left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn a_package_whose_bytes_do_not_match_the_published_digest_is_refused() {
+        let dir = tempdir().expect("tempdir");
+        let version = "rust-v0.157.1";
+        let triple = "aarch64-apple-darwin";
+        let name = crate::sources::codex::package_asset_name(triple);
+        let body = package_fixture(dir.path());
+        let mut server = Server::new();
+        let _mock = server
+            .mock("GET", format!("/download/{version}/{name}").as_str())
+            .with_status(200)
+            .with_body(body.clone())
+            .create();
+        let root = dir.path().join("release");
+        let dest = root.join("bin").join("codex");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        let release = package_release(version, &name, &body, &"0".repeat(64));
+        let error = with_mock_sources(&server.url(), || {
+            crate::sources::codex::install_github_package_for(&release, version, &dest, triple)
+        })
+        .expect_err("a digest mismatch must not install");
+        assert!(error.to_string().contains("does not match"), "{error}");
+        assert!(!root.join("codex-package.json").exists());
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn no_package_or_a_linux_triple_keeps_the_old_path() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("release/bin/codex");
+        let none = Release {
+            tag_name: "rust-v0.156.1".into(),
+            assets: vec![],
+        };
+        assert!(crate::sources::codex::install_github_package_for(
+            &none,
+            "rust-v0.156.1",
+            &dest,
+            "aarch64-apple-darwin"
+        )
+        .unwrap()
+        .is_none());
+        let linux = package_release(
+            "rust-v0.157.1",
+            &crate::sources::codex::package_asset_name("x86_64-unknown-linux-musl"),
+            b"x",
+            &"0".repeat(64),
+        );
+        assert!(crate::sources::codex::install_github_package_for(
+            &linux,
+            "rust-v0.157.1",
+            &dest,
+            "x86_64-unknown-linux-musl"
+        )
+        .unwrap()
+        .is_none());
+    }
+
     /// The bypass this finding is about: the GitHub path correctly refuses a
     /// release that ships the sidecar family for other platforms and not for
     /// ours — and then the npm fallback used to be tried anyway. npm here would
@@ -2649,6 +2954,7 @@ mod tests {
             name: name.to_string(),
             browser_download_url: "https://example.invalid/decoy.tar.gz".to_string(),
             size: Some(size as u64),
+            digest: None,
         }
     }
 
@@ -2923,6 +3229,8 @@ mod tests {
         std::fs::create_dir_all(bin_dir).expect("bin dir");
         std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
         std::fs::write(bin_dir.join("codex-code-mode-host"), b"fake-host-binary").expect("host");
+        // The macOS package manifest, so darwin's verdict rests on sidecars alone.
+        std::fs::write(dir.path().join("codex-package.json"), b"{}").expect("manifest");
         let publishes_bwrap = |_: &str| {
             Ok(Release {
                 tag_name: "rust-v0.153.4".into(),
@@ -2962,5 +3270,68 @@ mod tests {
             Err(OvmError::Message("rate limited".into()))
         })
         .expect_err("an unreadable listing is an error");
+    }
+
+    /// 2026-09-27: a macOS install made before OVM installed the complete
+    /// package (bare `bin/codex` + `codex-code-mode-host`) was reported
+    /// "already installed" while the 0.157 TUI refused to start its daemon.
+    #[test]
+    fn a_macos_tree_without_the_published_package_needs_it() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        let bin_dir = dest.parent().expect("bin dir");
+        std::fs::create_dir_all(bin_dir).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+        std::fs::write(bin_dir.join("codex-code-mode-host"), b"fake-host-binary").expect("host");
+        let publishes_package = |triple: &'static str| {
+            move |_: &str| {
+                Ok(Release {
+                    tag_name: "rust-v0.157.1".into(),
+                    assets: vec![asset(
+                        &format!("codex-package-{triple}.tar.gz"),
+                        "https://example.com/package",
+                    )],
+                })
+            }
+        };
+
+        // Bare tree, package published: reinstall.
+        let missing = missing_published_sidecars_for(
+            "rust-v0.157.1",
+            &dest,
+            DARWIN_ARM64,
+            publishes_package(DARWIN_ARM64),
+        )
+        .expect("listing read");
+        assert_eq!(missing, vec!["the daemon package"]);
+
+        // A version from before the package existed: absent but not published.
+        let missing = missing_published_sidecars_for("rust-v0.156.1", &dest, DARWIN_ARM64, |_| {
+            Ok(Release {
+                tag_name: "rust-v0.156.1".into(),
+                assets: Vec::new(),
+            })
+        })
+        .expect("listing read");
+        assert!(missing.is_empty());
+
+        // Linux does not install the package yet, so even a published one is
+        // no repair (bwrap is absent here but unpublished, so the listing is read).
+        let missing = missing_published_sidecars_for(
+            "rust-v0.157.1",
+            &dest,
+            LINUX_X64,
+            publishes_package(LINUX_X64),
+        )
+        .expect("listing read");
+        assert!(missing.is_empty());
+
+        // The complete package tree: whole, and the release is never fetched.
+        std::fs::write(dir.path().join("codex-package.json"), b"{}").expect("manifest");
+        let missing = missing_published_sidecars_for("rust-v0.157.1", &dest, DARWIN_ARM64, |_| {
+            panic!("a whole tree must not fetch the release")
+        })
+        .expect("nothing to ask");
+        assert!(missing.is_empty());
     }
 }

@@ -745,8 +745,8 @@ impl VersionManager {
         Ok(total)
     }
 
-    /// Sidecars a complete-looking Codex install lacks although its release
-    /// publishes them. A release listing that cannot be read keeps the install
+    /// Sidecars — and on macOS the complete daemon package — a complete-looking
+    /// Codex install lacks although its release publishes them. A release listing that cannot be read keeps the install
     /// as it is and says so: an offline `ovm install` of an already installed
     /// version must not turn into a failed reinstall.
     fn codex_sidecars_to_repair(&self, version: &str) -> Vec<&'static str> {
@@ -754,7 +754,7 @@ impl VersionManager {
             Ok(missing) => missing,
             Err(error) => {
                 eprintln!(
-                    "  {} Could not check whether Codex {version} is missing a sidecar ({error}); \
+                    "  {} Could not check whether Codex {version} is missing a sidecar or its package ({error}); \
                      keeping the install as it is.",
                     style("!").yellow()
                 );

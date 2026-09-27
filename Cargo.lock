@@ -1052,7 +1052,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "ovm"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "assert_cmd",
  "base64",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-claudex"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "assert_cmd",
  "console 0.16.4",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-codex-skew"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "console 0.15.11",
  "dirs",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-limits"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "assert_cmd",
  "console 0.16.4",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "ovm-tui"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "console 0.16.4",
 ]
@@ -1523,9 +1523,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "ring",

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-09-27
+
+A patch cut from 0.1.9 with the fixes below only. Everything that has landed
+on `main` since 0.1.9 ships as 0.2.0.
+
+### Fixed
+
+- **Codex 0.157 starts again.** From 0.157 the Codex TUI runs on a background
+  app server and only starts it from the complete package (`codex-package.json`,
+  a bundled `rg`, `codex-resources/`); OVM installed the bare binary, so
+  `codex` failed with "this CLI has no complete local package". On macOS,
+  `ovm install codex` now installs `codex-package-<triple>.tar.gz` whenever the
+  release publishes it: size and SHA-256 checked against GitHub's published
+  digest, extracted with the hardened extractor, manifest and code signature
+  verified. Releases without the package install as before; a failed package
+  download falls back to the bare binary and names `--no-daemon`. Linux still
+  installs the bare binary (`codex --no-daemon` works there).
+- **A bare 0.157 install is repaired.** `ovm install codex <version>` on a
+  tree installed before this fix reinstalls it with the package instead of
+  reporting "already installed", the same way an install missing a sidecar
+  already was.
+
 ## [0.1.9] - 2026-09-14
 
 ### Fixed
