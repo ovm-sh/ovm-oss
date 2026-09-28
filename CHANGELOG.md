@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-09-28
+
+A patch cut from 0.1.10 with the Linux half of the Codex 0.157 fix only.
+
+### Fixed
+
+- **Codex 0.157 starts on Linux.** 0.1.10 fixed macOS only; on Linux OVM still
+  installed the bare binary, and a bare Codex 0.157 fails there exactly as it
+  did on macOS ("this CLI has no complete local package"). `ovm install codex`
+  now installs `codex-package-<triple>.tar.gz` on Linux too, with the same
+  size, SHA-256 and extraction checks. The package brings its own
+  `codex-resources/bwrap`, which OVM now looks for where the package puts it
+  (beside `bin/`), not in the sidecar spot inside `bin/`. Verified on Ubuntu
+  24.04: fresh install, repair of a bare tree, no reinstall loop, and a
+  release from before the package installing as before.
+- **A bare Linux 0.157 install is repaired** by the next
+  `ovm install codex <version>`, as on macOS.
+
 ## [0.1.10] - 2026-09-27
 
 A patch cut from 0.1.9 with the fixes below only. Everything that has landed

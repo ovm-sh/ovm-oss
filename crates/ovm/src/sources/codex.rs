@@ -66,8 +66,18 @@ impl Sidecar {
         format!("{}-{triple}.tar.gz", self.asset)
     }
 
+    /// Where this sidecar lives for the install whose binaries are in
+    /// `bin_dir`. A package tree (a `codex-package.json` beside `bin/`) keeps
+    /// its resources in `codex-resources/` beside `bin/`; the bare layout OVM
+    /// laid down before the package keeps everything inside `bin/`.
     fn dest(&self, bin_dir: &Path) -> PathBuf {
-        bin_dir.join(self.path)
+        let package_root = bin_dir
+            .parent()
+            .filter(|root| root.join(PACKAGE_MANIFEST).exists());
+        match package_root {
+            Some(root) if self.path.starts_with("codex-resources/") => root.join(self.path),
+            _ => bin_dir.join(self.path),
+        }
     }
 
     /// The one file inside the release asset (`codex-code-mode-host-<triple>`,
@@ -134,9 +144,10 @@ fn missing_published_sidecars_for(
     Ok(missing)
 }
 
-/// The manifest the complete package puts beside `bin/`. A macOS install made
-/// before OVM installed the package (bare `bin/codex` + sidecars, 2026-09-27)
-/// lacks it, and the 0.157+ TUI refuses to start its daemon from that tree.
+/// The manifest the complete package puts beside `bin/`. An install made
+/// before OVM installed the package (bare `bin/codex` + sidecars: macOS until
+/// 0.1.10, Linux until 0.1.11) lacks it, and the 0.157+ TUI refuses to start
+/// its daemon from that tree.
 /// The manifest alone is checked: the rest of the layout is the package's to
 /// change, and a stricter check would reinstall forever once it did.
 const PACKAGE_MANIFEST: &str = "codex-package.json";
@@ -480,11 +491,12 @@ fn package_asset_name(triple: &str) -> String {
     format!("codex-package-{triple}.tar.gz")
 }
 
-/// macOS only for now: that is where the bare install broke (2026-09-27) and
-/// where the package layout is verified. Linux keeps the binary + sidecar path
-/// its verification lane depends on until its package is checked too.
+/// macOS and Linux. On both, a bare 0.157 binary refuses to start its TUI
+/// ("no complete local package"); Linux was verified on Ubuntu 24.04 on
+/// 2026-09-28, where OVM's package install behaves like the official npm
+/// build and the package's own `codex-resources/bwrap` replaces the sidecar.
 fn package_install_supported(triple: &str) -> bool {
-    triple.ends_with("-apple-darwin")
+    triple.ends_with("-apple-darwin") || triple.contains("-linux-")
 }
 
 fn install_github_package(
@@ -2599,6 +2611,7 @@ mod tests {
                     br#"{"layoutVersion":1,"entrypoint":"bin/codex","resourcesDir":"codex-resources","pathDir":"codex-path"}"#,
                 ),
                 ("codex-path/rg", b"fake-rg"),
+                ("codex-resources/bwrap", b"fake-bwrap"),
                 ("codex-resources/voice/NOTICE.md", b"notice"),
             ],
         )
@@ -2625,13 +2638,19 @@ mod tests {
     }
 
     /// 2026-09-27: rust-v0.157.1 installed as the bare binary refused to start
-    /// its TUI ("this CLI has no complete local package"). The package puts
-    /// the whole tree the background server checks for beside `bin/`.
+    /// its TUI ("this CLI has no complete local package") — on macOS, and on
+    /// Linux too (2026-09-28). The package puts the whole tree the background
+    /// server checks for beside `bin/`.
     #[test]
     fn a_published_package_installs_the_complete_tree() {
+        for triple in ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"] {
+            a_published_package_installs_the_complete_tree_for(triple);
+        }
+    }
+
+    fn a_published_package_installs_the_complete_tree_for(triple: &str) {
         let dir = tempdir().expect("tempdir");
         let version = "rust-v0.157.1";
-        let triple = "aarch64-apple-darwin";
         let name = crate::sources::codex::package_asset_name(triple);
         let body = package_fixture(dir.path());
         let mut server = Server::new();
@@ -2655,9 +2674,10 @@ mod tests {
             "bin/codex-code-mode-host",
             "codex-package.json",
             "codex-path/rg",
+            "codex-resources/bwrap",
             "codex-resources/voice/NOTICE.md",
         ] {
-            assert!(root.join(path).is_file(), "{path} missing");
+            assert!(root.join(path).is_file(), "{triple}: {path} missing");
         }
         assert_eq!(metadata.asset_name, name);
         let leftovers: Vec<_> = std::fs::read_dir(root.parent().unwrap())
@@ -2696,7 +2716,7 @@ mod tests {
     }
 
     #[test]
-    fn no_package_or_a_linux_triple_keeps_the_old_path() {
+    fn a_release_without_the_package_keeps_the_old_path() {
         let dir = tempdir().expect("tempdir");
         let dest = dir.path().join("release/bin/codex");
         let none = Release {
@@ -2711,15 +2731,9 @@ mod tests {
         )
         .unwrap()
         .is_none());
-        let linux = package_release(
-            "rust-v0.157.1",
-            &crate::sources::codex::package_asset_name("x86_64-unknown-linux-musl"),
-            b"x",
-            &"0".repeat(64),
-        );
         assert!(crate::sources::codex::install_github_package_for(
-            &linux,
-            "rust-v0.157.1",
+            &none,
+            "rust-v0.156.1",
             &dest,
             "x86_64-unknown-linux-musl"
         )
@@ -3164,6 +3178,34 @@ mod tests {
         assert!(dest.exists());
     }
 
+    /// The package puts bwrap in `codex-resources/` beside `bin/`, not in the
+    /// sidecar spot inside it; the final check must look there, or a correct
+    /// Linux package install is refused and its binaries removed.
+    #[test]
+    fn a_linux_package_tree_with_bwrap_beside_bin_is_complete() {
+        let dir = tempdir().expect("tempdir");
+        let dest = dir.path().join("bin").join("codex");
+        let bin_dir = dest.parent().expect("bin dir");
+        std::fs::create_dir_all(bin_dir).expect("bin dir");
+        std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
+        std::fs::write(bin_dir.join("codex-code-mode-host"), b"fake-host-binary").expect("host");
+        std::fs::write(dir.path().join("codex-package.json"), b"{}").expect("manifest");
+        std::fs::create_dir_all(dir.path().join("codex-resources")).expect("resources");
+        std::fs::write(dir.path().join("codex-resources/bwrap"), b"fake-bwrap").expect("bwrap");
+        let requirement = SidecarRequirement::Published(vec!["codex-code-mode-host", "bwrap"]);
+        let metadata = ReleaseInstallMetadata::new(
+            "rust-v0.157.1",
+            "rust-v0.157.1",
+            "codex-package-x86_64-unknown-linux-musl.tar.gz",
+            "https://example.invalid/package.tar.gz",
+            "0".repeat(64),
+        );
+        complete_install_for(metadata, &requirement, "rust-v0.157.1", &dest, LINUX_X64)
+            .expect("a complete Linux package tree is handed back");
+        assert!(dest.exists());
+        assert!(dir.path().join("codex-resources/bwrap").exists());
+    }
+
     #[test]
     fn npm_linux_package_extracts_the_bundled_bwrap_and_skips_other_resources() {
         let dir = tempdir().expect("tempdir");
@@ -3229,8 +3271,6 @@ mod tests {
         std::fs::create_dir_all(bin_dir).expect("bin dir");
         std::fs::write(&dest, b"fake-codex-binary").expect("main binary");
         std::fs::write(bin_dir.join("codex-code-mode-host"), b"fake-host-binary").expect("host");
-        // The macOS package manifest, so darwin's verdict rests on sidecars alone.
-        std::fs::write(dir.path().join("codex-package.json"), b"{}").expect("manifest");
         let publishes_bwrap = |_: &str| {
             Ok(Release {
                 tag_name: "rust-v0.153.4".into(),
@@ -3247,14 +3287,6 @@ mod tests {
                 .expect("listing read");
         assert_eq!(missing, vec!["bwrap"]);
 
-        // Darwin needs no bwrap, so the same tree is whole and the release is
-        // never fetched.
-        let missing = missing_published_sidecars_for("rust-v0.153.4", &dest, DARWIN_ARM64, |_| {
-            panic!("a whole tree must not fetch the release")
-        })
-        .expect("nothing to ask");
-        assert!(missing.is_empty());
-
         // A version from before bwrap existed: absent but not published.
         let missing = missing_published_sidecars_for("rust-v0.141.0", &dest, LINUX_X64, |_| {
             Ok(Release {
@@ -3270,13 +3302,34 @@ mod tests {
             Err(OvmError::Message("rate limited".into()))
         })
         .expect_err("an unreadable listing is an error");
+
+        // A package tree keeps bwrap in `codex-resources/` beside `bin/`: a
+        // package tree without it is still missing it on Linux...
+        std::fs::write(dir.path().join("codex-package.json"), b"{}").expect("manifest");
+        let missing =
+            missing_published_sidecars_for("rust-v0.153.4", &dest, LINUX_X64, publishes_bwrap)
+                .expect("listing read");
+        assert_eq!(missing, vec!["bwrap"]);
+
+        // ...and with it the tree is whole on both platforms, and the release
+        // is never fetched.
+        std::fs::create_dir_all(dir.path().join("codex-resources")).expect("resources");
+        std::fs::write(dir.path().join("codex-resources/bwrap"), b"fake-bwrap").expect("bwrap");
+        for triple in [DARWIN_ARM64, LINUX_X64] {
+            let missing = missing_published_sidecars_for("rust-v0.153.4", &dest, triple, |_| {
+                panic!("a whole tree must not fetch the release")
+            })
+            .expect("nothing to ask");
+            assert!(missing.is_empty(), "{triple}");
+        }
     }
 
-    /// 2026-09-27: a macOS install made before OVM installed the complete
-    /// package (bare `bin/codex` + `codex-code-mode-host`) was reported
-    /// "already installed" while the 0.157 TUI refused to start its daemon.
+    /// 2026-09-27 (macOS) and 2026-09-28 (Linux): an install made before OVM
+    /// installed the complete package (bare `bin/codex` + sidecars) was
+    /// reported "already installed" while the 0.157 TUI refused to start its
+    /// daemon.
     #[test]
-    fn a_macos_tree_without_the_published_package_needs_it() {
+    fn a_tree_without_the_published_package_needs_it() {
         let dir = tempdir().expect("tempdir");
         let dest = dir.path().join("bin").join("codex");
         let bin_dir = dest.parent().expect("bin dir");
@@ -3315,8 +3368,8 @@ mod tests {
         .expect("listing read");
         assert!(missing.is_empty());
 
-        // Linux does not install the package yet, so even a published one is
-        // no repair (bwrap is absent here but unpublished, so the listing is read).
+        // Linux, the same: a bare tree whose release publishes the package is
+        // missing the package (the unpublished bwrap sidecar is not named).
         let missing = missing_published_sidecars_for(
             "rust-v0.157.1",
             &dest,
@@ -3324,14 +3377,20 @@ mod tests {
             publishes_package(LINUX_X64),
         )
         .expect("listing read");
-        assert!(missing.is_empty());
+        assert_eq!(missing, vec!["the daemon package"]);
 
-        // The complete package tree: whole, and the release is never fetched.
+        // The complete package tree: whole on both platforms, and the release
+        // is never fetched — even on Linux, where the package's bwrap sits in
+        // `codex-resources/` beside `bin/` rather than the sidecar spot inside it.
         std::fs::write(dir.path().join("codex-package.json"), b"{}").expect("manifest");
-        let missing = missing_published_sidecars_for("rust-v0.157.1", &dest, DARWIN_ARM64, |_| {
-            panic!("a whole tree must not fetch the release")
-        })
-        .expect("nothing to ask");
-        assert!(missing.is_empty());
+        std::fs::create_dir_all(dir.path().join("codex-resources")).expect("resources");
+        std::fs::write(dir.path().join("codex-resources/bwrap"), b"fake-bwrap").expect("bwrap");
+        for triple in [DARWIN_ARM64, LINUX_X64] {
+            let missing = missing_published_sidecars_for("rust-v0.157.1", &dest, triple, |_| {
+                panic!("a whole tree must not fetch the release")
+            })
+            .expect("nothing to ask");
+            assert!(missing.is_empty(), "{triple}");
+        }
     }
 }
