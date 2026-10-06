@@ -215,6 +215,55 @@ fetch() {
     curl -fsSL $CURL_RETRY_FLAGS "$@"
 }
 
+# The latest published tag, without touching api.github.com.
+#
+# `releases/latest` on github.com answers 302 with the tagged release in
+# Location, so the tag falls out of `%{redirect_url}` with no JSON to parse
+# and — the point — no REST API. api.github.com allows 60 requests an hour
+# per IP unauthenticated, which a shared CI runner or an office NAT exhausts
+# routinely: on 2026-09-14 this release's own macOS install check died on
+# four consecutive 403s while the Linux one passed on identical artifacts.
+# A user behind that NAT reads "could not reach api.github.com" and blames
+# their own network.
+#
+# Deliberately NOT the ovm.sh release feed, which would be same-origin but is
+# refreshed on a schedule: trusting it would let a successful publish serve
+# the previous version until the next cron run. GitHub stays the source of
+# truth for what is published; only the rate-limited path is avoided. The API
+# remains the fallback so a change to the redirect cannot strand installs.
+resolve_latest_tag() {
+    # No -L: the redirect target IS the answer, not something to follow. No
+    # retry flags either — this probe is optimistic and has a fallback right
+    # below it, so retrying a host that answered 404 just delays the install
+    # by the retry budget before doing the thing that works.
+    tag_url=$(curl -fsS -o /dev/null -w '%{redirect_url}' \
+        "$ASSET_BASE/$REPO/releases/latest" 2>/dev/null || true)
+    case "$tag_url" in
+        */releases/tag/?*)
+            printf '%s\n' "${tag_url##*/}"
+            return 0
+            ;;
+    esac
+    # Split the fetch from the parse, and never let either status escape. This
+    # function's value is consumed as `VERSION=$(resolve_latest_tag)`, and
+    # under `set -e` a non-zero status there aborts the script *before* the
+    # caller's `fail` can explain anything — the user sees an empty terminal.
+    # A tagless or unreachable API is a normal outcome here: return nothing
+    # and let the caller say so.
+    api_json=$(fetch "$API_BASE/repos/$REPO/releases/latest" 2>/dev/null || true)
+    # sed prints every tag_name and reads to EOF. No early-exit consumer (no
+    # `head`, no `grep -q`), so nothing upstream takes SIGPIPE and pipefail
+    # cannot invert a successful parse into a failure.
+    api_tags=$(printf '%s\n' "$api_json" |
+        sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    # First tag only, via word splitting rather than a pipe. A release tag
+    # never contains whitespace, so $IFS splitting is exact here.
+    # shellcheck disable=SC2086  # deliberate: split the tag list into words
+    set -- $api_tags
+    printf '%s\n' "${1:-}"
+    return 0
+}
+
 # Paths shown to the user are printed with ~ rather than the expanded home:
 # they read the same on every machine and never put a username on screen (or
 # in a pasted log).
@@ -1163,30 +1212,17 @@ else
     fi
 
     mochi working "Installing OVM for $TARGET..."
-    # Split the fetch from the parse. Folded into one pipeline, a failed curl
-    # aborted the whole script under `set -e` before the `fail` below could
-    # run, so an unreachable API exited silently with curl's status and no
-    # explanation — the user saw nothing at all.
-    # `fetch` reports failure without a status, so a 404 and an unreachable
-    # host arrive identically. Rather than guess, name the tag and both
-    # possibilities — the tag is the actionable half either way.
-    # Two different failures, kept apart. `fetch` reports failure without a
-    # status, so a 404 and an unreachable host arrive identically — name the
-    # tag and both possibilities, since the tag is the actionable half either
-    # way. A response that ARRIVES but carries no tag_name is a third thing
-    # again, and saying "could not reach" about it would be false.
+    # An exact tag needs no lookup at all. The archive URL below is built
+    # straight from ASSET_BASE, and a tag that does not exist fails there
+    # naming itself, which is the actionable half either way. The old code
+    # spent a rate-limited API request purely to echo the tag back — and that
+    # is the request the release's own install check kept dying on.
     if [ -n "$REQUESTED_VERSION" ]; then
-        release_ref="releases/tags/$REQUESTED_VERSION"
-        release_unavailable="no OVM release tagged $REQUESTED_VERSION at $API_BASE — check the tag is published, or drop --version for the latest stable"
-        release_untagged="the release tagged $REQUESTED_VERSION names no version"
+        VERSION="$REQUESTED_VERSION"
     else
-        release_ref="releases/latest"
-        release_unavailable="could not reach $API_BASE to look up the latest OVM release"
-        release_untagged="could not determine latest stable version"
+        VERSION=$(resolve_latest_tag)
+        [ -n "$VERSION" ] || fail "could not determine latest stable version from $ASSET_BASE or $API_BASE"
     fi
-    release_json=$(fetch "$API_BASE/repos/$REPO/$release_ref") || fail "$release_unavailable"
-    VERSION=$(printf '%s\n' "$release_json" | grep '"tag_name"' | cut -d'"' -f4 || true)
-    [ -n "$VERSION" ] || fail "$release_untagged"
     VERSION_ID=${VERSION#v}
 
     URL="$ASSET_BASE/$REPO/releases/download/$VERSION/$BINARY-$TARGET.tar.gz"
@@ -1196,10 +1232,17 @@ else
     CHECKSUM="$ARCHIVE.sha256"
     EXTRACT_DIR="$TMP_DIR/extract"
 
-    # Same reason as the release lookup above: name the asset that is missing
-    # rather than dying on curl's exit status with an empty terminal.
-    fetch "$URL" -o "$ARCHIVE" ||
+    # Name what is missing rather than dying on curl's exit status with an
+    # empty terminal. A tag that does not exist now surfaces HERE, since an
+    # exact --version no longer costs a lookup to discover that — so keep
+    # naming the tag, which is the actionable half. "could not download
+    # <long url>" buries it in a path nobody reads to the end.
+    if ! fetch "$URL" -o "$ARCHIVE"; then
+        if [ -n "$REQUESTED_VERSION" ]; then
+            fail "no OVM release tagged $REQUESTED_VERSION with a build for $TARGET — check the tag is published, or drop --version for the latest stable"
+        fi
         fail "could not download the release archive $URL"
+    fi
     fetch "$SHA_URL" -o "$CHECKSUM" ||
         fail "could not download the release checksum $SHA_URL"
     expected_sha=$(awk 'NF >= 2 { print $1; exit }' "$CHECKSUM")

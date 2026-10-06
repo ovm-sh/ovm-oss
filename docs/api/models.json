@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-07-20T18:30:00Z",
+  "updated_at": "2026-09-30T06:12:36Z",
   "base_url": "https://ovm.sh/api",
   "description": "Foundation-model release + lifecycle registry, cross-referenced against CLI version releases. Sourced from vendor deprecation/lifecycle pages. Dated model IDs carry an exact release date; dateless IDs (Claude 4.6 generation onward) are pinned snapshots whose release date is filled from the vendor models API. Where a vendor accepts a different id at request time than the public one, requestable_id records the id to request (e.g. ChatGPT-auth Codex serves gpt-5.6 only as gpt-5.6-sol).",
   "sources": {
@@ -14,6 +14,33 @@
         "claude"
       ],
       "models": [
+        {
+          "id": "claude-sonnet-5-5",
+          "family": "sonnet",
+          "generation": "5.5",
+          "released": "2026-09-28",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-09-28"
+        },
+        {
+          "id": "claude-opus-5-5",
+          "family": "opus",
+          "generation": "5.5",
+          "released": "2026-09-22",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-09-22"
+        },
+        {
+          "id": "claude-mythos-5-1",
+          "family": "mythos",
+          "generation": "5.1",
+          "released": "2026-09-01",
+          "state": "active",
+          "deprecated": null,
+          "retirement_earliest": "2027-09-01"
+        },
         {
           "id": "claude-fable-5-1",
           "family": "fable",
@@ -221,6 +248,39 @@
       ],
       "models": [
         {
+          "id": "gpt-6.1-sol",
+          "family": "gpt",
+          "generation": "6.1",
+          "codename": "sol",
+          "requestable_id": "gpt-6.1-sol",
+          "released": null,
+          "first_seen": "2026-09-30",
+          "state": "active",
+          "deprecated": null
+        },
+        {
+          "id": "gpt-6-sol",
+          "family": "gpt",
+          "generation": "6",
+          "codename": "sol",
+          "requestable_id": "gpt-6-sol",
+          "released": "2026-09-22",
+          "first_seen": "2026-09-22",
+          "state": "active",
+          "deprecated": null
+        },
+        {
+          "id": "gpt-6-luna",
+          "family": "gpt",
+          "generation": "6",
+          "codename": "luna",
+          "requestable_id": "gpt-6-luna",
+          "released": "2026-09-22",
+          "first_seen": "2026-09-22",
+          "state": "active",
+          "deprecated": null
+        },
+        {
           "id": "gpt-6-astra",
           "family": "gpt",
           "generation": "6",
@@ -286,5 +346,5 @@
       ]
     }
   ],
-  "snapshot_revision": "sha256:1503d983dd3e81e3a967cd56ef78a245dcfb2fb66065e79fbd033c75835247dd"
+  "snapshot_revision": "sha256:2d5482cdc7081fd8405e40826f9830d270d50b427895f4055f52404288034fe2"
 }

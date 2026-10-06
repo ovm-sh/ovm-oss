@@ -57,6 +57,18 @@ pub enum SelfCommands {
     /// Atomically return to the previously active OVM version
     Rollback,
 
+    /// Remove inactive dev snapshots, keeping the newest few (the current and
+    /// previous versions and every release are never touched)
+    Prune {
+        /// How many inactive dev snapshots to keep, newest first
+        #[arg(long, default_value_t = 2)]
+        keep: usize,
+
+        /// List what would be removed without removing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Restore the previous standalone control-plane executable
     RepairControl,
 
@@ -239,8 +251,12 @@ pub enum Commands {
         version: Option<String>,
     },
 
-    /// Put Echo in the Claude Code statusline
-    Statusline,
+    /// Put Echo in the Claude Code statusline (install | update | status)
+    Statusline {
+        /// install (default): Echo into the statusline; update: refresh the
+        /// installed Echo only; status: installed vs bundled version
+        action: Option<String>,
+    },
 
     /// Show installed/archived counts, active version, and disk usage per product
     Stats,

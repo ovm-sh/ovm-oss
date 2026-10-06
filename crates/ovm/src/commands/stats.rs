@@ -80,7 +80,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn dir_size(path: &Path) -> std::io::Result<u64> {
+pub(crate) fn dir_size(path: &Path) -> std::io::Result<u64> {
     let mut total = 0u64;
     if !path.exists() {
         return Ok(0);

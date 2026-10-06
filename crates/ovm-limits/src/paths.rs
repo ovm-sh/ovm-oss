@@ -57,14 +57,43 @@ impl LimitsDirs {
         self.base.join("limits.json")
     }
 
-    /// The public feed: surprise resets and poll timing, nothing private.
+    /// The public feed: the observed reset log and poll timing, anonymised.
     pub fn public_file(&self) -> PathBuf {
         self.base.join("resets.json")
+    }
+
+    /// agentresets.com's announced resets as last fetched, verbatim.
+    pub fn announcements_file(&self) -> PathBuf {
+        self.base.join("announcements.json")
+    }
+
+    /// When the announcements were last asked for, as epoch seconds on one
+    /// line, so a failing fetch is still tried at most once an hour.
+    pub fn announcements_checked_file(&self) -> PathBuf {
+        self.base.join("announcements-checked")
+    }
+
+    /// A random secret that keys the public feed's anonymous account keys,
+    /// so they cannot be recomputed from guessable account ids.
+    pub fn public_salt_file(&self) -> PathBuf {
+        self.base.join("public-salt")
+    }
+
+    /// Live readings natural sessions left (Echo writes `claude-<login>.json`).
+    pub fn live_dir(&self) -> PathBuf {
+        self.base.join("live")
     }
 
     /// One JSON object per line: every event a poll noticed, oldest first.
     pub fn events_file(&self) -> PathBuf {
         self.base.join("events.jsonl")
+    }
+
+    /// When the digest hook last ran, as epoch seconds on one line. Kept
+    /// beside the data rather than in the registry: it is a clock, not a
+    /// setting, and a lost file only costs one early digest.
+    pub fn last_digest_file(&self) -> PathBuf {
+        self.base.join("last-digest")
     }
 
     /// Where the launchd agent writes its combined stdout/stderr.

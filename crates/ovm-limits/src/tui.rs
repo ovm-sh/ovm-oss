@@ -12,10 +12,11 @@ use crate::accounts::{self, AddOptions, HomeFate, Selection};
 use crate::paths::{display, LimitsDirs};
 use crate::registry::{Account, Provider, Registry};
 use crate::snapshot::{self, AccountSnapshot};
+use crate::table::{self, Arrangement, Cells, Line};
 use crate::{agent, show, Result};
 use ovm_tui::{
-    confirm_inline, fixed_width_cell, footer, press_any_key, read_line_inline, select_one, style,
-    terminal_width, Footer, Key, Keys, Screen, Term,
+    confirm_inline, footer, press_any_key, read_line_inline, select_one, style, terminal_width,
+    Footer, Key, Keys, Screen, Term,
 };
 
 /// One account as the screen knows it.
@@ -35,11 +36,15 @@ enum Action {
     Login,
     Rename,
     Remove,
-    PollOne,
+    Details,
     PollAll,
     ToggleAgent,
     Events,
     CycleInterval,
+    /// The model has already re-sorted; the new order wants saving.
+    CycleSort,
+    /// The model has already regrouped; the new grouping wants saving.
+    ToggleGroup,
     Quit,
 }
 
@@ -48,15 +53,52 @@ struct Model {
     cursor: usize,
     /// One-shot line under the table, so a key that did something says so.
     notice: Option<String>,
+    /// Secondary windows (Claude's 5h, a Codex reserve) on lines of their own.
+    secondary: bool,
+    /// The row order and grouping, as persisted in the registry.
+    arrangement: Arrangement,
 }
 
 impl Model {
-    fn new(rows: Vec<Row>, cursor: usize, notice: Option<String>) -> Self {
-        let cursor = cursor.min(rows.len().saturating_sub(1));
-        Self {
+    /// The rows in table order, as `arrangement` has it.
+    fn new(
+        rows: Vec<Row>,
+        cursor: usize,
+        notice: Option<String>,
+        arrangement: Arrangement,
+    ) -> Self {
+        let mut model = Self {
             rows,
             cursor,
             notice,
+            secondary: false,
+            arrangement,
+        };
+        model.sort_rows();
+        model.cursor = cursor.min(model.rows.len().saturating_sub(1));
+        model
+    }
+
+    fn sort_rows(&mut self) {
+        let arrangement = self.arrangement;
+        self.rows.sort_by(|a, b| {
+            table::order(
+                arrangement,
+                (a.account.provider, usage_snapshot(a)),
+                (b.account.provider, usage_snapshot(b)),
+            )
+        });
+    }
+
+    /// Re-sort for a new arrangement, the cursor staying on its account.
+    fn rearrange(&mut self, arrangement: Arrangement) {
+        let under_cursor = self.current().map(|row| row.account.id.clone());
+        self.arrangement = arrangement;
+        self.sort_rows();
+        if let Some(id) = under_cursor {
+            if let Some(index) = self.rows.iter().position(|row| row.account.id == id) {
+                self.cursor = index;
+            }
         }
     }
 
@@ -81,8 +123,26 @@ impl Model {
             Key::Char('b') | Key::Char('B') => Action::ToggleAgent,
             Key::Char('e') | Key::Char('E') => Action::Events,
             Key::Char('i') | Key::Char('I') => Action::CycleInterval,
+            Key::Char('w') | Key::Char('W') => {
+                self.secondary = !self.secondary;
+                Action::Continue
+            }
+            Key::Char('s') | Key::Char('S') => {
+                self.rearrange(Arrangement {
+                    sort: self.arrangement.sort.next(),
+                    ..self.arrangement
+                });
+                Action::CycleSort
+            }
+            Key::Char('g') | Key::Char('G') => {
+                self.rearrange(Arrangement {
+                    grouped: !self.arrangement.grouped,
+                    ..self.arrangement
+                });
+                Action::ToggleGroup
+            }
             Key::Escape | Key::Char('q') | Key::Char('Q') => Action::Quit,
-            Key::Enter if has_rows => Action::PollOne,
+            Key::Enter if has_rows => Action::Details,
             Key::Char('l') | Key::Char('L') if has_rows => Action::Login,
             Key::Char('r') | Key::Char('R') if has_rows => Action::Rename,
             Key::Char('d') | Key::Char('D') if has_rows => Action::Remove,
@@ -96,8 +156,11 @@ pub fn run(dirs: &LimitsDirs) -> Result<()> {
     let term = Term::stderr();
     let mut cursor = 0usize;
     let mut notice: Option<String> = None;
+    let mut secondary = false;
     loop {
-        let mut model = Model::new(load_rows(dirs)?, cursor, notice.take());
+        let (rows, arrangement) = load_rows(dirs)?;
+        let mut model = Model::new(rows, cursor, notice.take(), arrangement);
+        model.secondary = secondary;
         let action = {
             let mut screen = Screen::enter(&term)?;
             loop {
@@ -113,6 +176,22 @@ pub fn run(dirs: &LimitsDirs) -> Result<()> {
                 model.notice = None;
                 match model.handle(key) {
                     Action::Continue => continue,
+                    // Saved on the spot, so the next `show` and the next
+                    // visit draw the table the same way.
+                    Action::CycleSort => {
+                        let saved = accounts::set_table_sort(dirs, model.arrangement.sort);
+                        if let Err(error) = saved {
+                            model.notice = Some(error.to_string());
+                        }
+                        continue;
+                    }
+                    Action::ToggleGroup => {
+                        let saved = accounts::set_table_grouped(dirs, model.arrangement.grouped);
+                        if let Err(error) = saved {
+                            model.notice = Some(error.to_string());
+                        }
+                        continue;
+                    }
                     // The two quick questions are asked in place; everything
                     // else needs the plain terminal.
                     Action::Remove => {
@@ -150,6 +229,22 @@ pub fn run(dirs: &LimitsDirs) -> Result<()> {
                         }
                         continue;
                     }
+                    // Switching the poller OFF is asked in place too. On 15
+                    // September 2026 a stray `b` — next to `a` and `e`, both
+                    // harmless — removed the laptop's scheduler with one dim
+                    // line of feedback, and nothing polled for three days
+                    // before anyone noticed. Switching it on stays a single
+                    // key: the worst case there is a poll.
+                    Action::ToggleAgent if agent::is_installed() => {
+                        if !confirm_inline(
+                            &term,
+                            "Switch the background poller off? Nothing polls until it is on again.",
+                        )? {
+                            continue;
+                        }
+                        screen.finish()?;
+                        break Action::ToggleAgent;
+                    }
                     other => {
                         screen.finish()?;
                         break other;
@@ -158,6 +253,7 @@ pub fn run(dirs: &LimitsDirs) -> Result<()> {
             }
         };
         cursor = model.cursor;
+        secondary = model.secondary;
         notice = model.notice.take();
         match action {
             Action::Quit => return Ok(()),
@@ -181,30 +277,28 @@ pub fn run(dirs: &LimitsDirs) -> Result<()> {
                     }
                 });
             }
-            Action::PollOne => {
-                let account = model.current().expect("a row").account.clone();
-                notice = Some(poll_flow(
-                    &term,
-                    dirs,
-                    Selection {
-                        account: Some(account.id),
-                        ..Selection::default()
-                    },
-                ));
+            Action::Details => {
+                let row = model.current().expect("a row");
+                notice = details_flow(&term, dirs, row)?;
             }
             Action::PollAll => notice = Some(poll_flow(&term, dirs, Selection::default())),
             Action::ToggleAgent => notice = Some(toggle_agent(dirs)),
             Action::Events => events_flow(&term, dirs)?,
             Action::CycleInterval => notice = Some(cycle_interval(dirs)),
             Action::Rename => unreachable!("rename completes in place"),
+            Action::CycleSort | Action::ToggleGroup => {
+                unreachable!("the arrangement is saved in place")
+            }
         }
     }
 }
 
-fn load_rows(dirs: &LimitsDirs) -> Result<Vec<Row>> {
+/// Every account with its latest snapshot, and how the table is arranged.
+fn load_rows(dirs: &LimitsDirs) -> Result<(Vec<Row>, Arrangement)> {
     let registry = Registry::load_or_default(&dirs.config_file())?;
+    let arrangement = registry.arrangement();
     let snapshots = snapshot::load_snapshots(dirs)?;
-    Ok(registry
+    let rows = registry
         .accounts
         .into_iter()
         .map(|account| Row {
@@ -215,7 +309,8 @@ fn load_rows(dirs: &LimitsDirs) -> Result<Vec<Row>> {
                 .cloned(),
             account,
         })
-        .collect())
+        .collect();
+    Ok((rows, arrangement))
 }
 
 /// Which product, what label, then the sign-in. Escape at the first question
@@ -257,6 +352,50 @@ fn login_flow(term: &Term, dirs: &LimitsDirs, account: &Account) -> String {
     let _ = term.write_line(&format!("  {} {outcome}", style("→").dim()));
     let _ = press_any_key(term, "press any key to return");
     outcome
+}
+
+/// One account in full on the plain terminal, every window and detail.
+/// Enter polls it from there; any other key goes back to the list.
+fn details_flow(term: &Term, dirs: &LimitsDirs, row: &Row) -> Result<Option<String>> {
+    term.write_line("")?;
+    match &row.snapshot {
+        Some(snapshot) => {
+            let stale = if row.signed_in {
+                Vec::new()
+            } else {
+                vec![snapshot.display()]
+            };
+            let plan = row.account.plan.as_ref();
+            for line in show::render_account(snapshot, snapshot::now(), &stale, plan).lines() {
+                term.write_line(line)?;
+            }
+        }
+        None => {
+            term.write_line(&format!(
+                "  {}  {}",
+                style(row.account.display()).bold(),
+                style("never polled").dim()
+            ))?;
+            if let Some(plan) = &row.account.plan {
+                let today = table::local_day(snapshot::now());
+                let line = format!("plan: {}", show::plan_line(plan, today));
+                term.write_line(&format!("    {}", style(line).dim()))?;
+            }
+        }
+    }
+    term.write_line("")?;
+    term.write_line(&format!(
+        "  {}",
+        style("enter polls it now · any other key returns").dim()
+    ))?;
+    if term.read_key()? != Key::Enter {
+        return Ok(None);
+    }
+    let selection = Selection {
+        account: Some(row.account.id.clone()),
+        ..Selection::default()
+    };
+    Ok(Some(poll_flow(term, dirs, selection)))
 }
 
 /// A poll, narrated on the plain terminal so each account's line is visible
@@ -391,28 +530,15 @@ pub fn ask_yes_no(question: &str) -> Result<bool> {
 
 // ── rendering ────────────────────────────────────────────────────────────
 
-const MIN_ID_WIDTH: usize = 8;
-const MIN_LABEL_WIDTH: usize = 5;
-const MAX_LABEL_WIDTH: usize = 20;
-const POLLED_WIDTH: usize = 10;
-const MIN_USAGE_WIDTH: usize = 12;
-/// Cursor cell, the three fixed gaps, and a margin.
-const ROW_CHROME_WIDTH: usize = 2 + 3 * 2 + 1;
+/// Below this width the footer uses its short words.
+const COMPACT_WIDTH: usize = 100;
+/// The title's margin, and the least gap between the title and the clock.
+const HEADER_MARGIN: usize = 2;
 
 /// Pure, so the whole frame is testable against a fixed clock.
 fn render(model: &Model, now: u64, agent: &str, width: usize) -> Vec<String> {
     let mut lines = vec![String::new()];
-    let count = model.rows.len();
-    let heading = match count {
-        0 => "ovm limits — no accounts yet".to_string(),
-        1 => "ovm limits — 1 account".to_string(),
-        n => format!("ovm limits — {n} accounts"),
-    };
-    lines.push(format!(
-        "  {}  {}",
-        style(heading).bold(),
-        style(agent).dim()
-    ));
+    lines.push(header(model.rows.len(), now, agent, width));
     lines.push(String::new());
 
     if model.rows.is_empty() {
@@ -425,39 +551,17 @@ fn render(model: &Model, now: u64, agent: &str, width: usize) -> Vec<String> {
             lines.push(format!("  {}", style(text).dim()));
         }
     } else {
-        let id_width = model
-            .rows
-            .iter()
-            .map(|row| row.account.id.chars().count())
-            .max()
-            .unwrap_or(0)
-            .max(MIN_ID_WIDTH);
-        let label_width = model
-            .rows
-            .iter()
-            .filter_map(|row| row.account.label.as_ref())
-            .map(|label| label.chars().count())
-            .max()
-            .unwrap_or(0)
-            .clamp(MIN_LABEL_WIDTH, MAX_LABEL_WIDTH);
-        let usage_width = width
-            .saturating_sub(ROW_CHROME_WIDTH + id_width + label_width + POLLED_WIDTH)
-            .max(MIN_USAGE_WIDTH);
-        lines.push(format!(
-            "    {}  {}  {}  {}",
-            style(format!("{:<id_width$}", "id")).dim(),
-            style(format!("{:<label_width$}", "label")).dim(),
-            style(format!("{:<usage_width$}", "usage")).dim(),
-            style("polled").dim()
+        let table_lines: Vec<Line> = model.rows.iter().map(table_line).collect();
+        lines.extend(table::render(
+            &table_lines,
+            &table::Options {
+                now,
+                width,
+                secondary: model.secondary,
+                cursor: Some(model.cursor),
+                grouped: model.arrangement.grouped,
+            },
         ));
-        for (index, row) in model.rows.iter().enumerate() {
-            let cells = render_row(row, now, id_width, label_width, usage_width);
-            if index == model.cursor {
-                lines.push(format!("{}   {cells}", style("›").cyan().bold()));
-            } else {
-                lines.push(format!("    {cells}"));
-            }
-        }
     }
 
     lines.push(String::new());
@@ -465,99 +569,124 @@ fn render(model: &Model, now: u64, agent: &str, width: usize) -> Vec<String> {
         lines.push(format!("  {} {notice}", style("!").yellow().bold()));
         lines.push(String::new());
     }
-    let compact = width < 100;
-    let hints: Vec<(&str, &str)> = if model.rows.is_empty() {
-        vec![("a", "add"), ("b", "agent"), ("q", "quit")]
-    } else if compact {
-        vec![
+    lines.push(footer(&hints(model, width)));
+    lines
+}
+
+/// `ovm limits — 6 accounts` on the left, `Fri 02 Oct 13:26 · agent off ·
+/// Claude every 15m` on the right. The count goes when the line is too
+/// narrow for both.
+fn header(count: usize, now: u64, agent: &str, width: usize) -> String {
+    let right = format!("{} · {agent}", show::local_stamp(now));
+    let full = match count {
+        0 => "ovm limits — no accounts yet".to_string(),
+        1 => "ovm limits — 1 account".to_string(),
+        n => format!("ovm limits — {n} accounts"),
+    };
+    let room = width.saturating_sub(HEADER_MARGIN * 2);
+    let measure = console::measure_text_width;
+    let title = if count > 0 && measure(&full) + HEADER_MARGIN + measure(&right) > room {
+        "ovm limits".to_string()
+    } else {
+        full
+    };
+    let gap = room
+        .saturating_sub(measure(&title) + measure(&right))
+        .max(HEADER_MARGIN);
+    format!(
+        "  {}{}{}",
+        style(title).bold(),
+        " ".repeat(gap),
+        style(right).dim()
+    )
+}
+
+fn hints(model: &Model, width: usize) -> Vec<(&'static str, &'static str)> {
+    if model.rows.is_empty() {
+        return vec![("a", "add"), ("b", "agent"), ("q", "quit")];
+    }
+    let windows = if model.secondary {
+        "hide 5h"
+    } else {
+        "show 5h"
+    };
+    let sort = match model.arrangement.sort {
+        table::SortOrder::Provider => "sort: provider",
+        table::SortOrder::Reset => "sort: reset",
+    };
+    let group = if model.arrangement.grouped {
+        "group: on"
+    } else {
+        "group: off"
+    };
+    if width < COMPACT_WIDTH {
+        return vec![
             ("↑↓", "move"),
-            ("enter", "poll"),
+            ("enter", "details"),
             ("a", "add"),
             ("l", "login"),
             ("r", "rename"),
             ("d", "remove"),
             ("p", "poll all"),
+            ("w", windows),
+            ("s", sort),
+            ("g", group),
             ("e", "events"),
             ("i", "interval"),
             ("b", "agent"),
             ("q", "quit"),
-        ]
-    } else {
-        vec![
-            ("↑↓", "navigate"),
-            ("enter", "poll this one"),
-            ("a", "add"),
-            ("l", "sign in"),
-            ("r", "rename"),
-            ("d", "remove"),
-            ("p", "poll all"),
-            ("e", "events"),
-            ("i", "interval"),
-            ("b", "agent on/off"),
-            ("q", "quit"),
-        ]
-    };
-    lines.push(footer(&hints));
-    lines
+        ];
+    }
+    vec![
+        ("↑↓", "navigate"),
+        ("enter", "details"),
+        ("a", "add"),
+        ("l", "sign in"),
+        ("r", "rename"),
+        ("d", "remove"),
+        ("p", "poll all"),
+        ("w", windows),
+        ("s", sort),
+        ("g", group),
+        ("e", "events"),
+        ("i", "interval"),
+        ("b", "agent on/off"),
+        ("q", "quit"),
+    ]
 }
 
-fn render_row(
-    row: &Row,
-    now: u64,
-    id_width: usize,
-    label_width: usize,
-    usage_width: usize,
-) -> String {
-    let id = fixed_width_cell(&row.account.id, id_width);
-    let label = match &row.account.label {
-        Some(label) => fixed_width_cell(label, label_width),
-        None => style(fixed_width_cell("—", label_width)).dim().to_string(),
-    };
-    let (usage, polled) = usage_cells(row, now, usage_width);
-    format!("{id}  {label}  {usage}  {polled}")
+/// The snapshot whose numbers the row shows, if it shows any.
+fn usage_snapshot(row: &Row) -> Option<&AccountSnapshot> {
+    row.snapshot
+        .as_ref()
+        .filter(|s| row.signed_in && s.error.is_none() && !s.windows.is_empty())
 }
 
-/// The usage column and the age beside it. One state at a time, in the
-/// order a person would want to know: not signed in, failed, never polled,
-/// numbers.
-fn usage_cells(row: &Row, now: u64, usage_width: usize) -> (String, String) {
-    let dim = |text: &str| style(fixed_width_cell(text, usage_width)).dim().to_string();
-    if !row.signed_in {
-        return (dim("not signed in — l to sign in"), String::new());
-    }
-    let Some(snapshot) = &row.snapshot else {
-        return (dim("never polled — enter to poll"), String::new());
-    };
-    let polled = style(show::human(now.saturating_sub(snapshot.captured_at)) + " ago")
-        .dim()
-        .to_string();
-    if let Some(error) = &snapshot.error {
-        let cell = fixed_width_cell(&format!("✗ {error}"), usage_width);
-        return (style(cell).red().to_string(), polled);
-    }
-    if snapshot.windows.is_empty() {
-        return (dim("no windows reported"), polled);
-    }
-    let text = snapshot
-        .windows
-        .iter()
-        .map(|w| show::window_brief(w, now))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let cell = fixed_width_cell(&text, usage_width);
-    let hottest = snapshot
-        .windows
-        .iter()
-        .map(|w| w.used_percent)
-        .fold(0.0_f64, f64::max);
-    let cell = if hottest >= 90.0 {
-        style(cell).red().to_string()
-    } else if hottest >= 70.0 {
-        style(cell).yellow().to_string()
+/// One account as a table row. One state at a time, in the order a person
+/// would want to know: not signed in, never polled, failed, numbers.
+fn table_line(row: &Row) -> Line<'_> {
+    let account = &row.account;
+    let cells = if !row.signed_in && account.live_only {
+        Cells::Message("not signed in — sign in inside its home")
+    } else if !row.signed_in {
+        Cells::Message("not signed in — l to sign in")
     } else {
-        cell
+        match &row.snapshot {
+            None if account.live_only => Cells::Message("live-only — waiting for a session"),
+            None => Cells::Message("never polled — p to poll"),
+            Some(snapshot) => match &snapshot.error {
+                Some(error) => Cells::Error(error),
+                None if snapshot.windows.is_empty() => Cells::Message("no windows reported"),
+                None => Cells::Usage(snapshot),
+            },
+        }
     };
-    (cell, polled)
+    Line {
+        name: account.label.as_deref().unwrap_or(&account.id),
+        provider: account.provider,
+        cells,
+        plan: account.plan.as_ref(),
+    }
 }
 
 #[cfg(test)]
@@ -578,7 +707,12 @@ mod tests {
             label: label.into(),
             used_percent: used,
             resets_at: None,
-            window_minutes: None,
+            // Real lengths, so the row proves the long window leads.
+            window_minutes: match label {
+                "5h" => Some(300),
+                "7d" => Some(7 * 24 * 60),
+                _ => None,
+            },
             last_reset_at: None,
         }
     }
@@ -639,44 +773,190 @@ mod tests {
     #[test]
     fn the_table_shows_one_state_per_row_and_marks_the_cursor() {
         console::set_colors_enabled(false);
-        let model = Model::new(rows(), 1, None);
+        let model = Model::new(rows(), 1, None, Arrangement::default());
         let lines = plain(&render(&model, 1_000_000, "agent off", 120));
-        assert_eq!(lines[1], "  ovm limits — 4 accounts  agent off");
-        assert!(lines[3].starts_with("    id"), "{}", lines[3]);
         assert!(
-            lines[4].starts_with("    claude-1  simcity  5h 66% (resets in 4h 10m) · 7d 91%"),
+            lines[1].starts_with("  ovm limits — 4 accounts  "),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[1].ends_with(&format!("{} · agent off", show::local_stamp(1_000_000))),
+            "{}",
+            lines[1]
+        );
+        assert_eq!(lines[3], "                      left   resets back");
+        assert!(
+            lines[4].starts_with("  simcity    claude     9%   —"),
             "{}",
             lines[4]
         );
-        assert!(lines[4].ends_with("2h 0m ago"), "{}", lines[4]);
+        assert!(!lines[4].contains("66%"), "the 5h window is hidden");
+        assert_eq!(lines[5], "› mochi      claude   ✗ signed out");
+        assert_eq!(lines[6], "  codex-1    codex    never polled — p to poll");
+        assert_eq!(
+            lines[7],
+            "  spare      codex    not signed in — l to sign in"
+        );
+        let footer = lines.last().unwrap();
+        assert!(footer.contains("enter details"), "{footer}");
+        assert!(footer.contains("w show 5h"), "{footer}");
+        assert!(footer.contains("d remove"), "{footer}");
+    }
+
+    /// Two Claude accounts and a Codex one whose reset comes first of all.
+    fn resetting_rows() -> Vec<Row> {
+        let late = Account::new(Provider::Claude, "claude-1", Some("late".into()));
+        let soon = Account::new(Provider::Claude, "claude-2", Some("soon".into()));
+        let codex = Account::new(Provider::Codex, "codex-1", Some("first".into()));
+        vec![
+            Row {
+                snapshot: Some(polled(
+                    &codex,
+                    vec![resetting("codex 1w", 10.0, 1_000_000 + 60)],
+                    None,
+                )),
+                signed_in: true,
+                account: codex,
+            },
+            Row {
+                snapshot: Some(polled(
+                    &late,
+                    vec![resetting("7d", 10.0, 1_000_000 + 5 * 86_400)],
+                    None,
+                )),
+                signed_in: true,
+                account: late,
+            },
+            Row {
+                snapshot: Some(polled(
+                    &soon,
+                    vec![
+                        resetting("5h", 10.0, 1_000_000 + 30),
+                        resetting("7d", 10.0, 1_000_000 + 2 * 86_400),
+                    ],
+                    None,
+                )),
+                signed_in: true,
+                account: soon,
+            },
+        ]
+    }
+
+    fn labels(model: &Model) -> Vec<&str> {
+        model
+            .rows
+            .iter()
+            .map(|row| row.account.label.as_deref().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn rows_sort_by_provider_then_soonest_reset() {
+        let model = Model::new(resetting_rows(), 0, None, Arrangement::default());
+        assert_eq!(labels(&model), ["soon", "late", "first"]);
+    }
+
+    #[test]
+    fn s_cycles_the_sort_and_the_cursor_stays_on_its_account() {
+        console::set_colors_enabled(false);
+        let mut model = Model::new(resetting_rows(), 1, None, Arrangement::default());
+        assert_eq!(model.current().unwrap().account.id, "claude-1");
+        let footer = plain(&render(&model, 1_000_000, "agent off", 120));
         assert!(
-            lines[5].starts_with("›   claude-2  mochi    ✗ signed out"),
+            footer.last().unwrap().contains("s sort: provider"),
+            "{footer:#?}"
+        );
+        assert!(
+            footer.last().unwrap().contains("g group: off"),
+            "{footer:#?}"
+        );
+
+        assert_eq!(model.handle(Key::Char('s')), Action::CycleSort);
+        assert_eq!(model.arrangement.sort, table::SortOrder::Reset);
+        assert_eq!(labels(&model), ["first", "soon", "late"]);
+        assert_eq!(model.current().unwrap().account.id, "claude-1");
+        let lines = plain(&render(&model, 1_000_000, "agent off", 120));
+        assert!(
+            lines.last().unwrap().contains("s sort: reset"),
+            "{lines:#?}"
+        );
+
+        assert_eq!(model.handle(Key::Char('s')), Action::CycleSort);
+        assert_eq!(model.arrangement.sort, table::SortOrder::Provider);
+        assert_eq!(labels(&model), ["soon", "late", "first"]);
+    }
+
+    #[test]
+    fn g_toggles_a_block_per_provider() {
+        console::set_colors_enabled(false);
+        let reset_first = Arrangement {
+            sort: table::SortOrder::Reset,
+            grouped: false,
+        };
+        let mut model = Model::new(resetting_rows(), 0, None, reset_first);
+        assert_eq!(labels(&model), ["first", "soon", "late"]);
+
+        assert_eq!(model.handle(Key::Char('g')), Action::ToggleGroup);
+        assert!(model.arrangement.grouped);
+        assert_eq!(labels(&model), ["soon", "late", "first"]);
+        let lines = plain(&render(&model, 1_000_000, "agent off", 120));
+        assert!(lines[3].starts_with("  Claude Code "), "{lines:#?}");
+        assert!(lines[4].contains("soon"), "{lines:#?}");
+        assert!(lines[5].contains("late"), "{lines:#?}");
+        assert_eq!(lines[6], "");
+        assert!(lines[7].starts_with("  Codex "), "{lines:#?}");
+        assert!(lines[8].contains("first"), "{lines:#?}");
+        assert!(lines.last().unwrap().contains("g group: on"), "{lines:#?}");
+
+        assert_eq!(model.handle(Key::Char('g')), Action::ToggleGroup);
+        assert!(!model.arrangement.grouped);
+        assert_eq!(labels(&model), ["first", "soon", "late"]);
+    }
+
+    #[test]
+    fn w_shows_and_hides_the_secondary_windows() {
+        console::set_colors_enabled(false);
+        let mut model = Model::new(rows(), 0, None, Arrangement::default());
+        let before = plain(&render(&model, 1_000_000, "agent off", 120));
+        assert!(!before.iter().any(|l| l.contains("66%")), "{before:#?}");
+
+        assert_eq!(model.handle(Key::Char('w')), Action::Continue);
+        assert!(model.secondary);
+        let after = plain(&render(&model, 1_000_000, "agent off", 120));
+        assert_eq!(after.len(), before.len() + 1, "{after:#?}");
+        assert!(
+            after[5].starts_with("    5h                 34%   "),
             "{}",
-            lines[5]
+            after[5]
         );
-        assert!(
-            lines[6].contains("codex-1   —        never polled — enter to poll"),
-            "{}",
-            lines[6]
-        );
-        assert!(
-            lines[7].contains("codex-2   spare    not signed in — l to sign in"),
-            "{}",
-            lines[7]
-        );
-        assert!(
-            lines.last().unwrap().contains("d remove"),
-            "{:?}",
-            lines.last()
-        );
+        assert!(after[5].ends_with("in 4h 10m"), "{}", after[5]);
+        assert!(after.last().unwrap().contains("w hide 5h"), "{after:#?}");
+
+        model.handle(Key::Char('w'));
+        assert!(!model.secondary);
+    }
+
+    #[test]
+    fn a_narrow_header_drops_the_account_count() {
+        console::set_colors_enabled(false);
+        let line = plain(&[header(4, 1_000_000, "agent off · Claude every 15m", 60)]).remove(0);
+        assert!(line.starts_with("  ovm limits  "), "{line}");
+        assert!(!line.contains("accounts"), "{line}");
+        assert!(line.ends_with("agent off · Claude every 15m"), "{line}");
     }
 
     #[test]
     fn an_empty_registry_explains_itself_and_offers_only_add() {
         console::set_colors_enabled(false);
-        let model = Model::new(Vec::new(), 0, None);
+        let model = Model::new(Vec::new(), 0, None, Arrangement::default());
         let lines = plain(&render(&model, 0, "agent off", 80));
-        assert_eq!(lines[1], "  ovm limits — no accounts yet  agent off");
+        assert!(
+            lines[1].starts_with("  ovm limits — no accounts yet  "),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[1].ends_with("agent off"), "{}", lines[1]);
         assert!(lines.iter().any(|l| l.contains("never")), "{lines:?}");
         assert_eq!(lines.last().unwrap(), "  a add · b agent · q quit");
     }
@@ -684,7 +964,12 @@ mod tests {
     #[test]
     fn a_notice_sits_between_the_table_and_the_footer() {
         console::set_colors_enabled(false);
-        let model = Model::new(rows(), 0, Some("polled 4 account(s)".into()));
+        let model = Model::new(
+            rows(),
+            0,
+            Some("polled 4 account(s)".into()),
+            Arrangement::default(),
+        );
         let lines = plain(&render(&model, 1_000_000, "agent off", 80));
         let footer_index = lines.len() - 1;
         assert_eq!(lines[footer_index - 2], "  ! polled 4 account(s)");
@@ -692,14 +977,14 @@ mod tests {
 
     #[test]
     fn keys_map_to_actions_and_row_actions_need_a_row() {
-        let mut model = Model::new(rows(), 0, None);
+        let mut model = Model::new(rows(), 0, None, Arrangement::default());
         assert_eq!(model.handle(Key::ArrowDown), Action::Continue);
         assert_eq!(model.cursor, 1);
         assert_eq!(model.handle(Key::Char('k')), Action::Continue);
         assert_eq!(model.cursor, 0);
         assert_eq!(model.handle(Key::ArrowUp), Action::Continue);
         assert_eq!(model.cursor, 0, "stays put at the top");
-        assert_eq!(model.handle(Key::Enter), Action::PollOne);
+        assert_eq!(model.handle(Key::Enter), Action::Details);
         assert_eq!(model.handle(Key::Char('l')), Action::Login);
         assert_eq!(model.handle(Key::Char('r')), Action::Rename);
         assert_eq!(model.handle(Key::Char('d')), Action::Remove);
@@ -707,11 +992,12 @@ mod tests {
         assert_eq!(model.handle(Key::Char('b')), Action::ToggleAgent);
         assert_eq!(model.handle(Key::Char('e')), Action::Events);
         assert_eq!(model.handle(Key::Char('i')), Action::CycleInterval);
+        assert_eq!(model.handle(Key::Char('w')), Action::Continue);
         assert_eq!(model.handle(Key::Char('a')), Action::Add);
         assert_eq!(model.handle(Key::Escape), Action::Quit);
         assert_eq!(model.handle(Key::Char('x')), Action::Continue);
 
-        let mut empty = Model::new(Vec::new(), 5, None);
+        let mut empty = Model::new(Vec::new(), 5, None, Arrangement::default());
         assert_eq!(empty.cursor, 0, "clamped");
         assert_eq!(empty.handle(Key::Enter), Action::Continue);
         assert_eq!(empty.handle(Key::Char('d')), Action::Continue);
@@ -721,7 +1007,12 @@ mod tests {
 
     #[test]
     fn the_cursor_survives_a_row_disappearing() {
-        let model = Model::new(rows().into_iter().take(2).collect(), 3, None);
+        let model = Model::new(
+            rows().into_iter().take(2).collect(),
+            3,
+            None,
+            Arrangement::default(),
+        );
         assert_eq!(model.cursor, 1);
     }
 }

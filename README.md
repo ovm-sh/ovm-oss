@@ -198,11 +198,11 @@ Full loop, including how to keep a fork current: [docs/fork-build-import.md](doc
 ## Development
 
 ```bash
-./scripts/dev-install.sh     # build + install a standalone dev snapshot
-cargo fmt && cargo clippy --all-targets --all-features -- -D warnings && cargo test
+./scripts/dev.sh             # fmt + clippy + tests, then install a standalone dev snapshot
+./scripts/dev.sh --watch     # the same loop on every source change (needs cargo-watch)
 ```
 
-`dev-install.sh` installs a content-addressed snapshot, so the installed commands keep working even if the checkout moves. Rerun it after changes — rebuilding alone doesn't refresh the snapshot, and validating through the installed `ovm` (not `./target/debug/ovm`) is what exercises the real control plane and bundled plugins.
+`dev.sh` wraps `dev-install.sh`, which installs a content-addressed snapshot, so the installed commands keep working even if the checkout moves. Rebuilding alone doesn't refresh the snapshot, and validating through the installed `ovm` (not `./target/debug/ovm`) is what exercises the real control plane and bundled plugins. `ovm self prune` clears the dev snapshots earlier runs left behind.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/architecture.md](docs/architecture.md), and [RELEASING.md](RELEASING.md).
 

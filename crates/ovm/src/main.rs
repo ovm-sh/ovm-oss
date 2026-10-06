@@ -1,3 +1,4 @@
+mod accounts;
 mod autoupdate;
 mod buddy;
 mod bundle_manifest;
@@ -134,6 +135,15 @@ fn run() -> Result<()> {
             }
             "ccy" => {
                 run_yolo_launch(Product::Claude, &args[2..])?;
+                return Ok(());
+            }
+            // One of your Claude accounts, side by side with the others.
+            "run" => {
+                commands::run::run(&args[2..])?;
+                return Ok(());
+            }
+            "accounts" => {
+                commands::run::accounts_command(&args[2..])?;
                 return Ok(());
             }
             "codex" | "cx" => {
@@ -273,7 +283,7 @@ fn run() -> Result<()> {
         Commands::Stats => commands::stats::run(),
         Commands::Story { fast } => commands::story::run(fast),
         Commands::Hatch { story, tldr } => commands::hatch::run(story, tldr),
-        Commands::Statusline => commands::statusline::run(),
+        Commands::Statusline { action } => commands::statusline::run(action.as_deref()),
         Commands::Select { product, version } => {
             commands::select::run_top(product.as_deref(), version.as_deref())
         }
@@ -319,6 +329,7 @@ fn run() -> Result<()> {
             SelfCommands::List => commands::self_manage::list(),
             SelfCommands::Use { version } => commands::self_manage::use_version(&version),
             SelfCommands::Rollback => commands::self_manage::rollback(),
+            SelfCommands::Prune { keep, dry_run } => commands::self_manage::prune(keep, dry_run),
             SelfCommands::RepairControl => commands::self_manage::repair_control(),
             SelfCommands::Uninstall { purge, yes } => commands::self_uninstall::run(purge, yes),
         },

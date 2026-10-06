@@ -48,6 +48,28 @@ read -r line
 exit 0
 "#;
 
+/// A fake Claude whose one turn the API turns away, the way a weekly limit
+/// does: the refusal goes to the session transcript (named by the first
+/// statusline payload) and the statusline runs again without `rate_limits`.
+const RATE_LIMITED_CLAUDE: &str = r#"#!/bin/sh
+settings=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--settings" ]; then settings="$arg"; fi
+  prev="$arg"
+done
+cmd=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["statusLine"]["command"])' "$settings")
+transcript="$PWD/transcript.jsonl"
+: > "$transcript"
+printf '%s' '{"model":{"id":"claude-haiku"},"transcript_path":"'"$transcript"'"}' | sh -c "$cmd"
+read -r line
+printf '%s\n' '{"type":"user","message":{"role":"user","content":"'"$line"'"}}' >> "$transcript"
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You\u0027ve hit your weekly limit \u00b7 resets Sep 17 at 10pm (Europe/Lisbon)"}]},"error":"rate_limit","isApiErrorMessage":true}' >> "$transcript"
+printf '%s' '{"model":{"id":"claude-haiku"},"cost":{"total_cost_usd":0},"transcript_path":"'"$transcript"'"}' | sh -c "$cmd"
+read -r line
+exit 0
+"#;
+
 const FAKE_CODEX: &str = r#"#!/bin/sh
 [ "$1" = "app-server" ] || { echo "expected app-server" >&2; exit 3; }
 [ -n "$CODEX_HOME" ] || { echo "CODEX_HOME not set" >&2; exit 4; }
@@ -124,6 +146,8 @@ fn limits(fixture: &Fixture) -> Command {
             fixture._temp.path().join("agents"),
         )
         .env("OVM_LIMITS_NO_LAUNCHCTL", "1")
+        // No network: the announcements fetch is off.
+        .env("OVM_LIMITS_ANNOUNCEMENTS_URL", "")
         .env("OVM_LIMITS_CLAUDE_CMD", &fixture.fake_claude)
         .env("OVM_LIMITS_CODEX_CMD", &fixture.fake_codex);
     command
@@ -400,7 +424,8 @@ fn poll_due_spends_a_claude_turn_only_when_the_interval_or_a_reset_says_so() {
     assert_eq!(captured_at(&first, "claude"), t0);
     assert_eq!(captured_at(&first, "codex"), t0);
 
-    // Five minutes later: Codex again (free), Claude untouched, and quiet.
+    // Five minutes later: nothing is due. Codex's RPC is free but a poll is
+    // not — it runs the on-poll hooks — so it waits for the interval too.
     let tick = limits(&fixture)
         .env("OVM_LIMITS_FAKE_NOW", (t0 + 300).to_string())
         .args(["poll", "--due"])
@@ -416,7 +441,11 @@ fn poll_due_spends_a_claude_turn_only_when_the_interval_or_a_reset_says_so() {
         t0,
         "inside the interval, no reset yet"
     );
-    assert_eq!(captured_at(&second, "codex"), t0 + 300);
+    assert_eq!(
+        captured_at(&second, "codex"),
+        t0,
+        "a free RPC is still a poll, and a poll runs the hooks"
+    );
 
     // The 5h window reset at 1788618000 → the next tick after it polls Claude
     // even though the hour has not passed.
@@ -504,6 +533,57 @@ fn agent_install_writes_the_plist_and_uninstall_removes_everything() {
 }
 
 #[test]
+fn a_paused_account_is_skipped_kept_and_comes_back_on_resume() {
+    let fixture = fixture(FAKE_CODEX);
+    configure(&fixture);
+    limits(&fixture).arg("poll").assert().success();
+    assert_eq!(merged(&fixture)["accounts"].as_array().unwrap().len(), 2);
+
+    limits(&fixture)
+        .args(["pause", "work"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("paused"));
+    let after_pause = merged(&fixture);
+    let names: Vec<&str> = after_pause["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["codex-1"],
+        "a paused account leaves limits.json"
+    );
+    assert!(
+        fixture.claude_home.exists(),
+        "pausing never touches the home"
+    );
+    limits(&fixture)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("(paused)"));
+    limits(&fixture)
+        .args(["poll", "--account", "work"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("is paused"));
+    // A plain poll still succeeds and only the live account is polled.
+    limits(&fixture).arg("poll").assert().success();
+    assert_eq!(merged(&fixture)["accounts"].as_array().unwrap().len(), 1);
+
+    limits(&fixture)
+        .args(["resume", "work"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("resumed"));
+    limits(&fixture).arg("poll").assert().success();
+    assert_eq!(merged(&fixture)["accounts"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn poll_then_show_covers_both_providers() {
     let fixture = fixture(FAKE_CODEX);
     configure(&fixture);
@@ -559,18 +639,141 @@ fn poll_then_show_covers_both_providers() {
 
     let table = limits(&fixture).arg("show").assert().success();
     let text = String::from_utf8_lossy(&table.get_output().stdout).into_owned();
+    // One caption, then one row per account: Claude first, by label.
+    assert!(text.contains("left   resets back"), "{text}");
+    let work = text.find("work ").expect("the claude row");
+    let spare = text.find("spare ").expect("the codex row");
+    assert!(work < spare, "{text}");
+    assert!(text.contains("claude"), "{text}");
+    assert!(text.contains("% "), "{text}");
+    assert!(!text.contains("used"), "{text}");
+    assert!(text.contains("↺ 1 reset available"), "{text}");
+
+    // One account in full: every window, in the same words.
+    let detail = limits(&fixture)
+        .args(["show", "claude-1"])
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&detail.get_output().stdout).into_owned();
     assert!(text.contains("claude-1 (work)"), "{text}");
-    assert!(text.contains("5h"), "{text}");
+    assert!(text.find("7d") < text.find("5h"), "{text}");
+    assert!(text.contains("% left"), "{text}");
+    assert!(text.contains("poll: on claude-haiku"), "{text}");
+    let detail = limits(&fixture).args(["show", "spare"]).assert().success();
+    let text = String::from_utf8_lossy(&detail.get_output().stdout).into_owned();
     assert!(text.contains("codex-1 (spare) (pro)"), "{text}");
     assert!(
         text.contains("reset credit: Full reset (available"),
         "{text}"
     );
-    assert!(text.contains("poll: on claude-haiku"), "{text}");
 
     let json = limits(&fixture).args(["show", "--json"]).assert().success();
     let shown: Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
     assert_eq!(shown, merged);
+
+    // A plan recorded by hand: the registry keeps it, the table and the
+    // detail say when it ends, and --json only gains a `subscription` object.
+    limits(&fixture)
+        .args(["plan", "spare"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("no plan recorded"));
+    limits(&fixture)
+        .args([
+            "plan",
+            "spare",
+            "--name",
+            "Example Pro 100",
+            "--status",
+            "cancelled",
+            "--ends",
+            "2099-10-30",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "codex-1 (spare): Example Pro 100 · cancelled · access until Fri 30 Oct 2099",
+        ));
+    assert_eq!(
+        registry(&fixture)["accounts"][1]["plan"],
+        serde_json::json!({
+            "name": "Example Pro 100",
+            "status": "cancelled",
+            "ends_on": "2099-10-30"
+        })
+    );
+    let show_text = |args: &[&str]| -> String {
+        let out = limits(&fixture).args(args).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).into_owned()
+    };
+    assert!(show_text(&["show"]).contains("↺ 1 reset available · ends 30 Oct"));
+    assert!(show_text(&["show", "spare"]).contains("plan: Example Pro 100 · cancelled"));
+    let json = limits(&fixture).args(["show", "--json"]).assert().success();
+    let mut shown: Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(
+        shown["accounts"][1]["plan"], "pro",
+        "the product's plan stays"
+    );
+    assert_eq!(
+        shown["accounts"][1]["subscription"],
+        registry(&fixture)["accounts"][1]["plan"]
+    );
+    assert!(shown["accounts"][0].get("subscription").is_none());
+    shown["accounts"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("subscription");
+    assert_eq!(shown, merged, "nothing else changed");
+    limits(&fixture)
+        .args(["plan", "spare", "--status", "cancelled", "--clear"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("alone"));
+    limits(&fixture)
+        .args(["plan", "spare", "--ends", "30/10/2099"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("YYYY-MM-DD"));
+    limits(&fixture)
+        .args(["plan", "spare", "--clear"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("plan forgotten"));
+    assert!(registry(&fixture)["accounts"][1].get("plan").is_none());
+
+    // The arrangement is a setting, and a flag changes it for one call.
+    limits(&fixture)
+        .args(["group", "on"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("one block per provider"));
+    limits(&fixture)
+        .args(["sort", "reset"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("soonest reset"));
+    assert_eq!(registry(&fixture)["table_grouped"], true);
+    assert_eq!(registry(&fixture)["table_sort"], "reset");
+    let grouped = show_text(&["show"]);
+    assert!(grouped.contains("Claude Code"), "{grouped}");
+    assert!(grouped.contains("\n\n  Codex"), "{grouped}");
+    let flat = show_text(&["show", "--no-group", "--sort", "provider"]);
+    assert!(!flat.contains("Claude Code"), "{flat}");
+    assert!(flat.find("work ") < flat.find("spare "), "{flat}");
+    // The setting is untouched by the flag.
+    assert_eq!(registry(&fixture)["table_grouped"], true);
+    // --json is the file, whatever the arrangement.
+    let json = limits(&fixture)
+        .args(["show", "--json", "--sort", "reset", "--group"])
+        .assert()
+        .success();
+    let shown: Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(shown, merged);
+    limits(&fixture)
+        .args(["show", "--sort", "name"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--sort provider|reset"));
 }
 
 #[test]
@@ -591,6 +794,47 @@ fn a_signed_out_account_is_recorded_as_a_failure_and_poll_exits_nonzero() {
         .as_str()
         .unwrap()
         .contains("not logged in"));
+    assert!(accounts[0]["windows"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_turn_the_api_turns_away_is_reported_in_its_own_words_without_waiting() {
+    // 2026-09-15: an account at 100% of its weekly limit had its turn refused
+    // on every poll. The statusline still ran, without windows, so the poll
+    // sat out its full wait and then blamed the plan ("this only appears for
+    // Claude.ai Pro/Max logins"). The refusal must be named instead, and fast.
+    let fixture = fixture(FAKE_CODEX);
+    configure(&fixture);
+    let claude = script(
+        fixture._temp.path(),
+        "claude-rate-limited",
+        RATE_LIMITED_CLAUDE,
+    );
+
+    let started = std::time::Instant::now();
+    limits(&fixture)
+        .env("OVM_LIMITS_CLAUDE_CMD", &claude)
+        .args(["poll", "--only", "claude"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("out of quota"))
+        .stderr(predicates::str::contains(
+            "You've hit your weekly limit · resets Sep 17 at 10pm (Europe/Lisbon)",
+        ))
+        .stderr(predicates::prelude::PredicateBooleanExt::not(
+            predicates::str::contains("Pro/Max logins"),
+        ));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "a refusal must not wait out the 90s limits timeout: {:?}",
+        started.elapsed()
+    );
+
+    let merged = merged(&fixture);
+    let accounts = merged["accounts"].as_array().unwrap();
+    assert_eq!(accounts.len(), 1, "only claude was polled");
+    let error = accounts[0]["error"].as_str().unwrap();
+    assert!(error.starts_with("out of quota"), "{error}");
     assert!(accounts[0]["windows"].as_array().unwrap().is_empty());
 }
 
@@ -658,10 +902,19 @@ fn a_surprise_reset_is_noticed_published_and_handed_to_the_hooks() {
         .assert()
         .success();
     limits(&fixture)
+        .args(["hook", "on-digest"])
+        .arg(format!(
+            "echo \"digest $OVM_LIMITS_POLLED\" >> '{}'",
+            seen.display()
+        ))
+        .assert()
+        .success();
+    limits(&fixture)
         .args(["hook", "list"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("on-event  echo"));
+        .stdout(predicates::str::contains("on-event   echo"))
+        .stdout(predicates::str::contains("on-digest  echo"));
 
     // Poll 1: 64% used, window resets far ahead.
     let t0: u64 = 1_788_617_000;
@@ -692,6 +945,8 @@ fn a_surprise_reset_is_noticed_published_and_handed_to_the_hooks() {
         "{log}"
     );
     assert!(log.contains("surprise_reset 5h Claude Code 5h window reset early · claude-1 (work) · was 70%, now 2%"), "{log}");
+    // The digest follows every poll, after the on-poll hook.
+    assert!(log.contains("poll 1 0\ndigest 1\n"), "{log}");
     assert!(
         log.contains("reset 5h Claude Code 5h window rolled over"),
         "{log}"
@@ -733,11 +988,14 @@ fn a_surprise_reset_is_noticed_published_and_handed_to_the_hooks() {
     let feed: Value =
         serde_json::from_str(&fs::read_to_string(fixture.home.join("resets.json")).unwrap())
             .unwrap();
-    assert_eq!(feed["schema"], "ovm-limits/resets-v1");
+    assert_eq!(feed["schema"], "ovm-limits/resets-v2");
     let resets = feed["resets"].as_array().unwrap();
-    assert_eq!(resets.len(), 1, "only the surprise reset is public");
+    assert_eq!(resets.len(), 1, "only the early reset is public");
+    assert_eq!(resets[0]["kind"], "early_reset");
     assert_eq!(resets[0]["window_label"], "5h");
     assert_eq!(resets[0]["provider"], "claude");
+    assert_eq!(resets[0]["before_percent"], 70, "the second poll read 70%");
+    assert_eq!(resets[0]["simultaneous"], 1);
     let text = fs::read_to_string(fixture.home.join("resets.json")).unwrap();
     for private in ["used_percent", "work", "claude-1", "\"host\""] {
         assert!(
@@ -781,12 +1039,14 @@ fn the_interval_and_the_agent_schedule_are_one_setting() {
     let merged = merged(&fixture);
     assert_eq!(merged["interval_minutes"], 30);
     assert_eq!(merged["last_poll_at"], 1_788_617_000);
-    // Codex is due at the next tick, five minutes on.
-    assert_eq!(merged["next_poll_at"], 1_788_617_000 + 300);
+    // Nothing is due for half an hour — except that the fake Claude's 5h
+    // window resets at 1788618000, which comes first; the answer is the tick
+    // after that reset.
+    assert_eq!(merged["next_poll_at"], 1_788_617_000 + 1_200);
     let feed: Value =
         serde_json::from_str(&fs::read_to_string(fixture.home.join("resets.json")).unwrap())
             .unwrap();
-    assert_eq!(feed["next_poll_at"], 1_788_617_000 + 300);
+    assert_eq!(feed["next_poll_at"], 1_788_617_000 + 1_200);
     assert_eq!(feed["poll_every_minutes"], 30);
     // hook test fires a synthetic surprise reset through on-event.
     let seen = fixture._temp.path().join("seen.txt");
@@ -831,4 +1091,355 @@ fn version_and_help_answer_on_a_bare_machine() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("unknown command"));
+}
+
+#[test]
+fn a_live_reading_refreshes_the_account_defers_the_paid_poll_and_fires_no_hook() {
+    let fixture = fixture(FAKE_CODEX);
+    configure(&fixture);
+    // The login the poll home holds; the poll records it on the snapshot.
+    fs::write(
+        fixture.claude_home.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"uuid-e2e"}}"#,
+    )
+    .unwrap();
+    let hooked = fixture._temp.path().join("on-poll-ran");
+    let t0: u64 = 1_788_617_000;
+    limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", t0.to_string())
+        .args(["poll", "--due"])
+        .assert()
+        .success();
+    let first = merged(&fixture);
+    let claude = |doc: &Value| -> Value {
+        doc["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["provider"] == "claude")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(claude(&first)["account_id"], "uuid-e2e");
+
+    limits(&fixture)
+        .args(["hook", "on-poll"])
+        .arg(format!("touch '{}'", hooked.display()))
+        .assert()
+        .success();
+
+    // Echo, in a natural session twenty minutes later — after the fake
+    // account's 5h window reset at 1788618000 — saw the 7d window move and the
+    // new 5h window open.
+    let live = fixture.home.join("live");
+    fs::create_dir_all(&live).unwrap();
+    fs::write(
+        live.join("claude-uuid-e2e.json"),
+        serde_json::json!({
+            "schema": "ovm-limits-live/v1", "provider": "claude", "account_id": "uuid-e2e",
+            "at": t0 + 1_200,
+            "windows": {
+                "five_hour": {"used_percentage": 3, "resets_at": 1_788_636_000u64},
+                "seven_day": {"used_percentage": 50, "resets_at": 1_788_771_600u64}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", (t0 + 1_500).to_string())
+        .args(["poll", "--due"])
+        .assert()
+        .success();
+    let after = claude(&merged(&fixture));
+    // The 5h reset would have made the paid poll due; the live reading
+    // already confirmed it.
+    assert_eq!(after["captured_at"], t0 + 1_200, "{after}");
+    assert_eq!(after["source"], "live");
+    let seven = after["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "seven_day")
+        .unwrap()
+        .clone();
+    assert_eq!(seven["used_percent"], 50.0);
+    assert_eq!(after["window_sources"]["seven_day"]["source"], "live");
+    assert_eq!(after["window_sources"]["five_hour"]["source"], "live");
+    // That merge noticed a real event (the 5h window rolled over), and events
+    // do publish. What must never happen is a quiet merge running the hooks:
+    // Echo refreshes every minute, and that would be a publish per tick.
+    let _ = fs::remove_file(&hooked);
+    fs::write(
+        live.join("claude-uuid-e2e.json"),
+        serde_json::json!({
+            "schema": "ovm-limits-live/v1", "provider": "claude", "account_id": "uuid-e2e",
+            "at": t0 + 1_800,
+            "windows": {
+                "five_hour": {"used_percentage": 4, "resets_at": 1_788_636_000u64},
+                "seven_day": {"used_percentage": 51, "resets_at": 1_788_771_600u64}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", (t0 + 1_900).to_string())
+        .args(["poll", "--due"])
+        .assert()
+        .success();
+    assert_eq!(claude(&merged(&fixture))["captured_at"], t0 + 1_800);
+    assert!(
+        !hooked.exists(),
+        "a quiet live merge must not run the on-poll hooks"
+    );
+
+    // An hour after the first poll the paid poll would have been due; the
+    // live reading moved the clock, so it is not.
+    limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", (t0 + 3_700).to_string())
+        .args(["poll", "--due"])
+        .assert()
+        .success();
+    assert_eq!(claude(&merged(&fixture))["captured_at"], t0 + 1_800);
+}
+
+#[test]
+fn a_signed_in_home_gets_live_numbers_without_ever_being_polled() {
+    let fixture = fixture(FAKE_CODEX);
+    configure(&fixture);
+    fs::write(
+        fixture.claude_home.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"uuid-fresh"}}"#,
+    )
+    .unwrap();
+    let live = fixture.home.join("live");
+    fs::create_dir_all(&live).unwrap();
+    let t0: u64 = 1_788_617_000;
+    fs::write(
+        live.join("claude-uuid-fresh.json"),
+        serde_json::json!({
+            "schema": "ovm-limits-live/v1", "provider": "claude", "account_id": "uuid-fresh",
+            "at": t0 - 60,
+            "windows": {
+                "five_hour": {"used_percentage": 7, "resets_at": t0 + 9_000},
+                "seven_day": {"used_percentage": 33, "resets_at": t0 + 400_000}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // A fake Claude that would fail loudly if the paid poll ran.
+    let tick = limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", t0.to_string())
+        .env("OVM_LIMITS_CLAUDE_CMD", "/nonexistent/claude-must-not-run")
+        .args(["poll", "--due"])
+        .assert()
+        .success();
+    let merged = merged(&fixture);
+    let claude = merged["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["provider"] == "claude")
+        .unwrap()
+        .clone();
+    assert_eq!(claude["source"], "live", "{claude}");
+    assert_eq!(claude["account_id"], "uuid-fresh");
+    assert_eq!(claude["captured_at"], t0 - 60);
+    assert!(claude["error"].is_null(), "{claude}");
+    let stderr = String::from_utf8_lossy(&tick.get_output().stderr).into_owned();
+    assert!(!stderr.contains("claude-must-not-run"), "{stderr}");
+}
+
+#[test]
+fn a_live_codex_reading_of_the_main_meter_replaces_the_free_poll() {
+    let fixture = fixture(FAKE_CODEX);
+    configure(&fixture);
+    let t0: u64 = 1_788_617_000;
+    limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", t0.to_string())
+        .args(["poll", "--due"])
+        .assert()
+        .success();
+    // A natural Codex session (default home, ~/.codex) an hour and a bit later.
+    let day = fixture._temp.path().join(".codex/sessions/2026/09/06");
+    fs::create_dir_all(&day).unwrap();
+    let meta = r#"{"type":"session_meta","payload":{"cli_version":"0.158.0","creator_account_id":"acct-1"}}"#;
+    let event = r#"{"timestamp":"2026-09-06T14:15:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":44.0,"window_minutes":10080,"resets_at":1789192025},"secondary":null}}}"#;
+    fs::write(day.join("rollout-live.jsonl"), format!("{meta}\n{event}\n")).unwrap();
+
+    // Due by the clock; the fake app-server would fail loudly if it ran.
+    limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", (t0 + 4_200).to_string())
+        .env("OVM_LIMITS_CODEX_CMD", "/nonexistent/codex-must-not-run")
+        .args(["poll", "--due", "--only", "codex"])
+        .assert()
+        .success();
+    let merged = merged(&fixture);
+    let codex = merged["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["provider"] == "codex")
+        .unwrap()
+        .clone();
+    assert_eq!(codex["source"], "live", "{codex}");
+    assert!(codex["error"].is_null(), "{codex}");
+    let main = codex["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "codex.primary")
+        .unwrap()
+        .clone();
+    assert_eq!(main["used_percent"], 44.0);
+}
+
+#[test]
+fn a_live_only_team_seat_is_never_polled_and_shows_without_a_weekly_meter() {
+    let fixture = fixture(FAKE_CODEX);
+    limits(&fixture)
+        .args(["add", "codex", "c", "--live-only", "--no-login", "--home"])
+        .arg(&fixture.codex_home)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("claude accounts only"));
+    let seat = fixture._temp.path().join("claude-accounts").join("client");
+    fs::create_dir_all(&seat).unwrap();
+    fs::write(
+        seat.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"uuid-seat","organizationUuid":"org-1",
+            "organizationName":"Acme","organizationType":"claude_team","seatTier":"standard"}}"#,
+    )
+    .unwrap();
+
+    // Live-only needs the home its sessions run in.
+    limits(&fixture)
+        .args(["add", "claude", "client", "--live-only", "--no-login"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--live-only needs --home"));
+    limits(&fixture)
+        .args([
+            "add",
+            "claude",
+            "client",
+            "--live-only",
+            "--no-login",
+            "--home",
+        ])
+        .arg(&seat)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("live-only"));
+    // A second account on the same login would count the allowance twice.
+    limits(&fixture)
+        .args(["add", "claude", "again", "--no-login", "--home"])
+        .arg(&seat)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("one account per login"));
+    // Stored apart, in a file a build that would poll it never reads or
+    // writes, under an id from a sequence that build cannot hand out.
+    let stored = registry(&fixture);
+    assert!(
+        stored["accounts"].as_array().is_none_or(Vec::is_empty),
+        "{stored}"
+    );
+    assert!(stored.get("live_accounts").is_none(), "{stored}");
+    let live_accounts: Value =
+        serde_json::from_str(&fs::read_to_string(fixture.home.join("live-accounts.json")).unwrap())
+            .unwrap();
+    assert_eq!(live_accounts["accounts"][0]["id"], "claude-live-1");
+
+    // An explicit poll of it is refused: there is nothing to poll.
+    limits(&fixture)
+        .args(["poll", "--account", "client"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("live-only"));
+
+    // A team seat's statusline: a session window, no weekly one.
+    let live = fixture.home.join("live");
+    fs::create_dir_all(&live).unwrap();
+    let t0: u64 = 1_788_617_000;
+    fs::write(
+        live.join("claude-uuid-seat--s1.json"),
+        serde_json::json!({
+            "schema": "ovm-limits-live/v1", "provider": "claude", "account_id": "uuid-seat",
+            "at": t0 - 30,
+            "windows": { "five_hour": {"used_percentage": 12, "resets_at": t0 + 9_000} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // A plain poll (not the background tick) still takes a live-only
+    // account's reading, and runs no product at all.
+    let poll = limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", t0.to_string())
+        .env("OVM_LIMITS_CLAUDE_CMD", "/nonexistent/claude-must-not-run")
+        .arg("poll")
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&poll.get_output().stderr).into_owned();
+    assert!(!stderr.contains("claude-must-not-run"), "{stderr}");
+
+    let merged = merged(&fixture);
+    let seat = &merged["accounts"][0];
+    assert_eq!(seat["source"], "live", "{seat}");
+    assert_eq!(seat["kind"], "team");
+    assert_eq!(seat["org"], "Acme");
+    assert_eq!(seat["org_id"], "org-1");
+    assert_eq!(seat["live_only"], true);
+    let windows: Vec<&str> = seat["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(windows, ["five_hour"]);
+
+    let show = limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", t0.to_string())
+        .args(["show", "--brief"])
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&show.get_output().stdout).into_owned();
+    assert!(text.contains("team · Acme · live-only"), "{text}");
+    assert!(!text.contains("7d"), "{text}");
+
+    // `/login` inside the home moves the account to the new login; nothing
+    // polls it, so the home is what says so.
+    fs::write(
+        fixture
+            ._temp
+            .path()
+            .join("claude-accounts/client/.claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"uuid-seat-2","organizationType":"claude_team"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        live.join("claude-uuid-seat-2--s2.json"),
+        serde_json::json!({
+            "schema": "ovm-limits-live/v1", "provider": "claude", "account_id": "uuid-seat-2",
+            "at": t0 + 60,
+            "windows": { "five_hour": {"used_percentage": 3, "resets_at": t0 + 17_000} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    limits(&fixture)
+        .env("OVM_LIMITS_FAKE_NOW", (t0 + 90).to_string())
+        .env("OVM_LIMITS_CLAUDE_CMD", "/nonexistent/claude-must-not-run")
+        .args(["poll", "--due"])
+        .assert()
+        .success();
+    let after: Value =
+        serde_json::from_str(&fs::read_to_string(fixture.home.join("limits.json")).unwrap())
+            .unwrap();
+    let seat = &after["accounts"][0];
+    assert_eq!(seat["account_id"], "uuid-seat-2", "{seat}");
+    assert_eq!(seat["windows"][0]["used_percent"], 3.0, "{seat}");
 }

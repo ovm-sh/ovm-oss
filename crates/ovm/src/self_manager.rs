@@ -618,16 +618,36 @@ impl SelfManager {
     }
 
     pub fn prune_inactive_dev_versions(&self) -> Result<Vec<String>> {
+        self.prune_dev_versions_keeping(0)
+    }
+
+    /// The inactive dev snapshots that `prune_dev_versions_keeping(keep)`
+    /// would remove: everything `dev-` past the `keep` newest, never the
+    /// current or previous version, never a release. Newest-first is the
+    /// list order (dev snapshots sort by install time), so what survives is
+    /// what was built most recently. Backs `ovm self prune --dry-run`.
+    pub fn prunable_dev_versions(&self, keep: usize) -> Result<Vec<String>> {
         let current = self.current_version()?;
         let previous = self.previous_version()?;
+        Ok(self
+            .list_versions()?
+            .into_iter()
+            .filter(|version| {
+                version.starts_with("dev-")
+                    && current.as_deref() != Some(version)
+                    && previous.as_deref() != Some(version)
+            })
+            .skip(keep)
+            .collect())
+    }
+
+    /// Remove the inactive dev snapshots past the `keep` newest. Every
+    /// `dev-install.sh` run leaves a content-addressed snapshot behind and
+    /// nothing else ever removed them: 69 of them (711 MB) had piled up by
+    /// 2026-09-15. Returns the removed versions.
+    pub fn prune_dev_versions_keeping(&self, keep: usize) -> Result<Vec<String>> {
         let mut removed = Vec::new();
-        for version in self.list_versions()? {
-            if !version.starts_with("dev-")
-                || current.as_deref() == Some(&version)
-                || previous.as_deref() == Some(&version)
-            {
-                continue;
-            }
+        for version in self.prunable_dev_versions(keep)? {
             std::fs::remove_dir_all(self.version_dir(&version))?;
             removed.push(version);
         }
@@ -1515,6 +1535,45 @@ mod tests {
         assert!(manager.is_complete("dev-one"));
         assert!(manager.is_complete("dev-two"));
         assert!(manager.is_complete("0.1.0"));
+    }
+
+    #[test]
+    fn pruning_keeps_the_newest_inactive_dev_snapshots() {
+        let temp = tempdir().unwrap();
+        let manager = manager(temp.path());
+        let manifest = fixture_manifest(&[]);
+        // Installed oldest to newest; dev snapshots order by install time,
+        // read from the completion marker, so the stamps go on the marker.
+        let order = [
+            "dev-old", "dev-mid", "dev-new", "dev-cur", "dev-prev", "0.1.0",
+        ];
+        for (index, version) in order.iter().enumerate() {
+            let source = fixture_source(temp.path(), &manifest, version);
+            manager.install_bundle(version, &manifest, &source).unwrap();
+            let stamp = filetime::FileTime::from_unix_time(1_700_000_000 + index as i64 * 60, 0);
+            filetime::set_file_mtime(manager.version_dir(version).join(COMPLETE_MARKER), stamp)
+                .unwrap();
+        }
+        manager.use_version("dev-prev").unwrap();
+        manager.use_version("dev-cur").unwrap();
+
+        assert_eq!(
+            manager.prunable_dev_versions(1).unwrap(),
+            vec!["dev-mid", "dev-old"],
+            "the newest inactive one survives; current and previous are not candidates"
+        );
+        assert_eq!(
+            manager.prune_dev_versions_keeping(1).unwrap(),
+            vec!["dev-mid", "dev-old"]
+        );
+        for kept in ["dev-new", "dev-cur", "dev-prev", "0.1.0"] {
+            assert!(manager.is_complete(kept), "{kept} must survive");
+        }
+        assert!(manager.prunable_dev_versions(1).unwrap().is_empty());
+        assert_eq!(
+            manager.prune_dev_versions_keeping(0).unwrap(),
+            vec!["dev-new"]
+        );
     }
 
     #[test]

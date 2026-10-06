@@ -9,6 +9,9 @@ use std::process::{Command, Stdio};
 
 /// Launch a managed product with the active or overridden version.
 pub fn run(product: Product, args: &[String]) -> Result<()> {
+    if product == Product::Claude {
+        super::run::apply_binding();
+    }
     let vm = VersionManager::new(product)?;
     // Heal a machine that manages a product but is missing its yolo shims —
     // an install from before they were written on every path, or a tour that
@@ -148,6 +151,9 @@ pub fn run(product: Product, args: &[String]) -> Result<()> {
 
     if product == Product::Claude {
         command.env_remove("CLAUDECODE");
+        // An installed Echo follows the ovm that launches it; best-effort,
+        // silent, and never where Echo was not installed.
+        let _ = crate::claude_settings::refresh_installed(&vm.dirs.base);
     }
 
     let status = if version_request && dev_metadata.is_some() {
@@ -802,8 +808,8 @@ fn launch_environment(
 
 /// If a fresh cache entry says a newer upstream version exists than what's active,
 /// print a one-line nudge to stderr. Suppressed when stderr isn't a tty, when
-/// `OVM_QUIET=1`, when a dev launch is in progress, or when the user turned
-/// update checks off.
+/// `OVM_QUIET=1`, when the launch asked for no auto-update, when a dev launch is
+/// in progress, or when the user turned update checks off.
 fn maybe_emit_update_banner(
     product: Product,
     active_version: &str,
@@ -815,6 +821,16 @@ fn maybe_emit_update_banner(
         return;
     }
     if std::env::var("OVM_QUIET").is_ok_and(|v| !v.is_empty() && v != "0") {
+        return;
+    }
+    // A limits poll launches through `ovm <product>` with OVM_NO_AUTO_UPDATE
+    // set, in a PTY — so the tty check above does not save it, and the banner
+    // lands on the poll's own screen. Claude Code then never reaches its
+    // statusline and the poll fails as "a screen this poll could not dismiss"
+    // (seen 10 times in the fortnight to 2026-09-20). Nobody reads a banner
+    // printed into a throwaway session: if the launch already said it does not
+    // want a new version now, it does not want to hear about one either.
+    if !force && std::env::var("OVM_NO_AUTO_UPDATE").is_ok_and(|v| !v.is_empty() && v != "0") {
         return;
     }
 

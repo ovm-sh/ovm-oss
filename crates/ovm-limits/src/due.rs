@@ -1,24 +1,23 @@
 //! When is an account worth a poll?
 //!
 //! The background agent ticks every five minutes so that resets are noticed
-//! promptly, but a Claude poll is a real turn. So: Codex is always due (the
-//! RPC is free), and a Claude account is due when it has never been polled,
-//! when the configured interval has passed, or when one of its windows has
-//! reset since the last snapshot — that last poll is what turns "the 5h window
-//! should have reset by now" into "it did".
+//! promptly, but polling on every tick is not free even when the RPC is. An
+//! account — either provider — is due when it has never been polled, when the
+//! configured interval has passed, or when one of its windows has reset since
+//! the last snapshot; that last poll is what turns "the 5h window should have
+//! reset by now" into "it did".
+//!
+//! Codex used to be due every tick, on the reasoning that `app-server` costs
+//! nothing. The RPC is free; a poll is not. Every poll that polls *anything*
+//! runs the `on_poll` hooks, so one free Codex account turned an hourly digest
+//! into a push every five minutes (288 a day), rate-limited the publish step
+//! to 429s, and gave the app-server's startup hang 288 chances a day to fire
+//! instead of 48. Measured on the M4, 2026-09-20.
 
-use crate::registry::{Account, Provider, Registry};
+use crate::registry::Registry;
 use crate::snapshot::AccountSnapshot;
 
-pub fn is_due(
-    account: &Account,
-    last: Option<&AccountSnapshot>,
-    interval_minutes: u64,
-    now: u64,
-) -> bool {
-    if account.provider == Provider::Codex {
-        return true;
-    }
+pub fn is_due(last: Option<&AccountSnapshot>, interval_minutes: u64, now: u64) -> bool {
     let Some(last) = last else {
         return true;
     };
@@ -32,15 +31,12 @@ pub fn is_due(
     })
 }
 
-/// When one account next deserves a poll: Codex at the next tick, Claude when
-/// its interval is up or a window resets, whichever comes first.
-pub fn due_at(account: &Account, last: Option<&AccountSnapshot>, interval_minutes: u64) -> u64 {
+/// When one account next deserves a poll: whichever comes first of its
+/// interval being up and one of its windows resetting.
+pub fn due_at(last: Option<&AccountSnapshot>, interval_minutes: u64) -> u64 {
     let Some(last) = last else {
         return 0;
     };
-    if account.provider == Provider::Codex {
-        return last.captured_at;
-    }
     let by_interval = last.captured_at + interval_minutes * 60;
     last.windows
         .iter()
@@ -67,7 +63,7 @@ pub fn next_poll_at(
             let last = snapshots
                 .iter()
                 .find(|s| s.provider == account.provider && s.id == account.id);
-            due_at(account, last, registry.interval_minutes)
+            due_at(last, registry.interval_minutes)
         })
         .min()?;
     let wait = earliest.saturating_sub(last_poll);
@@ -78,6 +74,7 @@ pub fn next_poll_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::{Account, Provider};
     use crate::snapshot::Window;
 
     fn claude() -> Account {
@@ -87,6 +84,10 @@ mod tests {
             label: None,
             home: None,
             model: None,
+            paused: false,
+            live_only: false,
+            kind: None,
+            plan: None,
         }
     }
 
@@ -108,28 +109,28 @@ mod tests {
 
     #[test]
     fn never_polled_is_due() {
-        assert!(is_due(&claude(), None, 60, 1_000));
+        assert!(is_due(None, 60, 1_000));
     }
 
     #[test]
     fn inside_the_interval_with_no_reset_is_not_due() {
         let last = snapshot(1_000, 10_000);
-        assert!(!is_due(&claude(), Some(&last), 60, 1_000 + 30 * 60));
+        assert!(!is_due(Some(&last), 60, 1_000 + 30 * 60));
     }
 
     #[test]
     fn the_interval_passing_makes_it_due() {
         let last = snapshot(1_000, 10_000);
-        assert!(is_due(&claude(), Some(&last), 60, 1_000 + 60 * 60));
+        assert!(is_due(Some(&last), 60, 1_000 + 60 * 60));
     }
 
     #[test]
     fn a_window_resetting_since_the_snapshot_makes_it_due_early() {
         let last = snapshot(1_000, 1_500);
-        assert!(is_due(&claude(), Some(&last), 60, 1_501));
+        assert!(is_due(Some(&last), 60, 1_501));
         // …but a reset that already lay in the past at capture time does not.
         let stale = snapshot(2_000, 1_500);
-        assert!(!is_due(&claude(), Some(&stale), 60, 2_100));
+        assert!(!is_due(Some(&stale), 60, 2_100));
     }
 
     #[test]
@@ -137,8 +138,8 @@ mod tests {
         let mut last = snapshot(1_000, 10_000);
         last.windows.clear();
         last.error = Some("boom".into());
-        assert!(!is_due(&claude(), Some(&last), 60, 1_000 + 5 * 60));
-        assert!(is_due(&claude(), Some(&last), 60, 1_000 + 60 * 60));
+        assert!(!is_due(Some(&last), 60, 1_000 + 5 * 60));
+        assert!(is_due(Some(&last), 60, 1_000 + 60 * 60));
     }
 
     #[test]
@@ -163,22 +164,24 @@ mod tests {
             next_poll_at(&registry, &[snapshot(1_000, 500)], 300),
             Some(1_000 + 3_600)
         );
-        // Codex is due every tick.
+        // A Codex account is on the same interval as everything else: a free
+        // RPC is still a poll, and a poll runs the on-poll hooks.
         let mut codex = claude();
         codex.provider = Provider::Codex;
+        codex.id = "codex-1".into();
         registry.accounts.push(codex);
         let mut codex_snapshot = snapshot(1_000, 9_000);
         codex_snapshot.provider = Provider::Codex;
+        codex_snapshot.id = "codex-1".into();
         let both = vec![snapshot(1_000, 9_000), codex_snapshot];
-        assert_eq!(next_poll_at(&registry, &both, 300), Some(1_300));
+        assert_eq!(next_poll_at(&registry, &both, 300), Some(1_000 + 3_600));
         assert!(next_poll_at(&registry, &[], 300).is_none());
     }
 
     #[test]
-    fn codex_is_always_due_because_it_is_free() {
-        let mut codex = claude();
-        codex.provider = Provider::Codex;
+    fn a_free_codex_poll_still_waits_for_the_interval() {
         let last = snapshot(1_000, 10_000);
-        assert!(is_due(&codex, Some(&last), 60, 1_001));
+        assert!(!is_due(Some(&last), 60, 1_001));
+        assert!(is_due(Some(&last), 60, 1_000 + 60 * 60));
     }
 }

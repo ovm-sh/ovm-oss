@@ -148,6 +148,45 @@ pub fn rollback() -> Result<()> {
     Ok(())
 }
 
+/// `ovm self prune [--keep N] [--dry-run]`: drop inactive dev snapshots past
+/// the N newest. Releases, the current version and the previous version are
+/// never candidates, so a prune can never take away the rollback target.
+pub fn prune(keep: usize, dry_run: bool) -> Result<()> {
+    let manager = SelfManager::new()?;
+    let _operation = manager.acquire_operation_lock()?;
+    let candidates = manager.prunable_dev_versions(keep)?;
+    if candidates.is_empty() {
+        println!(
+            "{} nothing to prune — {keep} inactive dev snapshot(s) or fewer are installed",
+            style("✓").green()
+        );
+        return Ok(());
+    }
+    let mut total = 0u64;
+    for version in &candidates {
+        let bytes = super::stats::dir_size(&manager.version_dir(version)).unwrap_or(0);
+        total += bytes;
+        println!("  {version}  {}", style(super::format_bytes(bytes)).dim());
+    }
+    if dry_run {
+        println!(
+            "{} would remove {} dev snapshot(s), {} (dry run)",
+            style("→").cyan(),
+            candidates.len(),
+            super::format_bytes(total)
+        );
+        return Ok(());
+    }
+    let removed = manager.prune_dev_versions_keeping(keep)?;
+    println!(
+        "{} removed {} dev snapshot(s), {} freed; kept the {keep} newest plus current and previous",
+        style("✓").green(),
+        removed.len(),
+        super::format_bytes(total)
+    );
+    Ok(())
+}
+
 pub fn repair_control() -> Result<()> {
     let manager = SelfManager::new()?;
     let _operation = manager.acquire_operation_lock()?;

@@ -17,6 +17,7 @@ pub mod launch;
 pub mod list;
 pub mod pi;
 pub mod refresh_cache;
+pub mod run;
 pub mod select;
 pub mod self_autoupdate;
 pub mod self_manage;

@@ -7,6 +7,264 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A plan per account, recorded by hand: `ovm limits plan`.** No product
+  reports whether a subscription was cancelled or when access ends, so it is
+  typed in from the billing page: `ovm limits plan <account> --name "Example
+  Pro 100" --status cancelled --ends 2026-10-30` (`--status live|cancelled`,
+  `--ends YYYY-MM-DD`, `--clear` to forget; no flags prints the record). It
+  lives on the account in `config.json` as an optional `plan` object; a
+  registry without it loads unchanged. The table's note says `ends 30 Oct`
+  for a cancelled plan, `cancelled` without a date, `renews 30 Oct` for a
+  live plan with one, after any reset-credits or short-window note; yellow
+  within seven days, red (`ended 30 Sep`) once the day has gone. The detail
+  view (`show <account>`, Enter in the registry screen) has a `plan:` line
+  with the full date and how far off it is. `show --json` adds the record as
+  a `subscription` object on the account (`plan` is already the product's own
+  plan type); nothing else in it changes.
+- **The account table's order is a setting: sort and group.** `ovm limits
+  sort provider|reset` picks provider order (Claude, then Codex, each by its
+  soonest reset; the default) or pure reset order (the account that comes
+  back first on top, whatever its provider). `ovm limits group on|off` draws
+  one block per provider, each under a dim header naming it, instead of one
+  list. Both live in `config.json` (`table_sort`, `table_grouped`; a registry
+  without them reads as the defaults); in the registry screen `s` cycles the
+  sort and `g` toggles grouping, saved at once and shown in the footer.
+  `ovm limits show --sort provider|reset` and `--group` / `--no-group`
+  override the setting for one call. `--json` is untouched by either.
+- **Live limit readings from natural sessions.** A Claude.ai statusline
+  payload already carries the account's 5h/7d windows; Echo now leaves them in
+  `~/.ovm/limits/live/`, keyed by the login (`oauthAccount.accountUuid`), once
+  `ovm limits` is set up. Codex session rollouts are read the same way (login
+  from `creator_account_id`, Codex 0.158+). The background poll merges any
+  newer reading before deciding to spend a turn, so an account in active use
+  is not polled at all; each window records where its numbers came from. A
+  reading whose reset time disagrees with the account's is refused as another
+  login's. A quiet merge never runs the on-poll hooks.
+- **Accounts side by side: `ovm run <account>` and `ovm accounts`.** An
+  account is a folder under `~/.claude-accounts/` used as Claude Code's
+  config dir, so each is its own login while memory, skills, settings and
+  transcripts are shared (a session moves by hand: exit, then
+  `ovm run <other> --resume <id>`). `ovm accounts bind <dir> <account>` makes
+  a directory run as that account: `ovm run`, and a plain `claude` / `ccy`
+  started at or under it, pick the deepest binding and say so; Echo shows the
+  account. Nothing switches accounts on its own.
+- **Team seats in `ovm limits`.** A signed-in account folder is handed to
+  `ovm limits` as a *live-only* account: never polled (a poll would rotate
+  the login its sessions hold), kept fresh by Echo's readings from its own
+  sessions. Kind (`team` / `personal`) and organisation are read from the
+  login and carried in `limits.json`; the views tag a seat `team · <org>` and
+  draw only the windows it reports — a session window, no weekly bar.
+  `ovm limits add … --home DIR --live-only [--team]` does the same by hand.
+  Live-only accounts are kept in `~/.ovm/limits/live-accounts.json`, so an
+  older ovm on the same machine neither polls them nor drops them when it
+  changes the config.
+- **`ovm limits serve`**: `limits.json` as a read-only hub in the shape of a
+  CLIProxyAPI management API (`GET /v0/management/auth-files`, `POST
+  /v0/management/api-call` for the Claude and Codex usage URLs), so t3code's
+  usage-limit sources can show ovm's accounts. Tailnet or loopback only,
+  bearer key in `~/.ovm/limits/serve.key` (`ovm limits serve --key`). It
+  holds no credentials and makes no upstream call; reset credits and
+  `reset-quota` answer 501.
+- **`ovm limits show --grid`**: every account side by side — grouped by
+  provider, one column per window with bar, percent and reset, and Codex
+  manual reset credits.
+- **A versioned Echo.** Echo carries `ECHO_VERSION`; `ovm claude` refreshes an
+  installed Echo that has fallen behind (the script only, never the
+  settings), `ovm statusline update` does it on demand and `ovm statusline
+  status` compares installed and bundled.
+
+- **Account failover: `ovm accounts failover <label1> <label2> …`.**  An
+  ordered chain of subscription accounts; at launch `ovm run` reads
+  `limits.json` and picks the first account whose highest usage window is
+  below the threshold (default 95%, set with `ovm accounts threshold N`).
+  When limits data is unavailable the first account wins.  A binding still
+  overrides. `failover none` disables. Removing an account strips it from
+  the chain.
+- **Paid API providers: `ovm accounts add <label> --azure|--bedrock …`.**
+  An account can target Azure AI Foundry or AWS Bedrock instead of a
+  subscription login. At launch, `ovm run` injects the provider's env vars
+  (`CLAUDE_CODE_USE_AZURE`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` for
+  Azure; `CLAUDE_CODE_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` for Bedrock)
+  and shows a billing notice. API accounts work as always-available links in
+  the failover chain.
+- **`ovm limits pause <account>` / `resume <account>`.** Set an account aside
+  without forgetting it: no poll touches it, it leaves `limits.json`, the
+  feed and the digest, and its home and login stay exactly where they are.
+  `remove` would have deleted the sign-in. For a subscription that lapsed
+  and is coming back.
+- **`ovm limits hook ntfy` sends an hourly digest and a recovery.** A third
+  hook slot, `on-digest`, runs after `on-poll`; the ntfy preset fills it with
+  one low-priority line per poll naming every account's windows (a failing
+  account says so instead of its numbers). The on-event preset now sends
+  `poll recovered` after `poll failing`, and every title starts with the
+  sending machine (`[hostname] limits: 70%`), as do the GitHub and mini
+  senders (`[github]`, `[mini]`), because three machines share one topic.
+- **`ovm self prune` drops the dev snapshots a checkout leaves behind.** Every
+  `dev-install.sh` run adds a content-addressed snapshot under
+  `~/.ovm/self/versions` and nothing ever removed one: 69 of them, 711 MB,
+  had piled up by mid-September. `ovm self prune [--keep N] [--dry-run]`
+  removes the inactive dev snapshots past the N newest (default 2), printing
+  each one's size. Releases, the current version and the previous version are
+  never candidates, so a prune can never take away the rollback target.
+  `scripts/dev.sh` is the loop that uses it: fmt, clippy, tests, install,
+  prune, with `--watch` to rerun on every change.
+
+### Changed
+
+- **The account table reads sensibly for a team seat and an unused 5h
+  window.** A team seat that only reports 5h now says `team plan · 5h limit
+  only, no weekly limit` instead of `5h window only`. A 5h window nothing has been used in
+  shows `not started` in place of a clock and countdown (Claude's 5h starts
+  on the first message, so its old reset time gave nothing back), and the
+  row sorts after the accounts that have a real reset coming.
+- **The failover launch line says which window decided, and treats a
+  snapshot older than twice the poll interval as unknown.** The highest
+  window of any length still decides, and the line now names it per account:
+  `failover chain (simcity 5h 96% ≥ 95%, skipped; mochi 7d 10% < 95%)`. The
+  accounts passed over get their own line just before it (`↷ skipped simcity
+  (5h 96% ≥ 95%)`). When the newest reading among the chain's accounts is
+  older than twice ovm-limits' `interval_minutes` (read from
+  `~/.ovm/limits/config.json`; when absent, ovm-limits' own default of 60, so
+  120 minutes), the numbers may long since
+  have reset, so they count as no data: `failover chain (usage data 47 min
+  old, treating as unknown; first available)`. An Azure or Bedrock account
+  says `API account, no usage limits` instead of `no usage data`.
+
+- **The public feed is an observed reset log: `resets.json` is now
+  `ovm-limits/resets-v2`.** It carries every early reset, reset-credit spend
+  and lifted limit (the newest 50 by time, not only surprise resets), each
+  with the window, the plan tier (Codex's `pro`/`prolite`, Claude's tier from
+  the login, e.g. `max_20x`), the window's usage before and after in whole
+  percent, how many accounts of the same provider reset within 90 seconds,
+  and a short account key: the first eight hex characters of a sha256 keyed
+  by a random salt kept in `public-salt` beside `limits.json`. Never an id,
+  label, host or email. `history_days` says how far the event log reaches
+  back. The poller also fetches agentresets.com's announced resets at most
+  once an hour into `announcements.json` (fail-open: a failed or malformed
+  fetch keeps the last good copy, and a poll never waits more than ten
+  seconds on it; `OVM_LIMITS_ANNOUNCEMENTS_URL=` switches it off), embeds the
+  last 30 days with agentresets' attribution note verbatim, and points each
+  early reset at the nearest announcement within 36 hours (`announced_ref`).
+  ovm.sh/limits reads the new shape (and still the old one) as "Resets we saw
+  land": one UTC line per reset, the announcements beside it, and the median
+  points restored per provider, plan and window once three resets share one.
+  `limits.json` gains `tier` on Claude accounts.
+
+- **One flat account table on every surface.** The registry screen, `ovm
+  limits show` and the poll narration draw the same row per account: name,
+  provider, how much of the primary window is left (7d for Claude, `codex
+  1w` for Codex), when it resets as a clock time and a countdown (`tomorrow
+  10:51   in 21h`), and a note (`↺ 1 reset available`, `5h window only`).
+  Secondary windows — Claude's 5h, a Codex reserve pool — appear on dim lines
+  beneath each row on `w`. Enter opens one account in full and polls it;
+  `ovm limits show <account>` prints the same detail. A failed poll in the
+  narration prints its error in place of the numbers, uncut. `--json` is
+  unchanged.
+- **One way to say a usage window, on every surface.** The table, the TUI row,
+  the poll narration and the digest each had their own phrasing, and none of
+  them marked the weekly window as the one that runs out for good. All four
+  now say the same three facts in the same order — percent used, percent
+  left, and when the window turns over as an absolute stamp plus a countdown
+  — and sort the longest window first, so `7d` (and Codex's `1w`) leads and
+  `5h` follows. The table draws a bar beside the numbers.
+  `ovm limits show --brief` prints the plain-text form for a push
+  notification, so a digest hook no longer needs inline python.
+- **Every account is polled on `interval_minutes`, Codex included.** Codex was
+  due on every agent tick because its RPC is free. The RPC is free; a poll is
+  not: every poll that polls anything runs the on-poll hooks, so a single
+  Codex account turned an hourly digest into a push every five minutes (288 a
+  day) and drove the publish step into HTTP 429.
+- **`digest_minutes` (default 60) rate-limits the digest hook**, settable with
+  `ovm limits digest [1h|30m|0]`. How fresh the numbers are and how often a
+  phone buzzes are different questions; `0` restores the old every-poll
+  behaviour.
+
+### Fixed
+
+- **Failover no longer trips over a bad chain entry or a bad snapshot entry,
+  and an unsigned pick says why.** When every account was spent and the
+  chain started with a label that is not an account, `ovm run` failed with
+  "bound or default but not an account"; it now uses the first chain entry
+  that is an account, or the default when there is none. One `limits.json`
+  entry without a label or windows made the whole snapshot read as no data;
+  it is now skipped and the rest still count. A chain pick that is not
+  signed in yet printed only the `/login` hint; it now prints the
+  `→ label (not signed in) — why` line too.
+
+- **The mini's Codex login no longer goes stale after a lost token refresh.**
+  Codex refresh tokens are single-use, and on 2026-10-02 the first refresh
+  in ten days happened inside a throwaway benchmark home and was lost, so
+  every copy of the login died ("refresh token was already used"). The macOS
+  leg now writes a rotated `auth.json` back on every exit, including
+  `process.exit` and SIGINT/SIGTERM/SIGHUP from a job timeout or cancel. The
+  Linux leg exports the container's `auth.json` from an exit trap, and from
+  the persistent home volume when the container is killed; the host installs
+  it through `scripts/install-exchanged-codex-auth.sh` only when the host file
+  is unchanged since the leg started, the export is newer, and it parses. A
+  new launchd agent on the mini (`scripts/mini/install-mini-codex-poke.sh`)
+  runs one Codex turn a day in the real `~/.codex`, skipping while a
+  benchmark job runs, so the real file always holds the live chain. When the
+  chain is dead anyway, Benchmark Deep's auth check says so and names the fix
+  (`codex login --device-auth` on the mini).
+
+- **The registry never advertises a prerelease as `latest`.** When the gate
+  withheld the newest stable Codex it repaired `latest` to the newest
+  survivor of any kind — an alpha — and every OVM client, which refuses a
+  prerelease `latest`, stopped auto-updating. It now falls back to the newest
+  stable.
+
+- **A poll no longer trips over OVM's own update banner.** A limits poll
+  launches the product with `OVM_NO_AUTO_UPDATE` set, inside a PTY — so the
+  banner's "is stderr a tty" check passed and `Claude Code N available` landed
+  on the poll's own screen, where Claude Code never reached its statusline and
+  the poll failed as "a screen this poll could not dismiss". A launch that has
+  already declined a new version is no longer told one exists.
+- **A `codex app-server` that hangs on startup is retried once.** It
+  intermittently wedges refreshing its model catalogue and never reaches the
+  handshake, burning the whole 60s budget; a healthy poll answers in about two
+  seconds and it is a fresh process each time. This was 18 of 24 poll failures
+  in the fortnight to 2026-09-20, each one costing a "failing" push and a
+  "recovered" push for numbers that had not moved.
+
+- **`ovm hatch` opens on a clean page.** The welcome used to clear the
+  terminal only when `--story` or `--tldr` chose the path; the plain `ovm
+  hatch` drew its centred block under whatever the shell had on screen.
+- **Switching the `ovm limits` background poller off asks first.** `b` sits
+  between `a` (add) and `e` (events) and used to remove the launchd agent on
+  a single press with one dim line of feedback — which is how a laptop's
+  poller went quiet for three days in September. Switching it on is still
+  one key.
+
+- **A breaking Codex migration is published and flagged, never held.**
+  Codex rust-v0.155.0 renamed `thread_artifacts` to `thread_attachments`
+  (state migration 55), a removal for every older binary. The schema
+  tripwire stopped the publish job for review, as the 2026-08-07 policy
+  said, and then could not restart: the registry commit that would have
+  retired the detection sat behind the failing step. The observatory now
+  always publishes. The manifest syncs whatever the classification, and a
+  breaking or unclassifiable migration produces a dev log entry (the SQL,
+  the classification, what it means for a shared state DB) that the same run
+  publishes to ovm.sh/devlog, plus a "Schema review" issue. A human closes
+  the review by extending the reviewed history in the skew tests. If the
+  sync tooling itself fails, the previous manifest is restored and the run
+  still publishes, flagged the same way.
+- **`ovm limits` names an account that is out of quota, in Claude Code's own
+  words.** An account at 100% of its weekly window had every poll turned away
+  by the API. The statusline still ran, without windows, so the poll waited
+  out its full 90 seconds and then reported "the session replied without rate
+  limits — this only appears for Claude.ai Pro/Max logins", wrong on every
+  count. The poll now watches the session transcript, where a refused turn
+  lands as an `error: rate_limit` (or `authentication_failed`) message, and
+  the screen, because Claude Code 2.1.270 can open a "What do you want to do?"
+  dialog on a hit limit during which no transcript is written at all. Either
+  fails the poll within a second: `out of quota — Claude Code refused the
+  turn: "You've hit your weekly limit · resets Sep 17 at 10pm"`, or `signed
+  out` with the login command. The dialog is declined with Escape, which can
+  never pick "switch to usage credits". The unexplained case that is left
+  quotes the screen tail.
+
 ## [0.1.11] - 2026-09-28
 
 A patch cut from 0.1.10 with the Linux half of the Codex 0.157 fix only.

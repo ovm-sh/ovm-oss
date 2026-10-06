@@ -44,7 +44,12 @@ pub struct Timeouts {
 impl Default for Timeouts {
     fn default() -> Self {
         Self {
-            ready: Duration::from_secs(45),
+            // Ninety, not forty-five: on 2026-09-24 the M4 sat at a load
+            // average of 78 on 14 cores (another project's job forking an AWS
+            // CLI process per S3 key) and Claude Code intermittently needed
+            // more than 45s just to take over the terminal — sixteen polls
+            // failed that day with nothing wrong with the account.
+            ready: Duration::from_secs(90),
             limits: Duration::from_secs(90),
             exit: Duration::from_secs(8),
         }
@@ -88,24 +93,101 @@ pub fn poll(account: &Account, dirs: &LimitsDirs, timeouts: Timeouts) -> Result<
     session.drain(Duration::from_millis(1500));
 
     // Phase 2: one word in, one assistant reply out, and the payload that
-    // follows it carries the windows.
+    // follows it carries the windows. A turn the API refuses — the account is
+    // out of quota, or its login has lapsed — still runs the statusline, but
+    // with no windows in the payload; the refusal itself only reaches the
+    // session transcript, which the first payload names. Watching both means
+    // a refused turn is reported in the product's own words within a second
+    // instead of as a timeout blamed on the wrong thing.
+    //
+    // Since 2.1.270 a hit limit can instead open a dialog ("What do you want
+    // to do? 1. Stop and wait for limit to reset / 2. Wait here, then continue
+    // automatically at … / 3. Switch to usage credits"), and while it is up
+    // the transcript is not written at all — seen live on 2026-09-15 — so the
+    // screen is watched as well. The dialog is declined with Escape before the
+    // session is left: Escape can only ever cancel it, never pick "switch to
+    // usage credits", which is money.
+    let transcript = transcript_path(&capture);
     session.write_all(format!("{PROMPT}\r").as_bytes())?;
-    let payload = wait_for(&mut session, timeouts.limits, || {
-        latest_payload_with_rate_limits(&capture)
+    let outcome = wait_for(&mut session, timeouts.limits, |session| {
+        if let Some(payload) = latest_payload_with_rate_limits(&capture) {
+            return Some(Turn::Answered(payload));
+        }
+        latest_refusal(transcript.as_deref())
+            .or_else(|| refusal_on_screen(&session.recent_text()))
+            .map(Turn::Refused)
     })
-    .map_err(|_| {
-        LimitsError::Message(
-            "the session replied without rate limits — this only appears for Claude.ai \
-             Pro/Max logins (or behind an apps gateway); an API-key login has no windows"
-                .into(),
-        )
-    })?;
+    .map_err(|_| LimitsError::Message(explain_no_limits(&session.recent_text())));
+    let payload = match outcome {
+        Ok(Turn::Answered(payload)) => payload,
+        Ok(Turn::Refused(refusal)) => {
+            let _ = session.write_all(b"\x1b");
+            session.drain(Duration::from_millis(500));
+            let _ = session.write_all(b"/exit\r");
+            let _ = session.finish(timeouts.exit);
+            return Err(LimitsError::Message(explain_refusal(account, &refusal)));
+        }
+        Err(error) => return Err(error),
+    };
 
     // Phase 3: leave politely, then insist.
     let _ = session.write_all(b"/exit\r");
     session.finish(timeouts.exit)?;
 
-    Ok(snapshot_from_payload(account, &payload))
+    let mut snapshot = snapshot_from_payload(account, &payload);
+    snapshot.account_id = login_account_uuid(&home);
+    Ok(snapshot)
+}
+
+/// The login a home holds: `oauthAccount.accountUuid` in its `.claude.json`.
+///
+/// Live readings (Echo in a natural session) and polls are matched on this,
+/// not on the folder: `/login` can switch the account inside one home, and a
+/// statusline payload names no account at all. `None` when the file or the
+/// field is missing — a reading that cannot be tied to a login is not merged.
+pub fn login_account_uuid(home: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(claude_json_path(home)).ok()?;
+    let doc: Value = serde_json::from_str(&raw).ok()?;
+    doc.pointer("/oauthAccount/accountUuid")
+        .and_then(Value::as_str)
+        .filter(|uuid| !uuid.is_empty())
+        .map(str::to_owned)
+}
+
+/// What kind of login a home holds and whose: read from `.claude.json`'s
+/// `oauthAccount`, never from the Keychain.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoginDetails {
+    /// `team` for a seat in an organisation's plan, `personal` for an own plan.
+    pub kind: String,
+    pub org: Option<String>,
+    pub org_id: Option<String>,
+    /// The plan tier the login reports (`default_claude_max_20x`,
+    /// `team_standard`…): the organisation's, else the user's.
+    pub rate_limit_tier: Option<String>,
+}
+
+/// The same rule `ovm accounts` uses: a seat tier, or a team / enterprise
+/// organisation type, makes it a team seat.
+pub fn login_details(home: &Path) -> Option<LoginDetails> {
+    let raw = std::fs::read_to_string(claude_json_path(home)).ok()?;
+    let doc: Value = serde_json::from_str(&raw).ok()?;
+    let account = doc.get("oauthAccount")?;
+    let text = |key: &str| {
+        account
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+    let team = text("seatTier").is_some()
+        || text("organizationType").is_some_and(|t| t.contains("team") || t.contains("enterprise"));
+    Some(LoginDetails {
+        kind: if team { "team" } else { "personal" }.into(),
+        org: text("organizationName"),
+        org_id: text("organizationUuid"),
+        rate_limit_tier: text("organizationRateLimitTier").or_else(|| text("userRateLimitTier")),
+    })
 }
 
 /// The error for a session that never reached its statusline, named from what
@@ -125,7 +207,18 @@ fn never_started(session: &pty::PtyChild) -> LimitsError {
 /// Pure, so the classification can be tested without a terminal.
 fn explain_never_started(screen: &str) -> String {
     let lower = screen.to_lowercase();
-    let cause = if lower.contains("auto-updating") || lower.contains("downloading") {
+    let cause = if only_our_escapes(screen) {
+        // The terminal is still in cooked mode, echoing this poll's own Escape
+        // presses back as `^[`: the product never took over the screen. That
+        // is a slow start, not a dialog, and it used to be reported (and
+        // pushed to a phone) as "a screen this poll could not dismiss".
+        return format!(
+            "claude never ran the statusline — Claude Code had not started after the \
+             wait (only this poll's own Escape presses echoed back); the machine was \
+             probably too busy{}",
+            load_note()
+        );
+    } else if lower.contains("auto-updating") || lower.contains("downloading") {
         "ovm is installing a newer build of the product, which takes longer than this \
          poll may wait — it should recover once the install finishes"
     } else if lower.contains("log in") || lower.contains("sign in") || lower.contains("/login") {
@@ -135,9 +228,59 @@ fn explain_never_started(screen: &str) -> String {
     } else {
         "a screen this poll could not dismiss is blocking the session"
     };
-    // Blank lines carry nothing and would quote an empty screen back as a
-    // row of separators, so they never reach the message.
-    let mut tail: Vec<&str> = screen
+    with_screen_tail(format!("claude never ran the statusline — {cause}"), screen)
+}
+
+/// The error for a turn that neither answered with windows nor was refused
+/// within the wait. Before 2026-09-15 this was the message for every account
+/// that had hit its weekly limit: the API turned the turn away, the statusline
+/// ran without windows, and the poll waited out its 90s to blame the plan.
+/// Refusals are now caught by [`explain_refusal`]; what is left here is the
+/// genuinely unexplained case, so the screen is quoted for whoever reads it.
+fn explain_no_limits(screen: &str) -> String {
+    with_screen_tail(
+        "the session replied without rate limits — this only appears for Claude.ai \
+         Pro/Max logins (or behind an apps gateway); an API-key login has no windows"
+            .into(),
+        screen,
+    )
+}
+
+/// Nothing on screen but the `^[` a cooked-mode terminal echoes for Escape.
+fn only_our_escapes(screen: &str) -> bool {
+    screen.contains("^[") && screen.replace("^[", "").trim().is_empty()
+}
+
+/// `; load average 78.6 on 14 cores` — the one number that tells a slow start
+/// on a busy machine from a broken product. Empty when it cannot be read.
+fn load_note() -> String {
+    let mut loads = [0f64; 3];
+    // SAFETY: getloadavg writes at most `nelem` doubles into the buffer.
+    let read = unsafe { libc::getloadavg(loads.as_mut_ptr(), 3) };
+    if read < 1 {
+        return String::new();
+    }
+    let cores = std::thread::available_parallelism().map_or(0, std::num::NonZeroUsize::get);
+    format!("; load average {:.1} on {cores} cores", loads[0])
+}
+
+/// Terminal bytes that carry no words: the `^[` Escape echo and the block and
+/// box-drawing glyphs of Claude Code's logo. Quoted as-is they reached a phone
+/// as `last on screen: ▝▜█████ ^[^[`.
+fn is_screen_noise(ch: char) -> bool {
+    matches!(ch, '\u{2500}'..='\u{259f}' | '\u{23ce}')
+}
+
+/// Append the last few non-blank lines of the terminal to a message. Blank
+/// lines carry nothing and would quote an empty screen back as a row of
+/// separators, so they never reach the message.
+fn with_screen_tail(message: String, screen: &str) -> String {
+    let cleaned: String = screen
+        .replace("^[", "")
+        .chars()
+        .filter(|ch| !is_screen_noise(*ch))
+        .collect();
+    let mut tail: Vec<&str> = cleaned
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -147,9 +290,137 @@ fn explain_never_started(screen: &str) -> String {
     tail.reverse();
     let tail = tail.join(" ⏎ ").chars().take(400).collect::<String>();
     if tail.is_empty() {
-        return format!("claude never ran the statusline — {cause}");
+        return message;
     }
-    format!("claude never ran the statusline — {cause} (last on screen: {tail})")
+    format!("{message} (last on screen: {tail})")
+}
+
+/// How the poll's one turn ended.
+enum Turn {
+    /// The statusline payload carrying the windows.
+    Answered(Value),
+    /// The API turned the turn away; the product's own words.
+    Refused(Refusal),
+}
+
+/// A turn Claude Code could not complete. The product writes such a turn to
+/// the session transcript as a synthetic assistant message flagged
+/// `isApiErrorMessage`, with `error` naming the class and the text the TUI
+/// shows. Seen so far: `rate_limit` ("You've hit your weekly limit · resets
+/// Sep 17 at 10pm (Europe/Lisbon)") and `authentication_failed` ("Failed to
+/// authenticate: OAuth session expired and could not be refreshed").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub kind: String,
+    pub text: String,
+}
+
+/// The transcript this session writes, as named by its first statusline
+/// payload. `None` until that payload exists, or on a build that omits it.
+fn transcript_path(capture: &Path) -> Option<PathBuf> {
+    payloads(capture).iter().find_map(|payload| {
+        payload
+            .get("transcript_path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+    })
+}
+
+fn latest_refusal(transcript: Option<&Path>) -> Option<Refusal> {
+    let raw = std::fs::read_to_string(transcript?).ok()?;
+    refusal_from_transcript(&raw)
+}
+
+/// Pure: the newest refused turn in a transcript, if any. A session lives in
+/// its own transcript, so any refusal found is this poll's.
+pub fn refusal_from_transcript(raw: &str) -> Option<Refusal> {
+    raw.lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find_map(|entry| {
+            if entry.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true) {
+                return None;
+            }
+            let kind = entry
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("api_error")
+                .to_owned();
+            let text = entry
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            Some(Refusal { kind, text })
+        })
+}
+
+/// Pure: a hit limit as the terminal shows it — the dialog Claude Code opens
+/// when the API turns a turn away, or the one-line notice older builds print.
+/// The quoted text is the line that carries the reset time when there is one.
+pub fn refusal_on_screen(screen: &str) -> Option<Refusal> {
+    const SIGNS: [&str; 4] = [
+        "hit your",
+        "continue automatically at",
+        "wait for limit to reset",
+        "usage limit reached",
+    ];
+    let lines: Vec<&str> = screen
+        .lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(|c: char| {
+                    matches!(c, '❯' | '⎿' | '⏺' | '.' | ' ') || c.is_ascii_digit()
+                })
+                .trim()
+        })
+        .filter(|line| !line.is_empty())
+        .collect();
+    let has = |sign: &str| lines.iter().any(|line| line.to_lowercase().contains(sign));
+    // The notice alone names the limit; a dialog needs both of its first two
+    // options before it counts, so one word on an unrelated screen cannot.
+    let notice = has("hit your") && has("limit");
+    let dialog = has("wait for limit to reset") && has("continue automatically at");
+    if !notice && !dialog && !has("usage limit reached") {
+        return None;
+    }
+    let text = SIGNS
+        .iter()
+        .find_map(|sign| lines.iter().find(|line| line.to_lowercase().contains(sign)))
+        .map(|line| line.to_string())
+        .unwrap_or_default();
+    Some(Refusal {
+        kind: "rate_limit".into(),
+        text,
+    })
+}
+
+/// Pure: the error for a refused turn, from the product's own words.
+fn explain_refusal(account: &Account, refusal: &Refusal) -> String {
+    let quoted = if refusal.text.is_empty() {
+        String::new()
+    } else {
+        format!(": \"{}\"", refusal.text)
+    };
+    match refusal.kind.as_str() {
+        "rate_limit" => format!(
+            "out of quota — Claude Code refused the turn{quoted}; the windows come back with \
+             the first turn that goes through, so this poll recovers after that reset"
+        ),
+        "authentication_failed" => format!(
+            "signed out — Claude Code refused the turn{quoted} — run: ovm limits login {}",
+            account.id
+        ),
+        kind => format!("Claude Code refused the turn ({kind}){quoted}"),
+    }
 }
 
 /// Wait for the first statusline payload, pressing Escape at intervals while
@@ -390,11 +661,11 @@ fn wait_until(
 fn wait_for<T>(
     session: &mut pty::PtyChild,
     timeout: Duration,
-    mut probe: impl FnMut() -> Option<T>,
+    mut probe: impl FnMut(&pty::PtyChild) -> Option<T>,
 ) -> std::result::Result<T, TimedOut> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(value) = probe() {
+        if let Some(value) = probe(session) {
             return Ok(value);
         }
         if Instant::now() >= deadline || session.hung_up() {
@@ -481,6 +752,23 @@ mod tests {
     use super::*;
     use crate::registry::Provider;
 
+    #[test]
+    fn a_homes_login_is_read_from_its_claude_json() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(login_account_uuid(temp.path()), None);
+        std::fs::write(
+            temp.path().join(".claude.json"),
+            r#"{"oauthAccount":{"accountUuid":"a1e825aa-0000","emailAddress":"x"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            login_account_uuid(temp.path()).as_deref(),
+            Some("a1e825aa-0000")
+        );
+        std::fs::write(temp.path().join(".claude.json"), r#"{"oauthAccount":{}}"#).unwrap();
+        assert_eq!(login_account_uuid(temp.path()), None);
+    }
+
     fn account() -> Account {
         Account::new(Provider::Claude, "claude-1", None)
     }
@@ -516,9 +804,151 @@ mod tests {
             "an empty screen has no tail to quote: {silent}"
         );
 
+        // 2026-09-24: the product had not started; the tty echoed our Escapes.
+        let slow = explain_never_started("^[^[^[^[\n");
+        assert!(slow.contains("had not started"), "{slow}");
+        assert!(!slow.contains("could not dismiss"), "{slow}");
+        assert!(!slow.contains("^["), "{slow}");
+
+        // Logo glyphs and escape echoes never reach the quoted tail.
+        let logo = explain_never_started(
+            "^[\u{259d}\u{259c}\u{2588}\u{2588} Claude Code v2.1.277 \u{23ce}\n^[",
+        );
+        assert!(logo.contains("Claude Code v2.1.277"), "{logo}");
+        assert!(!logo.contains('\u{2588}') && !logo.contains("^["), "{logo}");
+
         let unknown = explain_never_started("Some interstitial nobody has seen before");
         assert!(unknown.contains("could not dismiss"), "{unknown}");
         assert!(unknown.contains("last on screen"), "{unknown}");
+    }
+
+    #[test]
+    fn a_refused_turn_is_read_from_the_transcript_in_the_products_words() {
+        // Verbatim shapes from the poll homes on 2026-09-15, trimmed to the
+        // fields that matter: the synthetic assistant message Claude Code
+        // writes when the API turns a turn away.
+        let transcript = concat!(
+            r#"{"type":"user","message":{"role":"user","content":"reply with just: ok"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You've hit your weekly limit · resets Sep 17 at 10pm (Europe/Lisbon)"}]},"error":"rate_limit","isApiErrorMessage":true}"#,
+            "\n",
+            r#"{"type":"system","subtype":"turn_duration"}"#,
+            "\n",
+        );
+        let refusal = refusal_from_transcript(transcript).expect("a refusal");
+        assert_eq!(refusal.kind, "rate_limit");
+        assert_eq!(
+            refusal.text,
+            "You've hit your weekly limit · resets Sep 17 at 10pm (Europe/Lisbon)"
+        );
+        let message = explain_refusal(&account(), &refusal);
+        assert!(message.starts_with("out of quota"), "{message}");
+        assert!(message.contains("resets Sep 17 at 10pm"), "{message}");
+
+        let signed_out = refusal_from_transcript(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]},"error":"authentication_failed","isApiErrorMessage":true}"#,
+        )
+        .unwrap();
+        let message = explain_refusal(&account(), &signed_out);
+        assert!(message.starts_with("signed out"), "{message}");
+        assert!(message.contains("ovm limits login claude-1"), "{message}");
+
+        let unknown = Refusal {
+            kind: "overloaded".into(),
+            text: String::new(),
+        };
+        assert_eq!(
+            explain_refusal(&account(), &unknown),
+            "Claude Code refused the turn (overloaded)"
+        );
+    }
+
+    #[test]
+    fn a_hit_limit_dialog_on_screen_is_a_refusal() {
+        // The screen of the live poll on 2026-09-15 09:43, as `recent_text`
+        // rendered it: the dialog, with the reset time in option 2.
+        let screen = "────────────────────────────────\n\
+                      What do you want to do?\n\
+                      ❯1. Stop and wait for limit to reset\n\
+                      2. Wait here, then continue automatically at Sep 17 at 10pm\n\
+                      3. Switch to usage credits\n\
+                      Entertoconfirm·Esctocancel\n";
+        let refusal = refusal_on_screen(screen).expect("the dialog is a refusal");
+        assert_eq!(refusal.kind, "rate_limit");
+        assert_eq!(
+            refusal.text,
+            "Wait here, then continue automatically at Sep 17 at 10pm"
+        );
+        let message = explain_refusal(&account(), &refusal);
+        assert!(message.starts_with("out of quota"), "{message}");
+        assert!(message.contains("Sep 17 at 10pm"), "{message}");
+
+        // The one-line notice, without a dialog.
+        let notice = refusal_on_screen(
+            "> reply with just: ok\n  ⎿ You've hit your weekly limit · resets Sep 17 at 10pm (Europe/Lisbon)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            notice.text,
+            "You've hit your weekly limit · resets Sep 17 at 10pm (Europe/Lisbon)"
+        );
+
+        // An ordinary answered turn, and a screen that merely mentions limits.
+        assert_eq!(refusal_on_screen("> reply with just: ok\n⏺ ok\n"), None);
+        assert_eq!(
+            refusal_on_screen("Tip: /usage shows your limit windows\n"),
+            None
+        );
+        assert_eq!(refusal_on_screen(""), None);
+    }
+
+    #[test]
+    fn an_answered_turn_is_not_a_refusal() {
+        let transcript = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}"#,
+            "\n",
+            "not json\n",
+            r#"{"type":"assistant","isApiErrorMessage":false,"error":"none"}"#,
+            "\n",
+        );
+        assert_eq!(refusal_from_transcript(transcript), None);
+        assert_eq!(refusal_from_transcript(""), None);
+        assert_eq!(latest_refusal(None), None);
+        assert_eq!(
+            latest_refusal(Some(Path::new("/nonexistent/transcript"))),
+            None
+        );
+    }
+
+    #[test]
+    fn the_transcript_is_named_by_the_first_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let capture = temp.path().join("cap.jsonl");
+        std::fs::write(&capture, "{\"model\":{\"id\":\"a\"}}\n").unwrap();
+        assert_eq!(transcript_path(&capture), None);
+        std::fs::write(
+            &capture,
+            "{\"model\":{\"id\":\"a\"},\"transcript_path\":\"/h/projects/x/s.jsonl\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            transcript_path(&capture),
+            Some(PathBuf::from("/h/projects/x/s.jsonl"))
+        );
+    }
+
+    #[test]
+    fn an_unexplained_missing_payload_quotes_the_screen() {
+        let message = explain_no_limits("  \n> reply with just: ok\n  ⏺ ok\n");
+        assert!(
+            message.starts_with("the session replied without rate limits"),
+            "{message}"
+        );
+        assert!(
+            message.contains("last on screen: > reply with just: ok ⏎ ⏺ ok"),
+            "{message}"
+        );
+        assert!(!explain_no_limits("  \n").contains("last on screen"));
     }
 
     #[test]
@@ -735,5 +1165,33 @@ mod tests {
         assert_eq!(payload_count(&capture), 3);
         let latest = latest_payload_with_rate_limits(&capture).unwrap();
         assert_eq!(latest["rate_limits"]["five_hour"]["used_percentage"], 11);
+    }
+
+    #[test]
+    fn login_details_tell_a_team_seat_from_an_own_plan() {
+        let temp = tempfile::tempdir().unwrap();
+        let write = |body: &str| std::fs::write(temp.path().join(".claude.json"), body).unwrap();
+        write(
+            r#"{"oauthAccount":{"accountUuid":"a","organizationType":"claude_max",
+                "organizationRateLimitTier":"default_claude_max_20x"}}"#,
+        );
+        let own = login_details(temp.path()).unwrap();
+        assert_eq!(own.kind, "personal");
+        assert_eq!(
+            own.rate_limit_tier.as_deref(),
+            Some("default_claude_max_20x")
+        );
+        write(
+            r#"{"oauthAccount":{"accountUuid":"a","organizationType":"claude_team",
+                "organizationName":"Acme","organizationUuid":"org-1"}}"#,
+        );
+        let team = login_details(temp.path()).unwrap();
+        assert_eq!(team.kind, "team");
+        assert_eq!(team.org.as_deref(), Some("Acme"));
+        assert_eq!(team.org_id.as_deref(), Some("org-1"));
+        write(r#"{"oauthAccount":{"accountUuid":"a","seatTier":"premium"}}"#);
+        assert_eq!(login_details(temp.path()).unwrap().kind, "team");
+        write(r#"{"projects":{}}"#);
+        assert!(login_details(temp.path()).is_none());
     }
 }

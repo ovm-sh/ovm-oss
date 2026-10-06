@@ -1,48 +1,48 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-13T17:16:37Z",
+  "updated_at": "2026-10-06T04:42:05Z",
   "base_url": "https://ovm.sh/api",
   "products": [
     {
       "product": "claude",
-      "snapshot_revision": "sha256:4f8b92bca2d0d99b7a380364e77ceb88053915e382093f73614563126b5187f5",
+      "snapshot_revision": "sha256:d17c774366cee56592c087e8f280c1a7e608672af6eb410666b23d450bd51c63",
       "display_name": "Claude Code",
       "source": "npm:@anthropic-ai/claude-code",
-      "latest": "2.1.270",
-      "version_count": 511,
+      "latest": "2.1.291",
+      "version_count": 531,
       "retired_count": 0,
-      "updated_at": "2026-09-13T17:16:37Z"
+      "updated_at": "2026-10-06T04:42:05Z"
     },
     {
       "product": "cliproxyapi",
-      "snapshot_revision": "sha256:3772c034407447a6bcddbc08451296634a929168dea78d24ddd08a6c0c10a974",
+      "snapshot_revision": "sha256:98040d51ccf67c04e680ee3ece23917a9b003315489c90f9d5ef87e5f730e658",
       "display_name": "CLIProxyAPI",
       "source": "github:router-for-me/CLIProxyAPI",
-      "latest": "7.3.1",
-      "version_count": 408,
+      "latest": "8.0.16",
+      "version_count": 444,
       "retired_count": 1,
-      "updated_at": "2026-09-13T17:16:37Z"
+      "updated_at": "2026-10-06T04:42:05Z"
     },
     {
       "product": "codex",
-      "snapshot_revision": "sha256:ec24bf0e17db8502594c53ddf9de0e2cf0e1983bc7ee0b5a359a7f3413d3c70f",
+      "snapshot_revision": "sha256:3c4cca03deb684a318f933ec1df4783b399ebaeea35312d7f1b9c96377aabf5c",
       "display_name": "Codex",
       "source": "github:openai/codex",
-      "latest": "rust-v0.154.0",
-      "version_count": 959,
+      "latest": "rust-v0.160.1",
+      "version_count": 1087,
       "retired_count": 0,
-      "updated_at": "2026-09-13T17:16:37Z"
+      "updated_at": "2026-10-06T04:42:05Z"
     },
     {
       "product": "pi",
-      "snapshot_revision": "sha256:b91507a1f7a0b0a757d1fead95531334d73d1e527baa2e764fe1af02f141e005",
+      "snapshot_revision": "sha256:fc118d1d1cd7b07ee41ce66721bb7dcf2b5a3e22843b35cb4eaf83eacf0a9ca5",
       "display_name": "Pi",
       "source": "github:earendil-works/pi",
-      "latest": "0.85.1",
-      "version_count": 258,
+      "latest": "1.0.4",
+      "version_count": 270,
       "retired_count": 0,
-      "updated_at": "2026-09-13T17:16:37Z"
+      "updated_at": "2026-10-06T04:42:05Z"
     }
   ],
-  "snapshot_revision": "sha256:6f51d917cb3278f0b99fa525eb3fc6ffb9524a84dd3fac7de372af42529e850a"
+  "snapshot_revision": "sha256:ded1f4e02e8cf4626703b928e7d696941e1580c1412072c3e87a875e1fbb4c44"
 }

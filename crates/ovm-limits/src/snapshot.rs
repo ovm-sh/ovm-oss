@@ -13,6 +13,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SCHEMA: &str = "ovm-limits/v1";
 
+/// Where one window's numbers came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowSource {
+    /// `live` (a natural session's statusline or rollout) or `poll`.
+    pub source: String,
+    /// When that source reported it, epoch seconds.
+    pub at: u64,
+}
+
 /// One rolling usage window as the product reports it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Window {
@@ -95,6 +104,28 @@ pub struct AccountSnapshot {
     /// the recovery that ends it is worth a word too.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub failure_alerted: bool,
+    /// Where each window's numbers came from and when, when they did not all
+    /// come from one poll: a live reading from a natural session refreshes the
+    /// windows it names and leaves the rest as the poll left them.
+    /// Claude: `team` for a seat in an organisation's plan (a session limit,
+    /// no weekly meter), `personal` for an own plan. Read from the login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Claude: the organisation the login belongs to, by name and by id, so
+    /// several seats in several teams stay apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_id: Option<String>,
+    /// Claude: the plan tier the login reports (`default_claude_max_20x`),
+    /// read at merge time. Codex says its plan in `plan` on every poll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Never polled; fed by its own sessions' live readings only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_only: bool,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub window_sources: std::collections::BTreeMap<String, WindowSource>,
     /// Everything the product said about its limits, verbatim: Claude's
     /// `rate_limits` object, Codex's whole `account/rateLimits/read` result.
     /// The typed fields above are the parts this tool understands; this is
@@ -161,6 +192,12 @@ impl AccountSnapshot {
             reset_credits: Vec::new(),
             consecutive_failures: 0,
             failure_alerted: false,
+            kind: None,
+            org: None,
+            org_id: None,
+            tier: None,
+            live_only: false,
+            window_sources: std::collections::BTreeMap::new(),
             raw: None,
         }
     }
@@ -174,6 +211,22 @@ impl AccountSnapshot {
             error: Some(error),
             ..Self::for_account(account, source)
         }
+    }
+
+    /// `team · Acme`, `team`, `live-only`, or both joined — what sets this
+    /// account apart from a personal plan that is polled. `None` for that.
+    pub fn kind_tag(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if self.kind.as_deref() == Some("team") {
+            parts.push(match &self.org {
+                Some(org) => format!("team · {org}"),
+                None => "team".into(),
+            });
+        }
+        if self.live_only {
+            parts.push("live-only".into());
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
     }
 
     /// The same shape the config prints: `claude-1`, or `claude-1 (work)`.
@@ -284,10 +337,16 @@ pub fn load_snapshots(dirs: &LimitsDirs) -> Result<Vec<AccountSnapshot>> {
 }
 
 /// Rebuild `limits.json` from the per-account snapshots, and the public
-/// `resets.json` beside it.
+/// `resets.json` beside it from the whole event log and the cached
+/// announcements.
 pub fn merge(dirs: &LimitsDirs) -> Result<Merged> {
     let registry = crate::registry::Registry::load_or_default(&dirs.config_file())?;
-    let accounts = load_snapshots(dirs)?;
+    let mut accounts = load_snapshots(dirs)?;
+    for snapshot in &mut accounts {
+        if let Some(account) = registry.accounts.iter().find(|a| a.id == snapshot.id) {
+            describe(snapshot, account, dirs);
+        }
+    }
     let at = now();
     let last_poll_at = accounts.iter().map(|a| a.captured_at).max();
     let next_poll_at = if crate::agent::is_installed() {
@@ -308,10 +367,35 @@ pub fn merge(dirs: &LimitsDirs) -> Result<Merged> {
     };
     let json = serde_json::to_string_pretty(&merged)?;
     write_atomic(&dirs.merged_file(), json.as_bytes())?;
-    let feed = crate::public::feed(&merged, &merged.events);
+    // The public log reaches back past the last fifty events of every kind.
+    let history = crate::events::load(dirs, 0)?;
+    let announcements = crate::announcements::load(dirs);
+    let salt = crate::public::salt(dirs);
+    let feed = crate::public::feed(&merged, &history, announcements.as_ref(), &salt);
     let json = serde_json::to_string_pretty(&feed)?;
     write_atomic(&dirs.public_file(), json.as_bytes())?;
     Ok(merged)
+}
+
+/// What the registry and the login say about an account that a poll does
+/// not: whether it is polled at all, and for Claude, what kind of plan it is
+/// on and whose. Read at merge time so a login that moved into a team shows as
+/// one without waiting for a poll that a live-only account never gets.
+fn describe(snapshot: &mut AccountSnapshot, account: &Account, dirs: &LimitsDirs) {
+    snapshot.live_only = account.live_only;
+    if account.provider != Provider::Claude {
+        return;
+    }
+    let details = crate::claude::login_details(&account.poll_home(dirs));
+    snapshot.kind = account
+        .kind
+        .clone()
+        .or_else(|| details.as_ref().map(|d| d.kind.clone()));
+    if let Some(details) = details {
+        snapshot.org = details.org;
+        snapshot.org_id = details.org_id;
+        snapshot.tier = details.rate_limit_tier;
+    }
 }
 
 pub fn load_merged(dirs: &LimitsDirs) -> Result<Option<Merged>> {
@@ -403,6 +487,10 @@ mod tests {
             label: None,
             home: None,
             model: None,
+            paused: false,
+            live_only: false,
+            kind: None,
+            plan: None,
         };
         let failed = AccountSnapshot::failed(&account, "statusline", "boom".into());
         assert_eq!(failed.error.as_deref(), Some("boom"));

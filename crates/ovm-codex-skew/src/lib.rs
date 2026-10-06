@@ -61,8 +61,8 @@ pub struct Migration {
 
 // CODEX_STATE_MIGRATIONS_BEGIN
 // Codex `state` migrator — generated from openai/codex codex-rs/state/migrations
-// at rust-v0.154.0 (regenerate with scripts/gen-codex-migration-manifest.py).
-// source commit: 6b9826e3aa83b1a5947db50f4332cb9c65f1b340
+// at rust-v0.160.1 (regenerate with scripts/gen-codex-migration-manifest.py).
+// source commit: d27764b82f7118f674371e6d6e76271d9d606edb
 // Keep in version
 // order; `breaking` flags removals only.
 #[rustfmt::skip]
@@ -121,6 +121,10 @@ const CODEX_STATE_MIGRATIONS: &[Migration] = &[
     Migration { version: 52, description: "projects recency", breaking: false },
     Migration { version: 53, description: "threads originator", breaking: false },
     Migration { version: 54, description: "threads daybreak enabled", breaking: false },
+    Migration { version: 55, description: "thread attachments", breaking: true }, // removes thread_artifacts
+    Migration { version: 56, description: "threads creator identity", breaking: false },
+    Migration { version: 57, description: "cleanup guardian thread metadata", breaking: false },
+    Migration { version: 58, description: "threads archive sort indexes", breaking: false },
 ];
 // CODEX_STATE_MIGRATIONS_END
 
@@ -1355,21 +1359,24 @@ mod tests {
         assert_eq!(a.db_max_applied, guard_max());
     }
 
+    /// The newest migration a human has reviewed. Everything past it is the
+    /// auto-synced tail: published as classified, flagged for review by the
+    /// pipeline, pinned here once someone has looked.
+    const LAST_REVIEWED: u32 = 55;
+
     /// Reviewed history stays pinned exactly; the tail past it is open.
     ///
     /// Upstream ships new state migrations constantly, and re-pinning the
     /// full list made every additive release a manual chore. Policy since
-    /// 2026-08-07: NON-BREAKING migrations flow through the sync + publish
-    /// pipeline automatically; only a breaking or unclassifiable migration
-    /// stops the line ([`old_binary_missing_breaking_migration_is_degraded`]
-    /// pins the complete breaking set, and the workflow fails on the
-    /// classifier's BREAKING/INDETERMINATE verdicts). What this test still
-    /// owns: history that was reviewed by a human must never be rewritten,
-    /// and every generated entry — reviewed or not — must be structurally
-    /// sound (contiguous versions, non-empty descriptions).
+    /// 2026-09-18: EVERY migration flows through the sync + publish pipeline
+    /// automatically; a breaking or unclassifiable one is flagged for review
+    /// (a dev log entry and an issue from the run that synced it) instead of
+    /// holding the line. What this test owns: history that was reviewed by a
+    /// human must never be rewritten, and every generated entry — reviewed
+    /// or not — must be structurally sound (contiguous versions, non-empty
+    /// descriptions).
     #[test]
     fn reviewed_history_is_pinned_and_the_generated_tail_is_sound() {
-        const LAST_REVIEWED: u32 = 46;
         let reviewed = CODEX_STATE_MIGRATIONS
             .iter()
             .filter(|migration| (40..=LAST_REVIEWED).contains(&migration.version))
@@ -1386,6 +1393,18 @@ mod tests {
                 (44, "external agent config imports provider id", false),
                 (45, "threads section", false),
                 (46, "threads section order", false),
+                (47, "rollout migration state", false),
+                (48, "thread section appearance", false),
+                (49, "projects", false),
+                (50, "threads section empty preview indexes", false),
+                (51, "thread artifacts", false),
+                (52, "projects recency", false),
+                (53, "threads originator", false),
+                (54, "threads daybreak enabled", false),
+                // Reviewed 2026-09-18: RENAMEs thread_artifacts (added by 51)
+                // to thread_attachments, so a 0.154-or-older binary loses the
+                // table it reads. A rename is a removal for the old name.
+                (55, "thread attachments", true),
             ]
         );
 
@@ -1407,9 +1426,11 @@ mod tests {
         }
     }
 
-    /// Also the full-auto tripwire: this pins the COMPLETE breaking set, so
-    /// an auto-synced migration that the classifier marks breaking turns the
-    /// pipeline red for human review even though additive ones flow through.
+    /// Pins the REVIEWED breaking set. The auto-synced tail past
+    /// `LAST_REVIEWED` is read from the manifest, so a breaking migration the
+    /// pipeline just synced flows through here; the pipeline flags it for
+    /// review (dev log entry + issue) rather than failing the build
+    /// (policy 2026-09-18), and the review lands by moving `LAST_REVIEWED`.
     #[test]
     fn old_binary_missing_breaking_migration_is_degraded() {
         let applied: Vec<&str> = CODEX_STATE_MIGRATIONS
@@ -1424,7 +1445,12 @@ mod tests {
         let a = assess_blobs(&applied, &known);
         assert!(a.degraded(), "missing migration 35 should degrade");
         let breaking: Vec<u32> = a.breaking().map(|m| m.version).collect();
-        assert_eq!(breaking, vec![35, 42]);
+        let unreviewed_tail: Vec<u32> = CODEX_STATE_MIGRATIONS
+            .iter()
+            .filter(|m| m.version > LAST_REVIEWED && m.breaking)
+            .map(|m| m.version)
+            .collect();
+        assert_eq!(breaking, [vec![35, 42, 55], unreviewed_tail].concat());
         assert_eq!(a.binary_max_known, 34);
         assert_eq!(a.db_max_applied, guard_max());
     }
@@ -1616,7 +1642,7 @@ mod tests {
 
     #[test]
     fn observed_compatible_outranks_a_static_degraded_verdict() {
-        // Static: binary knows through 34, DB at manifest max → breaking 35/42.
+        // Static: binary knows through 34, DB at manifest max → breaking 35/42/55.
         let evidence = evidence_with(&[observation(guard_max(), "rust-v0.10.0", "compatible", 90)]);
         let observed =
             find_observation(&evidence, &fixture_manifest(), guard_max(), "rust-v0.10.0")
@@ -1700,19 +1726,24 @@ mod tests {
     #[test]
     fn a_pessimistic_observation_reaches_back_through_additive_migrations_only() {
         let manifest = fixture_manifest();
-        // 43..=max are all additive in the compiled manifest; 42 is breaking.
+        // 43..=54 are all additive in the compiled manifest; 42 and 55 are
+        // the breaking migrations on either side of that window.
+        const WINDOW_START: u32 = 43;
+        const WINDOW_END: u32 = 54;
         assert!(manifest.iter().any(|m| m.version == 42 && m.breaking));
+        assert!(manifest.iter().any(|m| m.version == 55 && m.breaking));
         assert!(manifest
             .iter()
-            .filter(|m| m.version > 42)
+            .filter(|m| (WINDOW_START..=WINDOW_END).contains(&m.version))
             .all(|m| !m.breaking));
-        let evidence = evidence_with(&[observation(guard_max(), "rust-v0.10.0", "degraded", 90)]);
+        let evidence = evidence_with(&[observation(WINDOW_END, "rust-v0.10.0", "degraded", 90)]);
 
-        // DB at 43: every migration in 44..=max is additive → applies.
-        assert!(find_observation(&evidence, &manifest, 43, "rust-v0.10.0").is_some());
+        // DB at 43: every migration in 44..=54 is additive → applies.
+        assert!(find_observation(&evidence, &manifest, WINDOW_START, "rust-v0.10.0").is_some());
         // DB at 41: migration 42 (breaking) lies in the gap → does not apply.
         assert!(find_observation(&evidence, &manifest, 41, "rust-v0.10.0").is_none());
         // DB beyond the observation: a newer DB is never covered by an older one.
+        assert!(find_observation(&evidence, &manifest, 55, "rust-v0.10.0").is_none());
         assert!(find_observation(&evidence, &manifest, guard_max() + 1, "rust-v0.10.0").is_none());
     }
 

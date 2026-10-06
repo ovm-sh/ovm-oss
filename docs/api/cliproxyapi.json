@@ -2,9 +2,9 @@
   "product": "cliproxyapi",
   "display_name": "CLIProxyAPI",
   "source": "github:router-for-me/CLIProxyAPI",
-  "updated_at": "2026-09-13T17:16:37Z",
+  "updated_at": "2026-10-06T04:42:05Z",
   "dist_tags": {
-    "latest": "7.3.1"
+    "latest": "8.0.16"
   },
   "versions": [
     {
@@ -3270,6 +3270,294 @@
         "linux-auth": true,
         "macos-auth": true
       }
+    },
+    {
+      "version": "7.3.2",
+      "date": "2026-09-14",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.3",
+      "date": "2026-09-14",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.4",
+      "date": "2026-09-15",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.5",
+      "date": "2026-09-16",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.6",
+      "date": "2026-09-17",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.7",
+      "date": "2026-09-17",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.8",
+      "date": "2026-09-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.9",
+      "date": "2026-09-19",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.10",
+      "date": "2026-09-20",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.11",
+      "date": "2026-09-21",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.12",
+      "date": "2026-09-22",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.13",
+      "date": "2026-09-22",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.14",
+      "date": "2026-09-22",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.15",
+      "date": "2026-09-23",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.16",
+      "date": "2026-09-24",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.17",
+      "date": "2026-09-24",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.18",
+      "date": "2026-09-26",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.19",
+      "date": "2026-09-26",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "7.3.20",
+      "date": "2026-09-27",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.0",
+      "date": "2026-09-27",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.1",
+      "date": "2026-09-27",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.2",
+      "date": "2026-09-27",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.3",
+      "date": "2026-09-28",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.4",
+      "date": "2026-09-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.5",
+      "date": "2026-09-30",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.6",
+      "date": "2026-09-30",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.7",
+      "date": "2026-09-30",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.8",
+      "date": "2026-10-01",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.9",
+      "date": "2026-10-01",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.10",
+      "date": "2026-10-02",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.11",
+      "date": "2026-10-02",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.12",
+      "date": "2026-10-02",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.13",
+      "date": "2026-10-03",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.14",
+      "date": "2026-10-04",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.15",
+      "date": "2026-10-04",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "8.0.16",
+      "date": "2026-10-05",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
     }
   ],
   "retired_versions": [
@@ -3281,5 +3569,5 @@
     }
   ],
   "schema_version": 1,
-  "snapshot_revision": "sha256:3772c034407447a6bcddbc08451296634a929168dea78d24ddd08a6c0c10a974"
+  "snapshot_revision": "sha256:98040d51ccf67c04e680ee3ece23917a9b003315489c90f9d5ef87e5f730e658"
 }

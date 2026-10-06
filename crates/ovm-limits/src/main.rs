@@ -16,18 +16,23 @@
 
 mod accounts;
 mod agent;
+mod announcements;
 mod claude;
 mod codex;
 mod doctor;
 mod due;
 mod events;
 mod hooks;
+mod live;
 mod paths;
+mod plan;
 mod pty;
 mod public;
 mod registry;
+mod serve;
 mod show;
 mod snapshot;
+mod table;
 mod tui;
 
 use accounts::{AddOptions, HomeFate, Selection};
@@ -77,12 +82,19 @@ fn main() {
         Some("add") => add(&args[1..]),
         Some("login") => login(&args[1..]),
         Some("rename") => rename(&args[1..]),
+        Some("pause") => pause(&args[1..], true),
+        Some("resume") => pause(&args[1..], false),
         Some("remove") => remove(&args[1..]),
         Some("poll") => poll(&args[1..]),
         Some("show") => show(&args[1..]),
+        Some("serve") => serve(&args[1..]),
         Some("events") => events_command(&args[1..]),
         Some("hook") => hook_command(&args[1..]),
         Some("interval") => interval(&args[1..]),
+        Some("digest") => digest(&args[1..]),
+        Some("sort") => sort(&args[1..]),
+        Some("group") => group(&args[1..]),
+        Some("plan") => plan_command(&args[1..]),
         Some("agent") => agent_command(&args[1..]),
         Some("doctor") => LimitsDirs::new().and_then(|dirs| doctor::run(&dirs)),
         Some("uninstall") => uninstall(&args[1..]),
@@ -128,7 +140,9 @@ fn list() -> Result<()> {
         return Ok(());
     }
     for account in &registry.accounts {
-        let state = if account.signed_in(&dirs) {
+        let state = if account.paused {
+            "  (paused)"
+        } else if account.signed_in(&dirs) {
             ""
         } else {
             "  (not signed in)"
@@ -142,7 +156,8 @@ fn list() -> Result<()> {
     Ok(())
 }
 
-/// `add [claude|codex] [label] [--home DIR] [--model M] [--no-login]`
+/// `add [claude|codex] [label] [--home DIR] [--model M] [--no-login]
+///  [--live-only] [--team|--personal]`
 ///
 /// On a terminal, whatever is not said is asked: which product, what label.
 /// In a script nothing is asked and nothing opens a browser.
@@ -169,6 +184,9 @@ fn add(args: &[String]) -> Result<()> {
                 );
             }
             "--no-login" => login_after = false,
+            "--live-only" => options.live_only = true,
+            "--team" => options.kind = Some("team".into()),
+            "--personal" => options.kind = Some("personal".into()),
             other if other.starts_with("--") => {
                 return Err(usage(&format!("unknown add flag `{other}`")))
             }
@@ -196,6 +214,12 @@ fn add(args: &[String]) -> Result<()> {
         account.display(),
         paths::display(&account.poll_home(&dirs))
     );
+    if account.live_only {
+        println!(
+            "    live-only: never polled; its numbers arrive with the next statusline of a session in that home"
+        );
+        return Ok(());
+    }
     if login_after && interactive && tui::ask_yes_no("Sign in now?")? {
         println!();
         accounts::login(&dirs, &account)?;
@@ -243,6 +267,30 @@ fn rename(args: &[String]) -> Result<()> {
     let dirs = LimitsDirs::new()?;
     let account = accounts::rename(&dirs, key, label)?;
     println!("  {} now called {}", style("✓").green(), account.display());
+    Ok(())
+}
+
+/// `pause <account>` / `resume <account>` — set aside without forgetting.
+fn pause(args: &[String], paused: bool) -> Result<()> {
+    let verb = if paused { "pause" } else { "resume" };
+    let [key] = args else {
+        return Err(usage(&format!("{verb} <account>")));
+    };
+    let dirs = LimitsDirs::new()?;
+    let account = accounts::pause(&dirs, key, paused)?;
+    if paused {
+        println!(
+            "  {} {} paused — no polls, out of limits.json; home and login kept. Back with: ovm limits resume {key}",
+            style("✓").green(),
+            account.display()
+        );
+    } else {
+        println!(
+            "  {} {} resumed — the next poll fills it back in",
+            style("✓").green(),
+            account.display()
+        );
+    }
     Ok(())
 }
 
@@ -319,16 +367,28 @@ fn poll(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `show [--json]`
+/// `show [--json | --brief | --grid | <account>]`
 fn show(args: &[String]) -> Result<()> {
-    let as_json = match args {
-        [] => false,
-        [flag] if flag == "--json" => true,
-        _ => return Err(usage("show takes only --json")),
+    let (overrides, rest) = show::Overrides::take(args)?;
+    let format = match rest.as_slice() {
+        [] => show::Format::Table,
+        [flag] if flag == "--json" => show::Format::Json,
+        [flag] if flag == "--brief" => show::Format::Brief,
+        [flag] if flag == "--grid" => show::Format::Grid,
+        [account] if !account.starts_with('-') => {
+            let dirs = LimitsDirs::new()?;
+            accounts::require(&dirs)?;
+            return show::run_account(&dirs, account);
+        }
+        _ => {
+            return Err(usage(
+                "show takes --json, --brief, --grid, or one account's id or label; the table also takes --sort provider|reset and --group / --no-group",
+            ))
+        }
     };
     let dirs = LimitsDirs::new()?;
     accounts::require(&dirs)?;
-    show::run(&dirs, as_json)
+    show::run(&dirs, format, overrides)
 }
 
 /// `agent install | uninstall | status`
@@ -459,18 +519,18 @@ fn events_command(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `hook list | on-event <cmd> | on-poll <cmd> | clear <name> | test [name] | ntfy <topic> | publish`
+/// `hook list | on-event <cmd> | on-poll <cmd> | on-digest <cmd> | clear <name> | test [name] | ntfy <topic> | publish`
 fn hook_command(args: &[String]) -> Result<()> {
     const USAGE: &str =
-        "hook list | on-event <command> | on-poll <command> | clear <name> | test [name] | ntfy <topic> | publish";
+        "hook list | on-event <command> | on-poll <command> | on-digest <command> | clear <name> | test [name] | ntfy <topic> | publish";
     let dirs = LimitsDirs::new()?;
     match args.first().map(String::as_str) {
         None | Some("list") => {
             let registry = registry::Registry::load_or_default(&dirs.config_file())?;
-            for name in ["on-event", "on-poll"] {
+            for name in ["on-event", "on-poll", "on-digest"] {
                 match registry.hooks.get(name).flatten() {
-                    Some(command) => println!("  {name:<9} {command}"),
-                    None => println!("  {name:<9} {}", style("(none)").dim()),
+                    Some(command) => println!("  {name:<10} {command}"),
+                    None => println!("  {name:<10} {}", style("(none)").dim()),
                 }
             }
             println!();
@@ -485,10 +545,11 @@ fn hook_command(args: &[String]) -> Result<()> {
             println!(
                 "  on-poll runs once after a poll with OVM_LIMITS_POLLED and OVM_LIMITS_EVENTS."
             );
-            println!("  Both see OVM_LIMITS_FILE, OVM_LIMITS_PUBLIC_FILE, OVM_LIMITS_EVENTS_FILE.");
+            println!("  on-digest runs right after on-poll with the same environment.");
+            println!("  All see OVM_LIMITS_FILE, OVM_LIMITS_PUBLIC_FILE, OVM_LIMITS_EVENTS_FILE.");
             Ok(())
         }
-        Some(name @ ("on-event" | "on-poll")) => {
+        Some(name @ ("on-event" | "on-poll" | "on-digest")) => {
             let command = args.get(1).cloned().ok_or_else(|| usage(USAGE))?;
             accounts::set_hook(&dirs, name, Some(command.clone()))?;
             println!("  {} {name} → {command}", style("✓").green());
@@ -508,8 +569,12 @@ fn hook_command(args: &[String]) -> Result<()> {
                     "no {name} hook is set — see: ovm limits hook list"
                 )));
             };
-            let ok = if name == "on-poll" {
-                hooks::on_poll(&dirs, &registry, 0, 0);
+            let ok = if name == "on-poll" || name == "on-digest" {
+                // Only the hook under test, not whatever else shares the poll.
+                let mut probe = registry.clone();
+                probe.hooks = hooks::Hooks::default();
+                probe.hooks.set(name, Some(command.to_string()));
+                hooks::on_poll(&dirs, &probe, 0, 0);
                 true
             } else {
                 let sample = events::sample(snapshot::now());
@@ -537,11 +602,33 @@ fn hook_command(args: &[String]) -> Result<()> {
             // (2026-09-08). So: the bars, a reset nobody asked for, a credit
             // the operator spent, and a poll that has failed twice.
             let command = format!(
-                r#"case "$OVM_LIMITS_EVENT_KIND" in surprise_reset) title="limits: early reset"; tags=rotating_light;; threshold) case "$OVM_LIMITS_LEVEL" in 100) title="limits: hit"; tags=octagonal_sign;; *) title="limits: $OVM_LIMITS_LEVEL%"; tags=chart_with_upwards_trend;; esac;; limit_lifted) title="limits: back"; tags=white_check_mark;; credit_reset) title="limits: credit spent"; tags=information_source;; failed) title="limits: poll failing"; tags=x;; *) exit 0;; esac; curl -fsS -H "Title: $title" -H "Tags: $tags" -d "$OVM_LIMITS_EVENT_TEXT" "https://ntfy.sh/{topic}" >/dev/null"#
+                r#"src="[$(hostname -s)]"; case "$OVM_LIMITS_EVENT_KIND" in surprise_reset) title="limits: early reset"; tags=rotating_light;; threshold) case "$OVM_LIMITS_LEVEL" in 100) title="limits: hit"; tags=octagonal_sign;; *) title="limits: $OVM_LIMITS_LEVEL%"; tags=chart_with_upwards_trend;; esac;; limit_lifted) title="limits: back"; tags=white_check_mark;; credit_reset) title="limits: credit spent"; tags=information_source;; failed) title="limits: poll failing"; tags=x;; recovered) title="limits: poll recovered"; tags=white_check_mark;; *) exit 0;; esac; curl -fsS -H "Title: $src $title" -H "Tags: $tags" -d "$OVM_LIMITS_EVENT_TEXT" "https://ntfy.sh/{topic}" >/dev/null"#
             );
             accounts::set_hook(&dirs, "on-event", Some(command.clone()))?;
             println!(
-                "  {} on-event → ntfy topic {topic} (limits: hit / back, thresholds, an early reset, a spent credit, a poll failing twice)",
+                "  {} on-event → ntfy topic {topic} (limits: hit / back, thresholds, an early reset, a spent credit, a poll failing twice and recovering; titled [hostname] so the phone shows which machine sent it)",
+                style("✓").green()
+            );
+            // The digest: every window of every account on one line, after
+            // every poll, at ntfy's low priority so it shows in the tray and
+            // never buzzes. An account that is failing says so instead of
+            // its numbers. Asked for on 2026-09-19: "my limits update hourly
+            // unless an anomaly is detected".
+            let digest = format!(
+                r#"msg=$(python3 -c 'import json, sys
+doc = json.load(open(sys.argv[1]))
+parts = []
+for account in doc.get("accounts", []):
+    if account.get("error"):
+        parts.append(account["label"] + " failing")
+        continue
+    windows = " ".join(w["label"] + " " + str(int(round(w["used_percent"]))) + "%" for w in account.get("windows", []))
+    parts.append(account["label"] + " " + windows)
+print(" | ".join(parts))' "$OVM_LIMITS_FILE") && curl -fsS -H "Title: [$(hostname -s)] limits: hourly" -H "Priority: low" -H "Tags: bar_chart" -d "$msg" "https://ntfy.sh/{topic}" >/dev/null"#
+            );
+            accounts::set_hook(&dirs, "on-digest", Some(digest))?;
+            println!(
+                "  {} on-digest → one low-priority line per poll with every account's windows",
                 style("✓").green()
             );
             println!("    subscribe in the ntfy app to `{topic}`; test with: ovm limits hook test");
@@ -571,14 +658,175 @@ fn hook_command(args: &[String]) -> Result<()> {
     }
 }
 
-/// `interval [15m]` — how often a Claude account is polled at most.
+/// `digest [1h]` — how often the digest hook may run at most.
+fn digest(args: &[String]) -> Result<()> {
+    let dirs = LimitsDirs::new()?;
+    match args {
+        [] => {
+            let registry = registry::Registry::load_or_default(&dirs.config_file())?;
+            println!("  {}", digest_label(registry.digest_minutes));
+            Ok(())
+        }
+        [value] => {
+            let minutes = registry::parse_interval(value)?;
+            let registry = accounts::set_digest_minutes(&dirs, minutes)?;
+            println!(
+                "  {} {}",
+                style("✓").green(),
+                digest_label(registry.digest_minutes)
+            );
+            Ok(())
+        }
+        _ => Err(usage("digest [1h|30m|0]")),
+    }
+}
+
+fn digest_label(minutes: u64) -> String {
+    if minutes == 0 {
+        "the digest hook runs on every poll".to_string()
+    } else {
+        format!(
+            "the digest hook runs at most every {}",
+            registry::interval_label(minutes)
+        )
+    }
+}
+
+/// `sort [provider|reset]` — the order of the account table's rows.
+fn sort(args: &[String]) -> Result<()> {
+    let dirs = LimitsDirs::new()?;
+    match args {
+        [] => {
+            let registry = registry::Registry::load_or_default(&dirs.config_file())?;
+            println!("  {}", sort_label(registry.table_sort));
+            Ok(())
+        }
+        [value] => {
+            let sort = table::SortOrder::parse(value)
+                .ok_or_else(|| usage(&format!("sort provider|reset (not `{value}`)")))?;
+            let registry = accounts::set_table_sort(&dirs, sort)?;
+            println!(
+                "  {} {}",
+                style("✓").green(),
+                sort_label(registry.table_sort)
+            );
+            Ok(())
+        }
+        _ => Err(usage("sort [provider|reset]")),
+    }
+}
+
+fn sort_label(sort: table::SortOrder) -> String {
+    match sort {
+        table::SortOrder::Provider => {
+            "the account table sorts by provider, then soonest reset".to_string()
+        }
+        table::SortOrder::Reset => {
+            "the account table sorts by soonest reset, across providers".to_string()
+        }
+    }
+}
+
+/// `group [on|off]` — the account table as one block per provider.
+fn group(args: &[String]) -> Result<()> {
+    let dirs = LimitsDirs::new()?;
+    match args {
+        [] => {
+            let registry = registry::Registry::load_or_default(&dirs.config_file())?;
+            println!("  {}", group_label(registry.table_grouped));
+            Ok(())
+        }
+        [value] => {
+            let grouped = match value.as_str() {
+                "on" => true,
+                "off" => false,
+                other => return Err(usage(&format!("group on|off (not `{other}`)"))),
+            };
+            let registry = accounts::set_table_grouped(&dirs, grouped)?;
+            println!(
+                "  {} {}",
+                style("✓").green(),
+                group_label(registry.table_grouped)
+            );
+            Ok(())
+        }
+        _ => Err(usage("group [on|off]")),
+    }
+}
+
+fn group_label(grouped: bool) -> String {
+    if grouped {
+        "the account table draws one block per provider".to_string()
+    } else {
+        "the account table is one list".to_string()
+    }
+}
+
+/// `plan <account> [--name …] [--status live|cancelled] [--ends YYYY-MM-DD]
+/// [--clear]` — the subscription as the billing page states it. No flags
+/// prints the record.
+fn plan_command(args: &[String]) -> Result<()> {
+    let Some((key, flags)) = args.split_first() else {
+        return Err(usage(plan::PLAN_USAGE));
+    };
+    if key.starts_with("--") {
+        return Err(usage(plan::PLAN_USAGE));
+    }
+    let edit = plan::PlanEdit::parse(flags)?;
+    let dirs = LimitsDirs::new()?;
+    let today = table::local_day(snapshot::now());
+    if edit == plan::PlanEdit::Show {
+        let registry = registry::Registry::load_or_default(&dirs.config_file())?;
+        let account = registry.find(key).ok_or_else(|| {
+            LimitsError::Message(format!("no account `{key}` — see: ovm limits list"))
+        })?;
+        match &account.plan {
+            Some(plan) => println!("  {}: {}", account.display(), show::plan_line(plan, today)),
+            None => println!(
+                "  {}: no plan recorded — set one: ovm limits plan {key} --status cancelled --ends YYYY-MM-DD",
+                account.display()
+            ),
+        }
+        return Ok(());
+    }
+    let registry = registry::Registry::load_or_default(&dirs.config_file())?;
+    let current = registry.find(key).and_then(|account| account.plan.clone());
+    let account = accounts::set_plan(&dirs, key, edit.apply(current))?;
+    match &account.plan {
+        Some(plan) => {
+            println!(
+                "  {} {}: {}",
+                style("✓").green(),
+                account.display(),
+                show::plan_line(plan, today)
+            );
+            if plan.status == plan::PlanStatus::Cancelled && plan.ends_on.is_none() {
+                println!(
+                    "  {}",
+                    style(format!(
+                        "add the day access ends, so the table can warn you: ovm limits plan {key} --ends YYYY-MM-DD"
+                    ))
+                    .dim()
+                );
+            }
+        }
+        None => println!(
+            "  {} {}: plan forgotten",
+            style("✓").green(),
+            account.display()
+        ),
+    }
+    Ok(())
+}
+
+/// `interval [15m]` — how often an account is polled at most.
 fn interval(args: &[String]) -> Result<()> {
     let dirs = LimitsDirs::new()?;
     match args {
         [] => {
             let registry = registry::Registry::load_or_default(&dirs.config_file())?;
             println!(
-                "  a Claude turn at most every {} (the agent ticks every {} min; Codex is free and polled every tick)",
+                "  every account polled at most every {} (the agent ticks every {} min)",
                 registry::interval_label(registry.interval_minutes),
                 agent::TICK_SECONDS / 60
             );
@@ -587,7 +835,7 @@ fn interval(args: &[String]) -> Result<()> {
         [value] => {
             let registry = accounts::set_interval(&dirs, registry::parse_interval(value)?)?;
             println!(
-                "  {} a Claude turn at most every {}",
+                "  {} every account polled at most every {}",
                 style("✓").green(),
                 registry::interval_label(registry.interval_minutes)
             );
@@ -611,6 +859,30 @@ fn absolute(path: PathBuf) -> PathBuf {
         .unwrap_or(path)
 }
 
+/// `serve [--bind tailnet|local|ADDR:PORT] [--key]` — the read-only hub.
+/// `--key` prints the bearer key (made on first use) and exits.
+fn serve(args: &[String]) -> Result<()> {
+    let dirs = LimitsDirs::new()?;
+    let mut bind = serve::Bind::Tailnet(serve::DEFAULT_PORT);
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--bind" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| usage("serve --bind tailnet|local|ADDR:PORT"))?;
+                bind = serve::Bind::parse(value)?;
+            }
+            "--key" => {
+                println!("{}", serve::load_or_create_key(&dirs)?);
+                return Ok(());
+            }
+            other => return Err(usage(&format!("unknown serve flag `{other}`"))),
+        }
+    }
+    serve::run(&dirs, &bind)
+}
+
 fn usage(text: &str) -> LimitsError {
     LimitsError::Message(format!("usage: {text}"))
 }
@@ -632,7 +904,7 @@ fn print_help() {
         ),
         (
             "add",
-            "Register an account: add [claude|codex] [label] [--home DIR] [--model M] [--no-login]",
+            "Register an account: add [claude|codex] [label] [--home DIR] [--model M] [--no-login] [--live-only] [--team|--personal]",
         ),
         (
             "login",
@@ -641,6 +913,14 @@ fn print_help() {
         (
             "rename",
             "Change what you call an account: rename <account> [label]",
+        ),
+        (
+            "pause",
+            "Set an account aside without forgetting it (no polls, out of limits.json): pause <account>",
+        ),
+        (
+            "resume",
+            "Put a paused account back into the rotation: resume <account>",
         ),
         (
             "remove",
@@ -652,7 +932,31 @@ fn print_help() {
         ),
         (
             "show",
-            "Print the merged view; --json is the structured endpoint (every field, every account)",
+            "Print the account table (--sort provider|reset, --group/--no-group for this call); show <account>: one account in full, --grid: every account side by side, --json: the structured endpoint, --brief: plain lines",
+        ),
+        (
+            "serve",
+            "limits.json as a read-only CLIProxyAPI-style hub for t3code: serve [--bind tailnet|local|ADDR:PORT] [--key]",
+        ),
+        (
+            "interval",
+            "How often an account may be polled at most: interval [15m|30m|1h]",
+        ),
+        (
+            "digest",
+            "How often the on-digest hook may run at most: digest [1h|30m|0 for every poll]",
+        ),
+        (
+            "sort",
+            "The order of the account table: sort [provider|reset]",
+        ),
+        (
+            "group",
+            "The account table as one block per provider: group [on|off]",
+        ),
+        (
+            "plan",
+            "Record an account's plan by hand: plan <account> [--name \"…\"] [--status live|cancelled] [--ends YYYY-MM-DD] [--clear]",
         ),
         (
             "agent",
@@ -683,7 +987,8 @@ fn print_help() {
     println!("How a Claude poll works: a throwaway interactive Claude Code session in an empty");
     println!("directory, one word typed on the cheapest model, the statusline payload that");
     println!("follows carries the 5h / 7d windows, then /exit. Each poll is one real turn.");
-    println!("Codex is asked over `codex app-server` and costs nothing.");
+    println!("Codex is asked over `codex app-server` and costs nothing — but it is polled on");
+    println!("the same interval, because every poll runs the on-poll hooks.");
     println!();
     println!("The structured endpoint is `ovm limits show --json`: the merged limits.json, schema");
     println!(

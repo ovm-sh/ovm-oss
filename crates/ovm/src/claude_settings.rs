@@ -90,6 +90,44 @@ fn foreign_command_at(base: &Path, settings: &Path) -> Option<String> {
     Some(command)
 }
 
+/// `ECHO_VERSION = "…"` in a copy of the script, if it carries one. Copies
+/// written before 2026-09-27 have none.
+pub fn echo_version(script: &str) -> Option<&str> {
+    script.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("ECHO_VERSION = \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+    })
+}
+
+/// The Echo inside this ovm.
+pub fn bundled_version() -> Option<&'static str> {
+    echo_version(ECHO_SCRIPT)
+}
+
+/// The Echo on disk, if one was ever installed.
+pub fn installed_version(base: &Path) -> Option<Option<String>> {
+    let raw = std::fs::read_to_string(script_path(base)).ok()?;
+    Some(echo_version(&raw).map(str::to_owned))
+}
+
+/// Rewrite an installed Echo that differs from the bundled one — the script
+/// only, never Claude's settings, and never where Echo was not installed. The
+/// answer is whether it was rewritten. Called on every `ovm claude` launch, so
+/// an ovm upgrade reaches the statusline without anyone running `ovm
+/// statusline` again; the comparison is one small file read.
+pub fn refresh_installed(base: &Path) -> Result<bool> {
+    let script = script_path(base);
+    let Ok(current) = std::fs::read(&script) else {
+        return Ok(false);
+    };
+    if current == ECHO_SCRIPT.as_bytes() {
+        return Ok(false);
+    }
+    write_replacing(&script, ECHO_SCRIPT.as_bytes(), true)?;
+    Ok(true)
+}
+
 /// Install the script and point Claude's statusline at it.
 pub fn install(base: &Path) -> Result<PathBuf> {
     let path = settings_path()
@@ -349,6 +387,38 @@ mod tests {
             Some("their-own-thing")
         );
         assert!(!is_installed_at(&base, &settings));
+    }
+
+    #[test]
+    fn a_stale_installed_echo_is_refreshed_and_a_missing_one_is_left_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        assert!(
+            !refresh_installed(base).unwrap(),
+            "nothing installed, nothing written"
+        );
+        assert!(!script_path(base).exists());
+
+        crate::util::ensure_parent_dir(&script_path(base)).unwrap();
+        std::fs::write(script_path(base), "print('old echo')\n").unwrap();
+        assert_eq!(installed_version(base), Some(None));
+        assert!(refresh_installed(base).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(script_path(base)).unwrap(),
+            ECHO_SCRIPT
+        );
+        assert_eq!(
+            installed_version(base).flatten().as_deref(),
+            bundled_version()
+        );
+        assert!(!refresh_installed(base).unwrap(), "already current");
+    }
+
+    #[test]
+    fn the_bundled_echo_carries_a_version() {
+        assert!(bundled_version().is_some_and(|v| !v.is_empty()));
+        assert_eq!(echo_version("x\nECHO_VERSION = \"1.2\"\ny"), Some("1.2"));
+        assert_eq!(echo_version("no marker"), None);
     }
 
     #[test]

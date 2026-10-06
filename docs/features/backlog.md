@@ -15,6 +15,8 @@ Planned features beyond MVP. Prioritized by user impact.
 | Plugin system | User-extensible hooks and commands | deferred |
 | Version aliases | `ovm alias stable 2.1.91` | planned |
 | Parallel installs | Download multiple versions concurrently | planned |
+| Cleanup keep-last-N per product | `ovm cleanup` keeps the newest N versions per product on top of the age rule; Codex ships several releases a week, so 30 days alone left 59 Codex installs (~270 MB each) on the mini | planned |
+| Unattended cleanup | `ovm cleanup now --yes` (or a config key) for boxes nobody is watching, such as the mini; keeps the active-version recheck and the read-only launch path | planned |
 | MCP topology series | Delayed-mock MCP probe (`OVM_BENCHMARK_MCP_DELAY`) measuring per-version MCP startup concurrency; publish as a benchmark series | in-progress |
 | MCP startup anomaly detections | Feed entries when a version's handshake spread breaks the expected delay pattern (e.g. parallel→serial regression) | planned |
 | Real-MCP calibration annotation | One-off measurement of real server startup cost published as a site annotation, not a series | planned |

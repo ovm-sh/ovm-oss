@@ -14,6 +14,8 @@
 
 use crate::hooks::Hooks;
 use crate::paths::LimitsDirs;
+use crate::plan::Plan;
+use crate::table::{Arrangement, SortOrder};
 use crate::{LimitsError, Result};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -186,6 +188,26 @@ pub struct Account {
     /// cheapest one is the right one; the reply is discarded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Set aside, not forgotten: a paused account keeps its home and its
+    /// login, but no poll touches it and the merged view leaves it out. For
+    /// a subscription that lapsed and is coming back (2026-09-19).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
+    /// Never polled: its numbers come only from the sessions that run in its
+    /// home (Echo's live readings). For a home someone works in — an
+    /// `ovm run` account folder — where a poll would refresh the very login
+    /// those sessions hold and sign them out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_only: bool,
+    /// `team` or `personal` when the person says so; otherwise it is read
+    /// from the login (see [`crate::claude::login_details`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The subscription as the person recorded it with `ovm limits plan`:
+    /// live or cancelled, and the day it ends or renews. No product reports
+    /// this, so it is typed in. Missing means nothing was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<Plan>,
 }
 
 impl Account {
@@ -196,6 +218,10 @@ impl Account {
             label,
             home: None,
             model: None,
+            paused: false,
+            live_only: false,
+            kind: None,
+            plan: None,
         }
     }
 
@@ -255,6 +281,16 @@ pub(crate) fn default_interval_minutes() -> u64 {
     DEFAULT_INTERVAL_MINUTES
 }
 
+/// How often the digest hook may run. Separate from the poll interval on
+/// purpose: how fresh the numbers are and how often a phone buzzes are two
+/// different questions, and tying them together is what turned an "hourly"
+/// digest into one every five minutes.
+pub const DEFAULT_DIGEST_MINUTES: u64 = 60;
+
+pub(crate) fn default_digest_minutes() -> u64 {
+    DEFAULT_DIGEST_MINUTES
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registry {
     #[serde(default)]
@@ -264,9 +300,26 @@ pub struct Registry {
     /// has passed or a window has reset since the last snapshot.
     #[serde(default = "default_interval_minutes")]
     pub interval_minutes: u64,
+    /// How often the `on_digest` hook may run, at most. Every other hook runs
+    /// when its event happens; this one is a heartbeat to a phone, so it is
+    /// rate-limited rather than triggered.
+    #[serde(default = "default_digest_minutes")]
+    pub digest_minutes: u64,
+    /// The order of the account table's rows, on every surface that draws it.
+    #[serde(default)]
+    pub table_sort: SortOrder,
+    /// Draw the account table as one block per provider.
+    #[serde(default)]
+    pub table_grouped: bool,
     /// Commands to run when something happens; see `hooks`.
     #[serde(default, skip_serializing_if = "Hooks::is_empty")]
     pub hooks: Hooks,
+    /// Read only, never written: where the first builds of live-only accounts
+    /// kept them, inside this file. A build from before them rewrites this
+    /// file with only the fields it knows, so they now live in
+    /// [`LIVE_ACCOUNTS_FILE`] instead; see [`Registry::save`].
+    #[serde(default, skip_serializing)]
+    pub(crate) live_accounts: Vec<Account>,
 }
 
 impl Default for Registry {
@@ -274,7 +327,11 @@ impl Default for Registry {
         Self {
             accounts: Vec::new(),
             interval_minutes: DEFAULT_INTERVAL_MINUTES,
+            digest_minutes: DEFAULT_DIGEST_MINUTES,
+            table_sort: SortOrder::default(),
+            table_grouped: false,
             hooks: Hooks::default(),
+            live_accounts: Vec::new(),
         }
     }
 }
@@ -321,6 +378,37 @@ pub fn interval_label(minutes: u64) -> String {
     }
 }
 
+/// The live-only accounts, beside `config.json`. A build from before live-only
+/// accounts never reads this file, so it never polls them, and never writes
+/// it, so a config change made with that build (add, pause, interval) cannot
+/// drop them.
+pub const LIVE_ACCOUNTS_FILE: &str = "live-accounts.json";
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct LiveAccountsFile {
+    #[serde(default)]
+    accounts: Vec<Account>,
+}
+
+fn live_accounts_path(config: &Path) -> PathBuf {
+    config.with_file_name(LIVE_ACCOUNTS_FILE)
+}
+
+fn read_live_accounts(path: &Path) -> Result<Vec<Account>> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let file: LiveAccountsFile = serde_json::from_str(&raw).map_err(|error| {
+        LimitsError::Message(format!(
+            "{} is not a valid live-accounts file ({error})",
+            path.display()
+        ))
+    })?;
+    Ok(file.accounts)
+}
+
 impl Registry {
     /// Bounds on what the agent may be told to do. Below five minutes every
     /// tick would pay; above a week the numbers stop meaning anything.
@@ -329,13 +417,24 @@ impl Registry {
 
     /// `None` when no account has ever been added — the file is the switch.
     pub fn load(path: &Path) -> Result<Option<Self>> {
+        let live_path = live_accounts_path(path);
         let raw = match std::fs::read_to_string(path) {
-            Ok(raw) if raw.trim().is_empty() => return Ok(None),
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Ok(raw) if !raw.trim().is_empty() => raw,
+            Ok(_) => String::new(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => return Err(error.into()),
         };
-        let registry: Self = serde_json::from_str(&raw).map_err(|error| {
+        // The first save of a live account writes its file before config.json
+        // exists; after a crash between the two, the live file alone still
+        // counts, or the next add would start empty and overwrite it.
+        let raw = if !raw.is_empty() {
+            raw
+        } else if live_path.exists() {
+            "{}".to_string()
+        } else {
+            return Ok(None);
+        };
+        let mut registry: Self = serde_json::from_str(&raw).map_err(|error| {
             let shown = path.display();
             // A file from before accounts had ids names them instead. It was
             // never carried forward on purpose: the homes it points at were
@@ -350,10 +449,30 @@ impl Registry {
                 LimitsError::Message(format!("{shown} is not a valid limits registry ({error})"))
             }
         })?;
+        // The file before the old in-config field: after a crash mid-save the
+        // file holds the newer copy of an account that is in both.
+        let mut live = read_live_accounts(&live_path)?;
+        for account in std::mem::take(&mut registry.live_accounts) {
+            if !live.iter().any(|a| a.id.eq_ignore_ascii_case(&account.id)) {
+                live.push(account);
+            }
+        }
+        for mut account in live {
+            account.live_only = true;
+            registry.admit_live(account);
+        }
         registry
             .validate()
             .map_err(|error| LimitsError::Message(format!("{}: {error}", path.display())))?;
         Ok(Some(registry))
+    }
+
+    /// How the account table is laid out, as last chosen.
+    pub fn arrangement(&self) -> Arrangement {
+        Arrangement {
+            sort: self.table_sort,
+            grouped: self.table_grouped,
+        }
     }
 
     /// Whatever is on disk, or an empty registry about to be written.
@@ -365,8 +484,67 @@ impl Registry {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(self)?;
+        let mut on_disk = self.clone();
+        let (live, polled): (Vec<Account>, Vec<Account>) =
+            on_disk.accounts.drain(..).partition(|a| a.live_only);
+        on_disk.accounts = polled;
+        // The live file first: a crash between the two writes leaves the
+        // accounts in both places, which load folds together, rather than in
+        // neither.
+        let live_path = live_accounts_path(path);
+        if live.is_empty() {
+            match std::fs::remove_file(&live_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            let json = serde_json::to_string_pretty(&LiveAccountsFile { accounts: live })?;
+            crate::snapshot::write_atomic(&live_path, json.as_bytes())?;
+        }
+        let json = serde_json::to_string_pretty(&on_disk)?;
         crate::snapshot::write_atomic(path, json.as_bytes())
+    }
+
+    /// Take in a live-only account read from disk. An older build adds and
+    /// renames accounts without seeing the live ones, so what it writes can
+    /// hold a live account's id (one migrated from inside config.json kept
+    /// its `claude-N`) or use its id or label as a label. The polled account
+    /// keeps what it has; the live one takes a fresh `claude-live-N` id or
+    /// gives up its label, rather than being lost or the whole registry
+    /// refusing to load.
+    fn admit_live(&mut self, mut account: Account) {
+        if self.names_taken(&account.id) {
+            let fresh = self.next_live_id(account.provider);
+            eprintln!(
+                "ovm limits: live-only account {} is now {fresh}; an account added by an \
+                 older build uses that name",
+                account.id
+            );
+            account.id = fresh;
+        }
+        if let Some(label) = &account.label {
+            if self.names_taken(label) {
+                eprintln!(
+                    "ovm limits: live-only account {} lost its label `{label}` to an account \
+                     added by an older build; `ovm limits rename {} <label>` gives it a new one",
+                    account.id, account.id
+                );
+                account.label = None;
+            }
+        }
+        self.accounts.push(account);
+    }
+
+    /// Whether `name` already selects an account, as its id or its label.
+    fn names_taken(&self, name: &str) -> bool {
+        self.accounts.iter().any(|other| {
+            other.id.eq_ignore_ascii_case(name)
+                || other
+                    .label
+                    .as_deref()
+                    .is_some_and(|label| label.eq_ignore_ascii_case(name))
+        })
     }
 
     /// The account the person meant, by id or by label.
@@ -379,14 +557,20 @@ impl Registry {
     /// `claude-1` cannot hand its name — and its old home — to a new account
     /// while a `claude-2` still exists.
     pub fn next_id(&self, provider: Provider) -> String {
+        self.next_id_with(provider, "")
+    }
+
+    /// The next free id for a live-only account: `claude-live-1`. Its own
+    /// sequence, because a build from before live-only accounts cannot see
+    /// them and would hand out `claude-N` ids they already hold.
+    pub fn next_live_id(&self, provider: Provider) -> String {
+        self.next_id_with(provider, "live-")
+    }
+
+    fn next_id_with(&self, provider: Provider, infix: &str) -> String {
         (1..)
-            .map(|n| format!("{provider}-{n}"))
-            .find(|candidate| {
-                !self
-                    .accounts
-                    .iter()
-                    .any(|a| a.id.eq_ignore_ascii_case(candidate))
-            })
+            .map(|n| format!("{provider}-{infix}{n}"))
+            .find(|candidate| !self.names_taken(candidate))
             .expect("an unbounded sequence contains a free id")
     }
 
@@ -417,6 +601,20 @@ impl Registry {
         Ok(self.accounts[index].clone())
     }
 
+    pub fn set_paused(&mut self, key: &str, paused: bool) -> Result<Account> {
+        let index = self.index_of(key)?;
+        self.accounts[index].paused = paused;
+        Ok(self.accounts[index].clone())
+    }
+
+    /// Record, change or forget an account's plan. Returns the account as
+    /// it now stands.
+    pub fn set_plan(&mut self, key: &str, plan: Option<Plan>) -> Result<Account> {
+        let index = self.index_of(key)?;
+        self.accounts[index].plan = plan;
+        Ok(self.accounts[index].clone())
+    }
+
     pub fn remove(&mut self, key: &str) -> Result<Account> {
         let index = self.index_of(key)?;
         Ok(self.accounts.remove(index))
@@ -444,6 +642,15 @@ impl Registry {
                 Self::MIN_INTERVAL_MINUTES,
                 Self::MAX_INTERVAL_MINUTES,
                 self.interval_minutes
+            )));
+        }
+        // Zero is meaningful here — "every poll", the old behaviour — so only
+        // the upper bound is checked.
+        if self.digest_minutes > Self::MAX_INTERVAL_MINUTES {
+            return Err(LimitsError::Message(format!(
+                "digest_minutes must be at most {} (got {})",
+                Self::MAX_INTERVAL_MINUTES,
+                self.digest_minutes
             )));
         }
         for (index, account) in self.accounts.iter().enumerate() {
@@ -623,10 +830,89 @@ mod tests {
                 label: Some("elsewhere".into()),
                 home: Some(PathBuf::from("/tmp/claude-elsewhere")),
                 model: Some("haiku".into()),
+                paused: false,
+                live_only: false,
+                kind: None,
+                plan: None,
             })
             .unwrap();
         registry.save(&path).unwrap();
         assert_eq!(Registry::load(&path).unwrap().unwrap(), registry);
+    }
+
+    #[test]
+    fn a_plan_round_trips_and_an_account_without_one_writes_no_key() {
+        use crate::plan::{PlanDate, PlanStatus};
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        // A registry from before plans: the account loads with none, and
+        // saving it back writes no `plan` key.
+        std::fs::write(
+            &path,
+            r#"{"accounts": [{"id": "codex-1", "provider": "codex", "label": "spare"}]}"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(&path).unwrap().unwrap();
+        assert_eq!(registry.accounts[0].plan, None);
+        registry.save(&path).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(raw["accounts"][0].get("plan").is_none());
+
+        let plan = Plan {
+            name: Some("Example Pro 100".into()),
+            status: PlanStatus::Cancelled,
+            ends_on: PlanDate::parse("2026-10-30"),
+        };
+        let account = registry.set_plan("spare", Some(plan.clone())).unwrap();
+        assert_eq!(account.plan.as_ref(), Some(&plan));
+        registry.save(&path).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            raw["accounts"][0]["plan"],
+            serde_json::json!({
+                "name": "Example Pro 100",
+                "status": "cancelled",
+                "ends_on": "2026-10-30"
+            })
+        );
+        let loaded = Registry::load(&path).unwrap().unwrap();
+        assert_eq!(loaded, registry);
+
+        registry.set_plan("codex-1", None).unwrap();
+        assert_eq!(registry.accounts[0].plan, None);
+        assert!(registry.set_plan("nobody", None).is_err());
+    }
+
+    #[test]
+    fn the_table_arrangement_round_trips_and_defaults_when_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        // A registry from before the setting reads as provider order, flat.
+        std::fs::write(&path, r#"{"accounts": [], "interval_minutes": 30}"#).unwrap();
+        let old = Registry::load(&path).unwrap().unwrap();
+        assert_eq!(old.table_sort, SortOrder::Provider);
+        assert!(!old.table_grouped);
+        assert_eq!(old.arrangement(), Arrangement::default());
+
+        let mut registry = registry();
+        registry.table_sort = SortOrder::Reset;
+        registry.table_grouped = true;
+        registry.save(&path).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["table_sort"], "reset");
+        assert_eq!(raw["table_grouped"], true);
+        let loaded = Registry::load(&path).unwrap().unwrap();
+        assert_eq!(loaded, registry);
+        assert_eq!(
+            loaded.arrangement(),
+            Arrangement {
+                sort: SortOrder::Reset,
+                grouped: true,
+            }
+        );
     }
 
     #[test]
@@ -715,5 +1001,186 @@ mod tests {
         assert_eq!(Provider::parse("cc"), Some(Provider::Claude));
         assert_eq!(Provider::parse("Codex"), Some(Provider::Codex));
         assert_eq!(Provider::parse("gemini"), None);
+    }
+
+    /// A registry with one polled account (`claude-1`, "main") and one
+    /// live-only seat (`claude-live-1`, "client"), saved to `config.json`.
+    fn saved_with_a_live_seat(dir: &Path) -> (PathBuf, Registry) {
+        let path = dir.join("config.json");
+        let mut registry = Registry::default();
+        registry
+            .push(Account::new(
+                Provider::Claude,
+                "claude-1",
+                Some("main".into()),
+            ))
+            .unwrap();
+        let mut seat = Account::new(
+            Provider::Claude,
+            registry.next_live_id(Provider::Claude),
+            Some("client".into()),
+        );
+        seat.home = Some(dir.join("client"));
+        seat.live_only = true;
+        registry.push(seat).unwrap();
+        registry.save(&path).unwrap();
+        (path, registry)
+    }
+
+    fn read_json(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn live_only_accounts_are_stored_where_an_older_build_cannot_poll_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, registry) = saved_with_a_live_seat(temp.path());
+
+        let config = read_json(&path);
+        let polled: Vec<&str> = config["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            polled,
+            ["claude-1"],
+            "an older build polls every entry here"
+        );
+        assert!(config.get("live_accounts").is_none());
+        let live = read_json(&temp.path().join(LIVE_ACCOUNTS_FILE));
+        assert_eq!(live["accounts"][0]["id"], "claude-live-1");
+
+        let loaded = Registry::load(&path).unwrap().unwrap();
+        assert_eq!(loaded, registry);
+        assert_eq!(loaded.next_id(Provider::Claude), "claude-2");
+        assert_eq!(loaded.next_live_id(Provider::Claude), "claude-live-2");
+    }
+
+    #[test]
+    fn an_older_build_rewriting_config_json_keeps_the_live_accounts() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, _) = saved_with_a_live_seat(temp.path());
+
+        // What 0.1.11 does on any change: read the fields it knows, add its
+        // own account with its own next id, write only those fields back.
+        let mut config = read_json(&path);
+        config["accounts"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"id": "claude-2", "provider": "claude", "label": "client"}));
+        config["interval_minutes"] = serde_json::json!(30);
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let loaded = Registry::load(&path).unwrap().unwrap();
+        let seat = loaded.find("claude-live-1").expect("the seat survives");
+        assert!(seat.live_only);
+        assert_eq!(
+            seat.label, None,
+            "the older build's account took the label; the registry still loads"
+        );
+        assert_eq!(loaded.find("client").unwrap().id, "claude-2");
+        assert_eq!(loaded.interval_minutes, 30);
+    }
+
+    #[test]
+    fn live_accounts_from_inside_config_json_move_to_their_own_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"accounts":[{"id":"claude-1","provider":"claude"}],
+                "live_accounts":[{"id":"claude-2","provider":"claude","home":"/tmp/seat"}]}"#,
+        )
+        .unwrap();
+
+        let loaded = Registry::load(&path).unwrap().unwrap();
+        assert!(loaded.find("claude-2").unwrap().live_only);
+        loaded.save(&path).unwrap();
+
+        assert!(read_json(&path).get("live_accounts").is_none());
+        let live = read_json(&temp.path().join(LIVE_ACCOUNTS_FILE));
+        assert_eq!(live["accounts"][0]["id"], "claude-2");
+        assert_eq!(Registry::load(&path).unwrap().unwrap(), loaded);
+    }
+
+    #[test]
+    fn a_live_account_in_both_places_is_taken_once_and_the_last_one_removes_the_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, registry) = saved_with_a_live_seat(temp.path());
+        // A crash after the live file was written but before config.json was:
+        // the seat is also still in the old in-config field.
+        let mut config = read_json(&path);
+        config["live_accounts"] =
+            read_json(&temp.path().join(LIVE_ACCOUNTS_FILE))["accounts"].clone();
+        std::fs::write(&path, config.to_string()).unwrap();
+        let mut loaded = Registry::load(&path).unwrap().unwrap();
+        assert_eq!(loaded, registry);
+
+        loaded.accounts.retain(|a| !a.live_only);
+        loaded.save(&path).unwrap();
+        assert!(!temp.path().join(LIVE_ACCOUNTS_FILE).exists());
+    }
+
+    #[test]
+    fn a_migrated_live_account_whose_id_an_older_build_reused_takes_a_fresh_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"accounts":[{"id":"claude-1","provider":"claude"}],
+                "live_accounts":[{"id":"claude-2","provider":"claude","home":"/tmp/seat","label":"client"}]}"#,
+        )
+        .unwrap();
+        Registry::load(&path).unwrap().unwrap().save(&path).unwrap();
+
+        // 0.1.11 sees only claude-1, so its next account is claude-2.
+        let mut config = read_json(&path);
+        config["accounts"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"id": "claude-2", "provider": "claude"}));
+        std::fs::write(&path, config.to_string()).unwrap();
+
+        let loaded = Registry::load(&path).unwrap().unwrap();
+        assert!(!loaded.find("claude-2").unwrap().live_only);
+        let seat = loaded
+            .find("client")
+            .expect("the seat survives under its label");
+        assert!(seat.live_only);
+        assert_eq!(seat.id, "claude-live-1");
+        loaded.save(&path).unwrap();
+        assert_eq!(Registry::load(&path).unwrap().unwrap(), loaded);
+    }
+
+    #[test]
+    fn an_older_build_labelling_an_account_with_a_live_id_does_not_break_loading() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, _) = saved_with_a_live_seat(temp.path());
+        let mut config = read_json(&path);
+        config["accounts"][0]["label"] = serde_json::json!("claude-live-1");
+        std::fs::write(&path, config.to_string()).unwrap();
+
+        let loaded = Registry::load(&path).unwrap().unwrap();
+        assert_eq!(loaded.find("claude-live-1").unwrap().id, "claude-1");
+        let seat = loaded.find("client").unwrap();
+        assert!(seat.live_only);
+        assert_eq!(seat.id, "claude-live-2");
+    }
+
+    #[test]
+    fn a_live_file_without_config_json_is_still_loaded() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, registry) = saved_with_a_live_seat(temp.path());
+        // A crash on the very first save: the live file landed, config.json
+        // did not.
+        std::fs::remove_file(&path).unwrap();
+
+        let loaded = Registry::load(&path)
+            .unwrap()
+            .expect("not an empty registry");
+        let live: Vec<&Account> = registry.accounts.iter().filter(|a| a.live_only).collect();
+        assert_eq!(loaded.accounts.iter().collect::<Vec<_>>(), live);
     }
 }

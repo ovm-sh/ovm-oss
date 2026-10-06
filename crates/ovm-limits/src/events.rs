@@ -316,7 +316,9 @@ pub fn recent(dirs: &LimitsDirs, count: usize) -> Result<Vec<Event>> {
     Ok(all.split_off(keep))
 }
 
-/// Surprise resets on their own, for the public feed and the notifier.
+/// Surprise resets on their own. The public feed now carries every
+/// reset-class kind (see `public::ResetKind`), so only the tests ask.
+#[cfg(test)]
 pub fn surprises(events: &[Event]) -> Vec<&Event> {
     events
         .iter()

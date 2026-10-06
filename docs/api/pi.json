@@ -2,9 +2,9 @@
   "product": "pi",
   "display_name": "Pi",
   "source": "github:earendil-works/pi",
-  "updated_at": "2026-09-13T17:16:37Z",
+  "updated_at": "2026-10-06T04:42:05Z",
   "dist_tags": {
-    "latest": "0.85.1"
+    "latest": "1.0.4"
   },
   "versions": [
     {
@@ -1102,8 +1102,94 @@
         "linux-auth": true,
         "macos-auth": true
       }
+    },
+    {
+      "version": "0.86.0",
+      "date": "2026-09-19",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "0.86.1",
+      "date": "2026-09-20",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "0.87.0",
+      "date": "2026-09-21",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "0.87.1",
+      "date": "2026-09-22",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "0.99.0",
+      "date": "2026-09-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "0.99.1",
+      "date": "2026-09-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "0.99.2",
+      "date": "2026-09-30",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-10-01",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "1.0.1",
+      "date": "2026-10-03"
+    },
+    {
+      "version": "1.0.2",
+      "date": "2026-10-04"
+    },
+    {
+      "version": "1.0.3",
+      "date": "2026-10-05"
+    },
+    {
+      "version": "1.0.4",
+      "date": "2026-10-05",
+      "verified": {
+        "linux-auth": true,
+        "linux-cloud": true,
+        "macos-auth": true,
+        "macos-cloud": true
+      }
     }
   ],
   "schema_version": 1,
-  "snapshot_revision": "sha256:b91507a1f7a0b0a757d1fead95531334d73d1e527baa2e764fe1af02f141e005"
+  "snapshot_revision": "sha256:fc118d1d1cd7b07ee41ce66721bb7dcf2b5a3e22843b35cb4eaf83eacf0a9ca5"
 }

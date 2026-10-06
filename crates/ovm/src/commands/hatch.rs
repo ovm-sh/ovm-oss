@@ -258,6 +258,13 @@ pub(crate) fn event(act: &str, outcome: &str, detail: &[(&str, &str)]) {
     let Some(path) = std::env::var_os(EVENTS_ENV).filter(|value| !value.is_empty()) else {
         return;
     };
+    event_to(std::path::Path::new(&path), act, outcome, detail);
+}
+
+/// [`event`] with the sink passed in. Tests call this directly: setting
+/// `OVM_HATCH_EVENTS` from a test leaked every other parallel test's tour
+/// events into its log and failed the pre-push hook at random (2026-09-25).
+fn event_to(path: &std::path::Path, act: &str, outcome: &str, detail: &[(&str, &str)]) {
     let mut record = serde_json::Map::new();
     record.insert("act".into(), serde_json::Value::from(act));
     record.insert("outcome".into(), serde_json::Value::from(outcome));
@@ -311,9 +318,14 @@ pub fn run(story: bool, tldr: bool) -> Result<()> {
     } else {
         None
     };
+    // The welcome opens a page of its own on every path. It used to do so
+    // only when a flag chose the path, so the plain `ovm hatch` most people
+    // type drew the welcome under whatever the shell had on screen — an
+    // install transcript, an `ls`, a typo's error — with the centred block
+    // sitting at the bottom of someone else's scrollback.
+    fresh_page();
     let path = match chosen {
         Some(path) => {
-            print!("\x1b[2J\x1b[H");
             welcome();
             path
         }
@@ -1736,18 +1748,18 @@ mod tests {
     fn a_failed_act_is_recorded_even_though_the_tour_would_exit_zero() {
         let dir = tempfile::tempdir().expect("tempdir");
         let log = dir.path().join("events.jsonl");
-        temp_env(&log, || {
-            event(
-                "install",
-                "ok",
-                &[("product", "claude"), ("version", "2.1.0")],
-            );
-            event(
-                "install",
-                "failed",
-                &[("product", "codex"), ("error", "boom")],
-            );
-        });
+        event_to(
+            &log,
+            "install",
+            "ok",
+            &[("product", "claude"), ("version", "2.1.0")],
+        );
+        event_to(
+            &log,
+            "install",
+            "failed",
+            &[("product", "codex"), ("error", "boom")],
+        );
 
         let lines: Vec<serde_json::Value> = std::fs::read_to_string(&log)
             .expect("log written")
@@ -1783,19 +1795,6 @@ mod tests {
     fn an_unwritable_events_path_does_not_break_the_tour() {
         let dir = tempfile::tempdir().expect("tempdir");
         let unwritable = dir.path().join("no-such-dir").join("events.jsonl");
-        temp_env(&unwritable, || event("install", "ok", &[]));
-    }
-
-    /// `set_var` is process-wide; these tests serialise on it.
-    fn temp_env(path: &std::path::Path, body: impl FnOnce()) {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let before = std::env::var_os(EVENTS_ENV);
-        std::env::set_var(EVENTS_ENV, path);
-        body();
-        match before {
-            Some(value) => std::env::set_var(EVENTS_ENV, value),
-            None => std::env::remove_var(EVENTS_ENV),
-        }
+        event_to(&unwritable, "install", "ok", &[]);
     }
 }

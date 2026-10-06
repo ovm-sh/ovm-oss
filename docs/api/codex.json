@@ -2,10 +2,10 @@
   "product": "codex",
   "display_name": "Codex",
   "source": "github:openai/codex",
-  "updated_at": "2026-09-13T17:16:37Z",
+  "updated_at": "2026-10-06T04:42:05Z",
   "dist_tags": {
-    "latest": "rust-v0.154.0",
-    "latest_prerelease": "rust-v0.155.0-alpha.3.10"
+    "latest": "rust-v0.160.1",
+    "latest_prerelease": "rust-v0.162.0-alpha.16"
   },
   "versions": [
     {
@@ -3370,6 +3370,14 @@
       "date": "2026-06-03"
     },
     {
+      "version": "rust-v0.137.0",
+      "date": "2026-06-04",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
       "version": "rust-v0.138.0-alpha.1",
       "date": "2026-06-04"
     },
@@ -3496,6 +3504,14 @@
     {
       "version": "rust-v0.140.0-alpha.22",
       "date": "2026-06-15"
+    },
+    {
+      "version": "rust-v0.140.0",
+      "date": "2026-06-15",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
     },
     {
       "version": "rust-v0.141.0-alpha.1",
@@ -4446,6 +4462,27 @@
       }
     },
     {
+      "version": "rust-v0.155.0-alpha.2.4",
+      "date": "2026-09-14",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.2.5",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.2.6",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
       "version": "rust-v0.155.0-alpha.3",
       "date": "2026-09-11",
       "verified": {
@@ -4479,8 +4516,883 @@
       "verified": {
         "macos-auth": true
       }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.4",
+      "date": "2026-09-14",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.5",
+      "date": "2026-09-15",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.6",
+      "date": "2026-09-15",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.7",
+      "date": "2026-09-15",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.8",
+      "date": "2026-09-15",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.9",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.9.2",
+      "date": "2026-09-18",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.10",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.11",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.12",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.13",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.14",
+      "date": "2026-09-16",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.15",
+      "date": "2026-09-17",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.16",
+      "date": "2026-09-17",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.16.1",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.16.3",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.16.4",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0-alpha.18",
+      "date": "2026-09-17",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.0",
+      "date": "2026-09-17",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.155.1",
+      "date": "2026-09-18",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.1",
+      "date": "2026-09-18",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.2",
+      "date": "2026-09-18",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.3",
+      "date": "2026-09-18",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.4",
+      "date": "2026-09-18",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.5",
+      "date": "2026-09-19",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.6",
+      "date": "2026-09-19",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.7",
+      "date": "2026-09-19",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.8",
+      "date": "2026-09-19",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.9",
+      "date": "2026-09-20",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.10",
+      "date": "2026-09-20",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.11",
+      "date": "2026-09-20",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.12",
+      "date": "2026-09-21",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.13",
+      "date": "2026-09-21",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.14",
+      "date": "2026-09-21",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.16",
+      "date": "2026-09-21",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0-alpha.17",
+      "date": "2026-09-21",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.0",
+      "date": "2026-09-22",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.156.1",
+      "date": "2026-09-23",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.1",
+      "date": "2026-09-21",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.2",
+      "date": "2026-09-21",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.3",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.4",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.5",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.6",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.7",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.8",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.9",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.10",
+      "date": "2026-09-22",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.11",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0-alpha.11.1",
+      "date": "2026-09-24",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.0",
+      "date": "2026-09-25",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.157.1",
+      "date": "2026-09-26",
+      "verified": {
+        "linux-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.2",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.2.1",
+      "date": "2026-09-26",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.3",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.4",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.5",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.6",
+      "date": "2026-09-23",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.7",
+      "date": "2026-09-24",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.8",
+      "date": "2026-09-24",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.9",
+      "date": "2026-09-24",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.10",
+      "date": "2026-09-24",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.11",
+      "date": "2026-09-24",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.12",
+      "date": "2026-09-25",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.13",
+      "date": "2026-09-25",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.14",
+      "date": "2026-09-25",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.15",
+      "date": "2026-09-25",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.15.1",
+      "date": "2026-09-26",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.15.2",
+      "date": "2026-09-27",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.15.3",
+      "date": "2026-09-27",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0-alpha.15.4",
+      "date": "2026-09-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.158.0",
+      "date": "2026-09-28",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.1",
+      "date": "2026-09-25",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.2",
+      "date": "2026-09-25",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.3",
+      "date": "2026-09-25",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.4",
+      "date": "2026-09-26",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.5",
+      "date": "2026-09-26",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.6",
+      "date": "2026-09-26",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.7",
+      "date": "2026-09-27",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.8",
+      "date": "2026-09-27",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.9",
+      "date": "2026-09-27",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.10",
+      "date": "2026-09-27",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.11",
+      "date": "2026-09-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.12",
+      "date": "2026-09-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0-alpha.13",
+      "date": "2026-09-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.0",
+      "date": "2026-09-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.1",
+      "date": "2026-09-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.2",
+      "date": "2026-09-29",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.159.3",
+      "date": "2026-09-30",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.160.0-alpha.2",
+      "date": "2026-09-28",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.160.0-alpha.3",
+      "date": "2026-09-29",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.160.0-alpha.6",
+      "date": "2026-09-29",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.160.0-alpha.6.1",
+      "date": "2026-09-30",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.160.0-alpha.6.2",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.160.0",
+      "date": "2026-10-01",
+      "verified": {
+        "linux-auth": true,
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.160.1",
+      "date": "2026-10-05",
+      "verified": {
+        "linux-auth": true,
+        "linux-cloud": true,
+        "macos-auth": true,
+        "macos-cloud": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.1",
+      "date": "2026-09-29",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.2",
+      "date": "2026-09-29",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.3",
+      "date": "2026-09-30",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.6",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.7",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.8",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.9",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.10",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.11",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.12",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.161.0-alpha.13",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.1",
+      "date": "2026-10-01",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.2",
+      "date": "2026-10-02",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.3",
+      "date": "2026-10-02",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.4",
+      "date": "2026-10-02",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.5",
+      "date": "2026-10-02",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.6",
+      "date": "2026-10-02",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.7",
+      "date": "2026-10-02",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.8",
+      "date": "2026-10-02",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.9",
+      "date": "2026-10-03",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.10",
+      "date": "2026-10-03",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.11",
+      "date": "2026-10-03",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.12",
+      "date": "2026-10-04",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.13",
+      "date": "2026-10-04",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.14",
+      "date": "2026-10-05",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.15",
+      "date": "2026-10-05",
+      "verified": {
+        "macos-auth": true
+      }
+    },
+    {
+      "version": "rust-v0.162.0-alpha.16",
+      "date": "2026-10-05",
+      "verified": {
+        "macos-auth": true
+      }
     }
   ],
   "schema_version": 1,
-  "snapshot_revision": "sha256:ec24bf0e17db8502594c53ddf9de0e2cf0e1983bc7ee0b5a359a7f3413d3c70f"
+  "snapshot_revision": "sha256:3c4cca03deb684a318f933ec1df4783b399ebaeea35312d7f1b9c96377aabf5c"
 }

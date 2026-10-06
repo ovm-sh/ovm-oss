@@ -21,6 +21,11 @@ import subprocess
 import sys
 import time
 
+# Bumped with every change ovm ships. `ovm statusline status` compares the
+# installed copy against the one inside the running ovm, and `ovm claude`
+# quietly refreshes an installed Echo that has fallen behind.
+ECHO_VERSION = "2026.09.27.3"
+
 # ---- tunables ---------------------------------------------------------------
 
 SHOW_ECHO = os.environ.get("SHOW_ECHO", "1") == "1"   # set SHOW_ECHO=0 for compact 2-line mode
@@ -313,6 +318,11 @@ def render(data):
 
     cwd = (data.get("workspace") or {}).get("current_dir") or data.get("cwd") or ""
     model = (data.get("model") or {}).get("display_name") or "?"
+    # `ovm run <account>` names the account it launched; show it beside the
+    # model so a side-by-side session says whose limits it is spending.
+    account = os.environ.get("OVM_ACCOUNT", "").strip()
+    if account:
+        model = f"{model} · {account}"
     frac = context_fraction(data)
     cost = num((data.get("cost") or {}).get("total_cost_usd"))
     added = int(num((data.get("cost") or {}).get("total_lines_added")))
@@ -392,12 +402,152 @@ def marquee(text, now):
     rolled = pad[off:] + pad[:off]
     return rolled[:QUIP_VIEW]
 
+# ---- live limit readings ------------------------------------------------------
+#
+# Every statusline payload of a Claude.ai login carries the account's 5h / 7d
+# windows. `ovm limits` used to spend a real turn in a throwaway session to
+# learn what every natural session was already being told. When `ovm limits`
+# is set up on this machine (its registry exists), Echo leaves that reading
+# where the poller can find it: one small file per LOGIN, keyed by
+# oauthAccount.accountUuid from the active home's .claude.json — the payload
+# itself names no account, and `/login` can switch the login inside one home.
+#
+# The numbers in a payload are the ones this SESSION last got back from the
+# API, not the account's numbers now: an idle session re-rendering an hour
+# later still shows what it saw an hour ago. So a reading is stamped with when
+# it was MEASURED — the session transcript's mtime, written as each response
+# lands — and every session keeps its own file, so the newest measurement wins
+# instead of whichever session drew last. (Seen 2026-09-27: two sessions on one
+# login alternating, 15% / 12%, read as a surprise reset.)
+#
+# Never allowed to cost the statusline anything: every failure is swallowed,
+# the login id is re-read only when .claude.json changes, and a file is only
+# rewritten when the measurement changed.
+
+OVM_BASE = os.environ.get(
+    "OVM_ECHO_BASE",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+# A session file nobody has refreshed in this long is dropped.
+LIVE_KEEP_SECS = 2 * 24 * 3600
+
+
+def claude_json_path():
+    home = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if home:
+        return os.path.join(home, ".claude.json")
+    return os.path.join(os.path.expanduser("~"), ".claude.json")
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def write_json_atomic(path, doc):
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(doc, f)
+    os.replace(tmp, path)
+
+
+def login_uuid(live_dir):
+    """The active login's accountUuid, cached against .claude.json's mtime."""
+    path = claude_json_path()
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return None
+    cache_path = os.path.join(live_dir, ".login-cache.json")
+    cache = read_json(cache_path) or {}
+    entry = cache.get(path)
+    if isinstance(entry, list) and len(entry) == 2 and entry[0] == mtime:
+        return entry[1]
+    doc = read_json(path) or {}
+    account = doc.get("oauthAccount") if isinstance(doc, dict) else None
+    uuid = account.get("accountUuid") if isinstance(account, dict) else None
+    if not isinstance(uuid, str) or not uuid:
+        uuid = None
+    cache[path] = [mtime, uuid]
+    try:
+        write_json_atomic(cache_path, cache)
+    except Exception:
+        pass
+    return uuid
+
+
+def record_live_reading(data, now=None):
+    """Leave this turn's windows for `ovm limits`. Returns the file written, if any."""
+    limits_dir = os.path.join(OVM_BASE, "limits")
+    if not os.path.isfile(os.path.join(limits_dir, "config.json")):
+        return None
+    windows = data.get("rate_limits") if isinstance(data, dict) else None
+    if not isinstance(windows, dict) or not windows:
+        return None
+    live_dir = os.path.join(limits_dir, "live")
+    os.makedirs(live_dir, exist_ok=True)
+    uuid = login_uuid(live_dir)
+    if not uuid:
+        return None
+    transcript = data.get("transcript_path")
+    session = "".join(ch for ch in str(data.get("session_id") or "") if ch.isalnum() or ch == "-")
+    if not isinstance(transcript, str) or not session:
+        return None
+    try:
+        measured = int(os.stat(transcript).st_mtime)
+    except OSError:
+        return None
+    now = time.time() if now is None else now
+    measured = min(measured, int(now))
+    path = os.path.join(live_dir, f"claude-{uuid}--{session}.json")
+    previous = read_json(path) or {}
+    if previous.get("windows") == windows and previous.get("at") == measured:
+        return None
+    write_json_atomic(path, {
+        "schema": "ovm-limits-live/v2",
+        "provider": "claude",
+        "account_id": uuid,
+        "at": measured,
+        "written_at": int(now),
+        "home": os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or None,
+        "session_id": data.get("session_id"),
+        "version": data.get("version"),
+        "windows": windows,
+    })
+    prune_live(live_dir, now)
+    return path
+
+
+def prune_live(live_dir, now):
+    """Drop session files nobody has refreshed for LIVE_KEEP_SECS."""
+    try:
+        names = os.listdir(live_dir)
+    except OSError:
+        return
+    for name in names:
+        if not (name.startswith("claude-") and name.endswith(".json")):
+            continue
+        path = os.path.join(live_dir, name)
+        try:
+            if now - os.stat(path).st_mtime > LIVE_KEEP_SECS:
+                os.remove(path)
+        except OSError:
+            pass
+
+
 def main():
     raw = sys.stdin.read()
     try:
         data = json.loads(raw) if raw.strip() else {}
     except Exception:
         data = {}
+    try:
+        record_live_reading(data)
+    except Exception:
+        pass
     sys.stdout.write(render(data))
 
 if __name__ == "__main__":
